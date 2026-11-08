@@ -44,11 +44,22 @@ export function useTxnFlow(id: string | undefined) {
   // Re-read on every focus and whenever a send for this txn ends: an answer that finished while its Confirm
   // screen was gone must show here as "Already answered", never as the answer list again.
   const [version, setVersion] = useState(0);
-  useFocusEffect(useCallback(() => setVersion((v) => v + 1), []));
+  // On focus the old data is dropped first, so a stale answer list is never on screen while re-reading.
+  useFocusEffect(
+    useCallback(() => {
+      setData(null);
+      setVersion((v) => v + 1);
+    }, []),
+  );
+  /** True from a send ending until the re-read lands (answers stay locked meanwhile, without a loading flash). */
+  const [rereading, setRereading] = useState(false);
   const sending = useFlowStore((s) => (id ? !!s.sending[id] : false));
   const wasSending = useRef(false);
   useEffect(() => {
-    if (wasSending.current && !sending) setVersion((v) => v + 1);
+    if (wasSending.current && !sending) {
+      setRereading(true);
+      setVersion((v) => v + 1);
+    }
     wasSending.current = sending;
   }, [sending]);
   useEffect(() => {
@@ -61,7 +72,9 @@ export function useTxnFlow(id: string | undefined) {
         repo.listMappings(), repo.listRules(), repo.getSetting(COMPANY_KEY), repo.getSetting(DRAWINGS_KEY), repo.getSetting(DEFAULT_EXPENSE_KEY),
       ]);
       if (live) setData({ txn, mappings, rules, settings: { company: company ?? '', drawingsAccount: drawings ?? '', defaultExpense: def ?? '' } });
-    })().catch(() => live && setData('missing'));
+    })()
+      .catch(() => live && setData('missing'))
+      .finally(() => live && setRereading(false));
     return () => {
       live = false;
     };
@@ -71,6 +84,8 @@ export function useTxnFlow(id: string | undefined) {
   const draft = useMemo<FlowDraft>(() => ({ ...stored, mapping: stored.mapping ?? resolved ?? undefined }), [stored, resolved]);
   const store = useFlowStore.getState;
   return {
+    /** A send just ended and the txn is being re-read: do not offer answers yet. */
+    rereading,
     status: data === null ? ('loading' as const) : data === 'missing' ? ('missing' as const) : ('ready' as const),
     txn: loaded?.txn ?? null,
     mappings: loaded?.mappings ?? [],

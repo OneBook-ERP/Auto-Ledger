@@ -58,7 +58,7 @@ export default function TransactionScreen() {
     key: a.type,
     label: a.label,
     hint: a.hint,
-    disabled: sending || (a.type === 'personal' && !hasDrawings),
+    disabled: sending || f.rereading || (a.type === 'personal' && !hasDrawings),
     disabledReason: a.type === 'personal' && !hasDrawings ? DRAWINGS_MISSING : undefined,
   }));
   // Ignore needs no account: it is offered even while the account is unknown.
@@ -113,7 +113,7 @@ export default function TransactionScreen() {
           <Txt variant="heading" header>What was this?</Txt>
           <Gap size={3} />
           {top ? (
-            <SuggestionCard {...suggestionCard(top, invoiceParty)} onPress={() => !sending && go({ mapping, ...draftFromSuggestion(top, invoiceParty) })} />
+            <SuggestionCard {...suggestionCard(top, invoiceParty)} onPress={() => !sending && !f.rereading && go({ mapping, ...draftFromSuggestion(top, invoiceParty) })} />
           ) : null}
           <ActionSheet items={items} onSelect={choose} />
           {!hasDrawings ? <Banner tone="info" message={`${DRAWINGS_MISSING} to use Personal.`} actionLabel="Open Settings" onAction={() => router.navigate('/(tabs)/settings')} /> : null}

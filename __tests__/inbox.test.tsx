@@ -15,6 +15,8 @@ import { InboxDepsOverride } from '../src/inbox/deps';
 import { fakeInboxErp, type FakeInboxErp } from '../src/inbox/fakeErp';
 import type { FlowDraft } from '../src/inbox/flow';
 import { useFlowStore } from '../src/inbox/store';
+import { planFor } from '../src/inbox/flow';
+import { submitAnswer } from '../src/inbox/submit';
 import { BANK, BANK2, CARD, NOW, smsTxn, txnFrom } from '../src/inbox/testData';
 import { runPlan } from '../src/outbox/runner';
 import { fakeApp } from '../src/state/testUtils';
@@ -808,34 +810,95 @@ describe('navigation guards and robustness (R53 3f-3h)', () => {
 });
 
 describe('R54 follow-ups on screens', () => {
-  it('Confirm links a credit transfer to the debit leg already recorded, and the runner adopts its entry', async () => {
-    const debit = txnFrom('idfc-010', { state: 'created', createdDocs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0007', docstatus: 0 }] });
-    const credit = smsTxn('idfc-001', [['XXXXX996507', 'XXXXX991111'], ['INR 12,932.00', 'INR 30,000.00'], ['02/09/26 09:13', '19/10/26 10:05']], debit.receivedAt + 60_000);
+  const creditOnSavings = (receivedAt: number, time = '10:05') =>
+    smsTxn('idfc-001', [['XXXXX996507', 'XXXXX991111'], ['INR 12,932.00', 'INR 30,000.00'], ['02/09/26 09:13', `19/10/26 ${time}`]], receivedAt);
+  /** ERPNext fake that keeps drafts and finds them by reference. */
+  const statefulErp = () => {
     const erp = fakeInboxErp();
-    erp.findDraftByUtr.mockImplementation(async (ref) => (ref === 'IDFB6292M4509651' ? { doctype: 'Payment Entry', name: 'ACC-PAY-0007', docstatus: 0 } : null));
+    const docs: { name: string; body: Record<string, unknown> }[] = [];
+    erp.createDraft.mockImplementation(async (_dt, body) => {
+      const name = `ACC-PAY-000${docs.length + 1}`;
+      docs.push({ name, body });
+      return { name };
+    });
+    erp.findDraftByUtr.mockImplementation(async (ref) => {
+      const d = docs.find((x) => x.body.reference_no === ref);
+      return d ? { doctype: 'Payment Entry', name: d.name, docstatus: 0 } : null;
+    });
+    return { erp, docs };
+  };
+  /** Books a debit leg (current -> savings) through the real planner, submit path and runner. */
+  const bookDebit = async (repo: Parameters<typeof submitAnswer>[0]['repo'], erp: FakeInboxErp, t: PendingTxn) => {
+    const { plan, choice } = planFor(t, { mapping: BANK, action: 'transfer', toAccount: BANK2 }, { company: 'ZP', drawingsAccount: '', today: '2026-10-20' });
+    expect((await submitAnswer({ repo, erp, runPlan }, { txn: t, plan, choice, remember: false })).kind).toBe('created');
+  };
+  const fromCurrent = { bankAccount: BANK.bankAccount, glAccount: BANK.glAccount, modeOfPayment: BANK.modeOfPayment };
+
+  it('Confirm links a credit transfer to the debit leg already recorded, and the runner adopts its entry', async () => {
+    const debit = txnFrom('idfc-010');
+    const credit = creditOnSavings(debit.receivedAt + 60_000);
+    const { erp, docs } = statefulErp();
     const s = await setup({ txns: [debit, credit], mappings: [BANK, BANK2, CARD], erp });
-    draft(credit.id, { mapping: BANK2, action: 'transfer', fromAccount: { bankAccount: BANK.bankAccount, glAccount: BANK.glAccount, modeOfPayment: BANK.modeOfPayment } });
+    await bookDebit(s.repo, erp, debit);
+    draft(credit.id, { mapping: BANK2, action: 'transfer', fromAccount: fromCurrent });
     mockParams = { id: credit.id };
     await render(<s.Wrap><ConfirmStep /></s.Wrap>);
-    expect(await screen.findByLabelText("Linked: Linked to the transfer already recorded from IDFC First's message (ACC-PAY-0007)")).toBeTruthy();
+    expect(await screen.findByLabelText("Linked: Linked to the transfer already recorded from IDFC First's message (ACC-PAY-0001)")).toBeTruthy();
     await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false));
     await fireEvent.press(screen.getByTestId('create'));
     await waitFor(() => expect(mockRouter.push).toHaveBeenLastCalledWith({ pathname: '/txn/result', params: { id: credit.id } }));
     expect(s.run.mock.calls[0][1].steps[0].body.reference_no).toBe('IDFB6292M4509651');
-    expect(erp.createDraft).not.toHaveBeenCalled();
-    expect((await s.repo.getPending(credit.id))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0007', docstatus: 0, adopted: true }]);
+    expect(docs).toHaveLength(1);
+    expect(erp.createDraft).toHaveBeenCalledTimes(1); // the debit leg's own create only
+    expect((await s.repo.getPending(credit.id))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0, adopted: true }]);
   });
   it('Confirm warns when several transfers match and does not link', async () => {
-    const debit = txnFrom('idfc-010', { state: 'created', createdDocs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0007', docstatus: 0 }] });
-    const debit2 = { ...debit, id: 't_d2', rawHash: 'd2', utr: 'IDFB000', createdDocs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0008', docstatus: 0 }] };
-    const credit = smsTxn('idfc-001', [['XXXXX996507', 'XXXXX991111'], ['INR 12,932.00', 'INR 30,000.00'], ['02/09/26 09:13', '19/10/26 10:05']], debit.receivedAt + 60_000);
-    const s = await setup({ txns: [debit, debit2, credit], mappings: [BANK, BANK2, CARD] });
-    draft(credit.id, { mapping: BANK2, action: 'transfer', fromAccount: { bankAccount: BANK.bankAccount, glAccount: BANK.glAccount } });
+    const debit = txnFrom('idfc-010');
+    const debit2 = smsTxn('idfc-010', [['IDFB6292M4509651', 'IDFB6292M4509999']], debit.receivedAt + 3_600_000);
+    const credit = creditOnSavings(debit.receivedAt + 60_000);
+    const { erp } = statefulErp();
+    const s = await setup({ txns: [debit, debit2, credit], mappings: [BANK, BANK2, CARD], erp });
+    await bookDebit(s.repo, erp, debit);
+    await bookDebit(s.repo, erp, debit2);
+    draft(credit.id, { mapping: BANK2, action: 'transfer', fromAccount: fromCurrent });
     mockParams = { id: credit.id };
     await render(<s.Wrap><ConfirmStep /></s.Wrap>);
     expect(await screen.findByText('Several matching transfers were found. Check ERPNext for duplicates after creating.')).toBeTruthy();
     expect(screen.queryByTestId('linked')).toBeNull();
     expect(screen.getByText(new RegExp(`UTR/ref AL-${credit.rawHash}`))).toBeTruthy();
+  });
+  it('a customer receipt on the other account is never offered as the linked leg', async () => {
+    const acme = smsTxn('idfc-006', [['XXXXXXX6507', 'XXXXXXX1111'], ['05-11-2026', '19-10-2026']], txnFrom('idfc-010').receivedAt + 60_000);
+    const debit = txnFrom('idfc-010');
+    const { erp } = statefulErp();
+    const s = await setup({ txns: [acme, debit], mappings: [BANK, BANK2, CARD], erp });
+    const r = planFor(acme, { mapping: BANK2, action: 'customer_advance', party: { doctype: 'Customer', name: 'Acme' } }, { company: 'ZP', drawingsAccount: '', today: '2026-10-20' });
+    await submitAnswer({ repo: s.repo, erp, runPlan }, { txn: acme, plan: r.plan, choice: r.choice, remember: false });
+    draft(debit.id, { mapping: BANK, action: 'transfer', toAccount: BANK2 });
+    mockParams = { id: debit.id };
+    await render(<s.Wrap><ConfirmStep /></s.Wrap>);
+    await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false));
+    expect(screen.queryByTestId('linked')).toBeNull();
+    expect(screen.getByText(/UTR\/ref IDFB6292M4509651/)).toBeTruthy();
+  });
+  it('an error outcome keeps the computed link (no flicker, no re-lookup)', async () => {
+    const debit = txnFrom('idfc-010');
+    const credit = creditOnSavings(debit.receivedAt + 60_000);
+    const { erp } = statefulErp();
+    const s = await setup({ txns: [debit, credit], mappings: [BANK, BANK2, CARD], erp });
+    await bookDebit(s.repo, erp, debit);
+    draft(credit.id, { mapping: BANK2, action: 'transfer', fromAccount: fromCurrent });
+    mockParams = { id: credit.id };
+    const lookups = jest.spyOn(s.repo, 'listActiveOutbox');
+    await render(<s.Wrap><ConfirmStep /></s.Wrap>);
+    await screen.findByTestId('linked');
+    await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false));
+    const n = lookups.mock.calls.length;
+    s.run.mockImplementationOnce(async () => ({ status: 'failed', retryable: false, error: new ErpValidationError('Party is disabled', 417) }));
+    await fireEvent.press(screen.getByTestId('create'));
+    await screen.findByTestId('failure');
+    expect(screen.getByTestId('linked')).toBeTruthy();
+    expect(lookups.mock.calls.length).toBe(n);
   });
   it('the Transaction screen re-reads on focus: an answer that finished elsewhere shows "Already answered"', async () => {
     const t = txnFrom('idfc-006');
@@ -844,7 +907,13 @@ describe('R54 follow-ups on screens', () => {
     await render(<s.Wrap><TransactionScreen /></s.Wrap>);
     await screen.findByTestId('action-sheet');
     await s.repo.upsertPending({ ...t, state: 'created', createdDocs: [{ doctype: 'Payment Entry', name: 'PE-1', docstatus: 0 }] });
+    // The re-read is held: the stale answer list must already be gone while it runs.
+    let releaseRead!: () => void;
+    const realGet = s.repo.getPending;
+    jest.spyOn(s.repo, 'getPending').mockImplementationOnce(async (x) => { await new Promise<void>((r) => { releaseRead = r; }); return realGet(x); });
     await refocus();
+    expect(screen.queryByTestId('action-sheet')).toBeNull();
+    await act(async () => releaseRead());
     expect(await screen.findByText('Already answered')).toBeTruthy();
     expect(screen.queryByTestId('action-sheet')).toBeNull();
   });

@@ -48,6 +48,8 @@ export interface Repo {
   listSettings(prefix: string): Promise<{ key: string; value: string }[]>;
   /** Removes one setting (no-op when absent). */
   deleteSetting(key: string): Promise<void>;
+  /** Every readable outbox item that is 'pending' or 'done' (the plans of current answers), oldest first, one query. */
+  listActiveOutbox(): Promise<OutboxOp[]>;
   /** Ids of txns with at least one 'pending' outbox item (an answer waiting to be sent), one query. */
   listQueuedTxnIds(): Promise<string[]>;
 }
@@ -286,6 +288,10 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
     },
     async deleteSetting(key) {
       await d.exec('DELETE FROM settings WHERE key = ?', [key]);
+    },
+    async listActiveOutbox() {
+      const rows = await d.all<OutboxRow>(`SELECT id, txn_id, plan, progress, attempts, status FROM outbox WHERE status IN ('pending', 'done') ORDER BY seq`);
+      return rows.map(toOutbox).filter((o): o is OutboxOp => o !== null);
     },
     async listQueuedTxnIds() {
       const rows = await d.all<{ txn_id: string }>(`SELECT DISTINCT txn_id FROM outbox WHERE status = 'pending' ORDER BY txn_id`);

@@ -42,25 +42,39 @@ export default function ConfirmStep() {
     };
   }, []);
 
-  // The other leg of an own-account transfer, when both accounts are read (R54): looked up before planning.
+  // The other leg of an own-account transfer, when both accounts are read (R54/R57): looked up before planning.
+  // Keyed on the answers only: a reload of the same txn (focus, a send ending after an error) keeps the last
+  // computed link instead of flickering it.
   const [link, setLink] = useState<CounterpartLink | null>(null);
+  const linkKey = txn && action
+    ? JSON.stringify([txn.id, txn.state, action, f.draft.mapping?.bankAccount, f.draft.toAccount?.bankAccount, f.draft.fromAccount?.bankAccount, f.draft.inrAmountMinor, f.mappings.length, f.settings.company])
+    : null;
+  const latest = useRef({ txn, draft: f.draft, mappings: f.mappings, settings: f.settings });
+  latest.current = { txn, draft: f.draft, mappings: f.mappings, settings: f.settings };
   useEffect(() => {
-    if (!txn || !action) return;
+    const { txn: t, draft, mappings, settings } = latest.current;
+    if (!linkKey || !t) return;
     let live = true;
-    const counter = counterMappingOf(f.draft, txn.direction, f.mappings);
-    if (!counter) {
+    const counter = counterMappingOf(draft, t.direction, mappings);
+    let own: ActionPlan | null = null;
+    try {
+      own = counter ? planFor(t, draft, { company: settings.company, drawingsAccount: settings.drawingsAccount, today: istToday(deps.now()) }).plan : null;
+    } catch {
+      own = null; // the planning error is shown by `prepared` below
+    }
+    if (!counter || !own) {
       setLink({ status: 'none' });
       return;
     }
     setLink(null);
-    findCounterpartLeg(txn, counter, deps.repo, f.mappings).then(
+    findCounterpartLeg(t, counter, own, deps.repo, mappings).then(
       (l) => live && setLink(l),
       () => live && setLink({ status: 'none' }),
     );
     return () => {
       live = false;
     };
-  }, [txn, action, f.draft, f.mappings, deps.repo]);
+  }, [linkKey, deps]);
 
   const prepared = useMemo<Prepared | null>(() => {
     if (!txn || !action || !link) return null;
@@ -183,7 +197,15 @@ export default function ConfirmStep() {
       {ok && nothing ? <Banner tone="info" message={ok.plan.summary.join('\n')} testID="summary" /> : null}
       {sending ? <Banner tone="info" message="Sending your answer to ERPNext. Stay on this screen until it finishes." testID="sending" /> : null}
       {ok && link?.status === 'linked' ? (
-        <DetailCard rows={[{ label: 'Linked', value: `Linked to the transfer already recorded from ${link.counterLabel}'s message (${link.docName})` }]} testID="linked" />
+        <DetailCard
+          rows={[{
+            label: 'Linked',
+            value: link.docName
+              ? `Linked to the transfer already recorded from ${link.counterLabel}'s message (${link.docName})`
+              : `Linked to the transfer from ${link.counterLabel}'s message, which is waiting to be sent`,
+          }]}
+          testID="linked"
+        />
       ) : null}
       {ok && link?.status === 'several' ? <Banner tone="warn" message={SEVERAL_TRANSFERS_WARNING} testID="several" /> : null}
       {ok && !nothing && foreign ? (
