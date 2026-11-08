@@ -9,6 +9,11 @@ data class QueuedSms(
   val body: String,
   val receivedAt: Long,
   val kind: String,
+  /**
+   * The queue's persisted, monotonic sequence number for this item (1, 2, 3, ...; it survives
+   * restarts and acks), used for the notification id. Not sent over the JS bridge.
+   */
+  val seq: Long,
 )
 
 /**
@@ -32,7 +37,7 @@ class SmsQueue(
   fun append(sender: String, body: String, receivedAt: Long, kind: String): QueuedSms = synchronized(LOCK) {
     val doc = load()
     doc.seq += 1
-    val item = QueuedSms("${clock()}-${doc.seq}", sender, body, receivedAt, kind)
+    val item = QueuedSms("${clock()}-${doc.seq}", sender, body, receivedAt, kind, doc.seq)
     doc.items.add(item)
     val over = doc.items.size - maxItems
     if (over > 0) {
@@ -71,13 +76,16 @@ class SmsQueue(
       val items = ArrayList<QueuedSms>(arr.length())
       for (i in 0 until arr.length()) {
         val it = arr.getJSONObject(i)
+        val id = it.getString("id")
         items.add(
           QueuedSms(
-            it.getString("id"),
+            id,
             it.getString("sender"),
             it.getString("body"),
             it.getLong("receivedAt"),
             it.getString("kind"),
+            // Items written before seq was stored: the id is "<clock>-<seq>".
+            if (it.has("seq")) it.getLong("seq") else id.substringAfterLast('-').toLongOrNull() ?: 0L,
           ),
         )
       }
@@ -99,7 +107,8 @@ class SmsQueue(
           .put("sender", it.sender)
           .put("body", it.body)
           .put("receivedAt", it.receivedAt)
-          .put("kind", it.kind),
+          .put("kind", it.kind)
+          .put("seq", it.seq),
       )
     }
     store.write(KEY, JSONObject().put("v", 1).put("seq", doc.seq).put("items", arr).toString())

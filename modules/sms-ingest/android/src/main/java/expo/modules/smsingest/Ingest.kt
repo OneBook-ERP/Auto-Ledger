@@ -136,8 +136,12 @@ object NotificationText {
     return if (inr) "$sign₹$grouped.$frac" else "$sign${currency.uppercase()} $grouped.$frac"
   }
 
-  /** Notification id derived from the stored queue id (unique per message, stable). */
-  fun notificationId(queueId: String): Int = queueId.hashCode() and 0x7fffffff
+  /**
+   * Notification id from the item's persisted queue seq ([QueuedSms.seq]): distinct for every
+   * stored message until 2^31-1 messages have been queued, then wraps; always in 1..Int.MAX_VALUE.
+   * (A hash of the id string could collide and replace an unread notification.)
+   */
+  fun notificationId(seq: Long): Int = (Math.floorMod(seq - 1, Int.MAX_VALUE.toLong()) + 1).toInt()
 
   private fun groupThousands(d: String): String = d.reversed().chunked(3).joinToString(",").reversed()
 

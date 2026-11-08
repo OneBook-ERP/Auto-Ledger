@@ -18,7 +18,7 @@ internal object NotificationPoster {
     val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     // Idempotent: re-creating an existing channel only updates its name.
     nm.createNotificationChannel(NotificationChannel(CHANNEL, "Transactions", NotificationManager.IMPORTANCE_DEFAULT))
-    val id = NotificationText.notificationId(item.id)
+    val id = NotificationText.notificationId(item.seq)
     val open = Intent(Intent.ACTION_VIEW, Uri.parse(DEEP_LINK))
       .setPackage(ctx.packageName)
       .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

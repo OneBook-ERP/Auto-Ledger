@@ -5,6 +5,7 @@ import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicLong
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -129,6 +130,49 @@ class SmsQueueTest {
   }
 
   @Test
+  fun notificationIdsAreUniqueAcrossTenThousandSequentialItems() {
+    val store = MemoryKeyValueStore()
+    val fixed = { 1_700_000_000_000L }
+    val ids = HashSet<Int>()
+    var q = SmsQueue(store, fixed, 500)
+    for (i in 1..10_000) {
+      val item = q.append("S", "m$i", i.toLong(), "k")
+      assertEquals(i.toLong(), item.seq)
+      assertTrue(ids.add(NotificationText.notificationId(item.seq)))
+      // Ack as JS does, and restart the "process" now and then: seq is persisted, so it continues.
+      if (i % 100 == 0) q.ack(q.peek().map { it.id })
+      if (i % 1000 == 0) q = SmsQueue(store, fixed, 500)
+    }
+    assertEquals(10_000, ids.size)
+    assertTrue(ids.all { it > 0 })
+  }
+
+  @Test
+  fun seqSurvivesRestartOnTheFileStoreAfterEverythingIsAcked() {
+    val dir = Files.createTempDirectory("smsq").toFile()
+    try {
+      val a = SmsQueue(FileKeyValueStore(dir), clock, 500).append("S", "a", 1L, "k")
+      SmsQueue(FileKeyValueStore(dir), clock, 500).ack(listOf(a.id))
+      val b = SmsQueue(FileKeyValueStore(dir), clock, 500).append("S", "b", 2L, "k")
+      assertEquals(a.seq + 1, b.seq)
+      assertNotEquals(NotificationText.notificationId(a.seq), NotificationText.notificationId(b.seq))
+      assertEquals(listOf(b), SmsQueue(FileKeyValueStore(dir), clock, 500).peek())
+    } finally {
+      dir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun legacyItemsWithoutSeqTakeItFromTheirId() {
+    val store = MemoryKeyValueStore()
+    store.data[SmsQueue.KEY] =
+      """{"v":1,"seq":5,"items":[{"id":"1700000000000-5","sender":"S","body":"b","receivedAt":1,"kind":"k"}]}"""
+    val q = SmsQueue(store, clock, 500)
+    assertEquals(5L, q.peek().single().seq)
+    assertEquals(6L, q.append("S", "c", 2L, "k").seq)
+  }
+
+  @Test
   fun concurrentAppendsLoseNothing() {
     val store = MemoryKeyValueStore()
     val threads = 8
@@ -148,6 +192,7 @@ class SmsQueueTest {
     val all = SmsQueue(store, clock, 500).peek()
     assertEquals(threads * per, all.size)
     assertEquals(threads * per, all.map { it.id }.toSet().size)
+    assertEquals(threads * per, all.map { NotificationText.notificationId(it.seq) }.toSet().size)
     assertEquals(threads * per, all.map { it.body }.toSet().size)
     assertEquals(0L, SmsQueue(store, clock, 500).droppedCount())
   }

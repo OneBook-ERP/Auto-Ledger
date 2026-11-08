@@ -84,11 +84,15 @@ class NotificationTextTest {
   }
 
   @Test
-  fun notificationIdIsStableAndNonNegative() {
-    val a = NotificationText.notificationId("1700000000000-1")
-    assertEquals(a, NotificationText.notificationId("1700000000000-1"))
-    assertNotEquals(a, NotificationText.notificationId("1700000000000-2"))
-    assertTrue(a >= 0)
-    assertTrue((1..2000).map { NotificationText.notificationId("1700000000000-$it") }.all { it >= 0 })
+  fun notificationIdComesFromTheQueueSeq() {
+    assertEquals(1, NotificationText.notificationId(1L))
+    assertEquals(42, NotificationText.notificationId(42L))
+    assertEquals(Int.MAX_VALUE, NotificationText.notificationId(Int.MAX_VALUE.toLong()))
+    // Wraps into 1..Int.MAX_VALUE, never 0 or negative.
+    assertEquals(1, NotificationText.notificationId(Int.MAX_VALUE.toLong() + 1))
+    assertTrue(NotificationText.notificationId(0L) > 0)
+    assertTrue(NotificationText.notificationId(Long.MAX_VALUE) > 0)
+    assertNotEquals(NotificationText.notificationId(7L), NotificationText.notificationId(8L))
   }
+
 }
