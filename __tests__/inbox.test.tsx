@@ -15,7 +15,7 @@ import { InboxDepsOverride } from '../src/inbox/deps';
 import { fakeInboxErp, type FakeInboxErp } from '../src/inbox/fakeErp';
 import type { FlowDraft } from '../src/inbox/flow';
 import { useFlowStore } from '../src/inbox/store';
-import { BANK, BANK2, CARD, NOW, txnFrom } from '../src/inbox/testData';
+import { BANK, BANK2, CARD, NOW, smsTxn, txnFrom } from '../src/inbox/testData';
 import { runPlan } from '../src/outbox/runner';
 import { fakeApp } from '../src/state/testUtils';
 
@@ -23,12 +23,20 @@ const mockRouter = {
   push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn(), dismissAll: jest.fn(), dismissTo: jest.fn(), canGoBack: jest.fn(() => true),
 };
 let mockParams: Record<string, string> = {};
+const mockFocus = new Set<() => void>();
 jest.mock('expo-router', () => {
   const { useEffect } = require('react');
   return {
     useRouter: () => mockRouter,
     useLocalSearchParams: () => mockParams,
-    useFocusEffect: (cb: () => void) => useEffect(cb, [cb]),
+    // Runs on mount like a first focus; tests call refocus() to model coming back to a screen.
+    useFocusEffect: (cb: () => void) => useEffect(() => {
+      mockFocus.add(cb);
+      cb();
+      return () => {
+        mockFocus.delete(cb);
+      };
+    }, [cb]),
     Redirect: () => null,
     Stack: () => null,
   };
@@ -57,6 +65,7 @@ async function setup(o: { txns?: PendingTxn[]; mappings?: AccountMapping[]; sett
 const draft = (id: string, d: FlowDraft) => useFlowStore.getState().start(id, d);
 const buttonNames = (container: ReturnType<typeof screen.getByTestId>) =>
   within(container).getAllByRole('button').map((b) => b.props.accessibilityLabel as string);
+const refocus = () => act(async () => { mockFocus.forEach((cb) => cb()); });
 const lastPush = () => mockRouter.push.mock.calls[mockRouter.push.mock.calls.length - 1]?.[0];
 
 beforeEach(() => {
@@ -795,5 +804,59 @@ describe('navigation guards and robustness (R53 3f-3h)', () => {
     mockParams = { id: done.id };
     await render(<s.Wrap><ResultScreen /></s.Wrap>);
     expect(await screen.findByRole('button', { name: 'Next: GOOGLESERVIS, 1 left' })).toBeTruthy();
+  });
+});
+
+describe('R54 follow-ups on screens', () => {
+  it('Confirm links a credit transfer to the debit leg already recorded, and the runner adopts its entry', async () => {
+    const debit = txnFrom('idfc-010', { state: 'created', createdDocs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0007', docstatus: 0 }] });
+    const credit = smsTxn('idfc-001', [['XXXXX996507', 'XXXXX991111'], ['INR 12,932.00', 'INR 30,000.00'], ['02/09/26 09:13', '19/10/26 10:05']], debit.receivedAt + 60_000);
+    const erp = fakeInboxErp();
+    erp.findDraftByUtr.mockImplementation(async (ref) => (ref === 'IDFB6292M4509651' ? { doctype: 'Payment Entry', name: 'ACC-PAY-0007', docstatus: 0 } : null));
+    const s = await setup({ txns: [debit, credit], mappings: [BANK, BANK2, CARD], erp });
+    draft(credit.id, { mapping: BANK2, action: 'transfer', fromAccount: { bankAccount: BANK.bankAccount, glAccount: BANK.glAccount, modeOfPayment: BANK.modeOfPayment } });
+    mockParams = { id: credit.id };
+    await render(<s.Wrap><ConfirmStep /></s.Wrap>);
+    expect(await screen.findByLabelText("Linked: Linked to the transfer already recorded from IDFC First's message (ACC-PAY-0007)")).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false));
+    await fireEvent.press(screen.getByTestId('create'));
+    await waitFor(() => expect(mockRouter.push).toHaveBeenLastCalledWith({ pathname: '/txn/result', params: { id: credit.id } }));
+    expect(s.run.mock.calls[0][1].steps[0].body.reference_no).toBe('IDFB6292M4509651');
+    expect(erp.createDraft).not.toHaveBeenCalled();
+    expect((await s.repo.getPending(credit.id))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0007', docstatus: 0, adopted: true }]);
+  });
+  it('Confirm warns when several transfers match and does not link', async () => {
+    const debit = txnFrom('idfc-010', { state: 'created', createdDocs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0007', docstatus: 0 }] });
+    const debit2 = { ...debit, id: 't_d2', rawHash: 'd2', utr: 'IDFB000', createdDocs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0008', docstatus: 0 }] };
+    const credit = smsTxn('idfc-001', [['XXXXX996507', 'XXXXX991111'], ['INR 12,932.00', 'INR 30,000.00'], ['02/09/26 09:13', '19/10/26 10:05']], debit.receivedAt + 60_000);
+    const s = await setup({ txns: [debit, debit2, credit], mappings: [BANK, BANK2, CARD] });
+    draft(credit.id, { mapping: BANK2, action: 'transfer', fromAccount: { bankAccount: BANK.bankAccount, glAccount: BANK.glAccount } });
+    mockParams = { id: credit.id };
+    await render(<s.Wrap><ConfirmStep /></s.Wrap>);
+    expect(await screen.findByText('Several matching transfers were found. Check ERPNext for duplicates after creating.')).toBeTruthy();
+    expect(screen.queryByTestId('linked')).toBeNull();
+    expect(screen.getByText(new RegExp(`UTR/ref AL-${credit.rawHash}`))).toBeTruthy();
+  });
+  it('the Transaction screen re-reads on focus: an answer that finished elsewhere shows "Already answered"', async () => {
+    const t = txnFrom('idfc-006');
+    const s = await setup({ txns: [t] });
+    mockParams = { id: t.id };
+    await render(<s.Wrap><TransactionScreen /></s.Wrap>);
+    await screen.findByTestId('action-sheet');
+    await s.repo.upsertPending({ ...t, state: 'created', createdDocs: [{ doctype: 'Payment Entry', name: 'PE-1', docstatus: 0 }] });
+    await refocus();
+    expect(await screen.findByText('Already answered')).toBeTruthy();
+    expect(screen.queryByTestId('action-sheet')).toBeNull();
+  });
+  it('and when a send for the txn ends while the screen is open', async () => {
+    const t = txnFrom('idfc-006');
+    const s = await setup({ txns: [t] });
+    mockParams = { id: t.id };
+    await render(<s.Wrap><TransactionScreen /></s.Wrap>);
+    await screen.findByTestId('action-sheet');
+    await act(async () => useFlowStore.getState().setSending(t.id, true));
+    await s.repo.upsertPending({ ...t, state: 'created', createdDocs: [{ doctype: 'Payment Entry', name: 'PE-1', docstatus: 0 }] });
+    await act(async () => useFlowStore.getState().setSending(t.id, false));
+    expect(await screen.findByText('Already answered')).toBeTruthy();
   });
 });

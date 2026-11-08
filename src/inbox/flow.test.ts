@@ -1,6 +1,6 @@
 import { PlanError } from '../core/plan';
 import {
-  RATE_MAX_PAISE, RATE_MIN_PAISE, buildNewParty, foreignAmountCheck, defaultAllocation, effectiveAmountMinor, parseRupees, planFor, toPaise, validateAllocations, validateNewParty,
+  PLAUSIBLE_INR_PER_UNIT, buildNewParty, foreignAmountCheck, defaultAllocation, effectiveAmountMinor, parseRupees, planFor, toPaise, validateAllocations, validateNewParty,
 } from './flow';
 import { BANK, CARD, txnFrom } from './testData';
 
@@ -137,13 +137,17 @@ describe('foreignAmountCheck', () => {
   it('shows the entered rupee value and the implied rate', () => {
     expect(foreignAmountCheck(usd, 850000)).toEqual({ text: 'USD 100.00, entered as ₹8,500.00 (₹85.00 per USD)', warning: null });
   });
-  it('warns softly only for an obvious slip: below ₹1 or above ₹1,000 per unit', () => {
-    expect(RATE_MIN_PAISE).toBe(100);
-    expect(RATE_MAX_PAISE).toBe(100000);
-    expect(foreignAmountCheck(usd, 10000).warning).toBeNull(); // ₹1.00 per USD: allowed edge
-    expect(foreignAmountCheck(usd, 9999).warning).toBeNull(); // rounds to ₹1.00
-    expect(foreignAmountCheck(usd, 8500).warning).toBe('That is ₹0.85 per USD, which looks unusual. Check the rupee amount on your card statement before creating.');
-    expect(foreignAmountCheck(usd, 10000000).warning).toBeNull(); // ₹1,000 per USD: allowed edge
+  it('warns softly outside the plausible band of a well-known currency (USD 60-120 rupees)', () => {
+    expect(PLAUSIBLE_INR_PER_UNIT).toEqual({ USD: [60, 120], EUR: [70, 140], GBP: [80, 160], AED: [15, 35], SGD: [50, 100], AUD: [40, 90], CAD: [45, 95] });
+    expect(foreignAmountCheck(usd, 600000).warning).toBeNull(); // ₹60.00: edge allowed
+    expect(foreignAmountCheck(usd, 1200000).warning).toBeNull(); // ₹120.00: edge allowed
+    expect(foreignAmountCheck(usd, 599900).warning).toBe('That is ₹59.99 per USD, which looks unusual. Check the rupee amount on your card statement before creating.');
     expect(foreignAmountCheck(usd, 85000000).warning).toMatch(/^That is ₹8,500.00 per USD/); // typed 8,50,000 for 8,500
+  });
+  it('other currencies are never warned about', () => {
+    const jpy = { ...usd, currency: 'JPY', amountMinor: 1000000 }; // JPY 10,000.00
+    expect(foreignAmountCheck(jpy, 100).warning).toBeNull();
+    expect(foreignAmountCheck({ ...usd, currency: 'EUR' }, 850000).warning).toBeNull(); // ₹85 per EUR
+    expect(foreignAmountCheck({ ...usd, currency: 'AED' }, 850000).warning).not.toBeNull(); // ₹85 per AED
   });
 });

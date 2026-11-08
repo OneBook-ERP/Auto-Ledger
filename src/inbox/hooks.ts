@@ -1,5 +1,6 @@
 // Data hooks for the Inbox and the flow screens. Thin: loading and wiring only; decisions live in the pure modules.
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { suggest } from '../core/suggest';
 import type { AccountMapping, OpenInvoice, PartyRef, PendingTxn, Rule, Suggestion } from '../core/types';
 import { UNRECOGNISED_COUNT_KEY, resolveMapping, unrecognisedAccountKey } from '../ingest/pipeline';
@@ -40,6 +41,16 @@ export function useTxnFlow(id: string | undefined) {
   const { repo } = useInboxDeps();
   const stored = useFlowStore((s) => (id ? s.drafts[id] : undefined)) ?? EMPTY;
   const [data, setData] = useState<Loaded | 'missing' | null>(null);
+  // Re-read on every focus and whenever a send for this txn ends: an answer that finished while its Confirm
+  // screen was gone must show here as "Already answered", never as the answer list again.
+  const [version, setVersion] = useState(0);
+  useFocusEffect(useCallback(() => setVersion((v) => v + 1), []));
+  const sending = useFlowStore((s) => (id ? !!s.sending[id] : false));
+  const wasSending = useRef(false);
+  useEffect(() => {
+    if (wasSending.current && !sending) setVersion((v) => v + 1);
+    wasSending.current = sending;
+  }, [sending]);
   useEffect(() => {
     let live = true;
     (async () => {
@@ -54,7 +65,7 @@ export function useTxnFlow(id: string | undefined) {
     return () => {
       live = false;
     };
-  }, [id, repo]);
+  }, [id, repo, version]);
   const loaded = data && data !== 'missing' ? data : null;
   const resolved = loaded ? resolveMapping(loaded.mappings, loaded.txn) : null;
   const draft = useMemo<FlowDraft>(() => ({ ...stored, mapping: stored.mapping ?? resolved ?? undefined }), [stored, resolved]);

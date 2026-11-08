@@ -79,5 +79,7 @@ describe('readableFailure', () => {
     expect(readableFailure(new ErpValidationError('Already processed', 0), 'Could not create the Payment Entry. ERPNext needs these fields: Gender.')).toBeNull();
     expect(readableFailure(new ErpValidationError('x', 417, ['Gender']), 'Could not create the Payment Entry. Party is disabled.')).toBeNull();
     expect(readableFailure(new ErpValidationError('x', 417), null)).toBeNull();
+    expect(readableFailure(new ErpValidationError('', 417), 'Could not create the Payment Entry. Party is disabled.')).toBeNull();
+    expect(readableFailure(new ErpValidationError('  ', 417), 'Could not create the Payment Entry. Party is disabled.')).toBeNull();
   });
 });

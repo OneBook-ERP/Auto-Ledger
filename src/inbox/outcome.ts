@@ -49,7 +49,8 @@ export function readableFailure(error: { message: string; missingFields?: string
   if (!txnError) return null;
   if (error.missingFields?.length) return txnError.includes(error.missingFields.join(', ')) ? txnError : null;
   if (error.closedPeriod) return txnError.includes('accounting period is closed') ? txnError : null;
-  return txnError.includes(error.message) ? txnError : null;
+  // ''.includes-style matching would accept any note: an empty message never matches.
+  return error.message.trim() && txnError.includes(error.message) ? txnError : null;
 }
 
 /** The document type a failure is about: the step the runner's message names, else the plan's main document. */
