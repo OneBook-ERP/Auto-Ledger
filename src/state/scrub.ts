@@ -4,15 +4,19 @@
 //
 // Removed or replaced, everywhere in the event (message, exception values, breadcrumbs, extra, contexts,
 // request, user, tags, stack frame vars):
-//   - amounts: "₹ 1,234.50", "Rs.500", "INR 12,000", "USD 40", plain decimals such as 1,00,000.00 or 5000.00
-//   - long digit runs (6+ digits: account numbers, UTRs, phone numbers) and masked accounts (XX6507)
-//   - UTR-like tokens: letters and digits mixed, 10 characters or more (IDFB6292M4509651)
+//   - amounts: "₹ 1,234.50", "Rs.500", "INR 12,000", "USD 40", grouped or 1-2 decimal numbers such as
+//     1,00,000.00, 5000.0 or 5000.00, and any number next to a money word ("Paid Amount 500", "balance: 42")
+//   - long digit runs (6+ digits, also split by single spaces or dashes: account numbers, UTRs, phone numbers
+//     such as +91 98765 43210) and masked accounts (XX6507)
+//   - UTR-like tokens: letters and digits mixed, 10 characters or more (IDFB6292M4509651; `_` separates tokens)
 //   - email addresses
 //   - URLs: reduced to scheme + "<site>" + path (query string and fragment removed); bare host names too
 //   - whole fields: anything named like an SMS/body/message payload, and anything named like a credential
 //     (api key, secret, password, authorization, token, cookie, sid)
+// Object keys go through the same text scrubbing as values. Strings over 8 KB are truncated first.
 // Kept: event id, timestamps, platform, level, release, environment, sdk, debug_meta (symbolication), exception
-// type names, stack frame file names/functions/line numbers.
+// type names, stack frame file names/functions/line numbers, trace/span ids, and the numbers of the
+// device/os/app contexts (memory, storage).
 
 export type ScrubOptions = {
   /** Host names to replace with "<site>" wherever they appear (e.g. the signed-in ERPNext site). */
@@ -45,35 +49,68 @@ const USER_KEY = /email|username|ip_address|^name$|phone/i;
 
 const TLDS = 'com|in|io|net|org|app|cloud|co|dev|biz|info|site|online|tech|xyz';
 
+// Strings longer than this are cut (at a word boundary when one is near) before any pattern runs, so the
+// scrubber's cost stays bounded, and marked with TRUNCATED.
+const MAX_TEXT = 8192;
+const TRUNCATED = ' …<truncated>';
+// "Word" boundaries that treat `_` as a separator (UTR_IDFB6292M4509651, paid_amount 500).
+const NB = '(?<![A-Za-z0-9])';
+const NA = '(?![A-Za-z0-9])';
+// A number written next to one of these words is an amount, whatever its size.
+const MONEY_WORD_BEFORE = '(?:amounts?|amt|paid|credited|debited|balance|bal|rs|inr|totals?|outstanding)';
+const MONEY_WORD_AFTER = '(?:paid|credited|debited|outstanding)';
+const NUMBER = '-?\\d(?:[\\d,.]*\\d)?';
+
+const RE_URL = /\b(https?|wss?):\/\/([^\s/"'<>?#]+)([^\s"'<>?#]*)(?:\?[^\s<>#]*)?(?:#[^\s<>]*)?/gi;
+// Bounded local part and domain, and a match may only start at the beginning of a token: linear time.
+const RE_EMAIL = /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,24}/g;
+const RE_HOST = new RegExp(`(?<![a-z0-9.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:${TLDS})\\b(?![.\\w])`, 'gi');
+const RE_CURRENCY_BEFORE = new RegExp(`(?:₹|${NB}Rs\\.?|${NB}INR|${NB}USD|\\$)\\s*-?\\d[\\d,]*(?:\\.\\d+)?`, 'gi');
+const RE_CURRENCY_AFTER = new RegExp(`${NB}\\d[\\d,]*(?:\\.\\d+)?\\s*(?:INR|USD|rupees?)${NA}`, 'gi');
+const RE_GROUPED = /(?<![\d.,])\d{1,3}(?:,\d{2,3})+(?:\.\d+)?(?![\d,]|\.\d)/g;
+// 1 or 2 decimals (5000.0, 5000.00), not part of a version such as 1.0.0.
+const RE_DECIMAL = /(?<!\d|\d\.)\d+\.\d{1,2}(?!\d|\.\d)/g;
+const RE_MONEY_WORD_BEFORE = new RegExp(`${NB}(${MONEY_WORD_BEFORE})([\\s:=_.-]*(?:(?:of|by|for|is|was|with)\\s+)?)${NUMBER}${NA}`, 'gi');
+const RE_MONEY_WORD_AFTER = new RegExp(`${NB}${NUMBER}(\\s*)(?=${MONEY_WORD_AFTER}${NA})`, 'gi');
+const RE_MASKED = /(?:[Xx*]{2,})\d{3,}/g;
+const RE_REF = new RegExp(`${NB}(?=[A-Za-z0-9]*\\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{10,}${NA}`, 'g');
+// Digit groups split by single spaces or dashes (+91 98765 43210, 5010-0123-4567): one number.
+const RE_DIGIT_GROUPS = /\+?\d+(?:[ -]\d+)+/g;
+const RE_LONG_DIGITS = /\d{6,}/g;
+
 function scrubUrl(_m: string, scheme: string, _host: string, path: string): string {
   return `${scheme.toLowerCase()}://${SITE}${path ?? ''}`;
 }
 
+const escapeRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Cuts `s` to at most MAX_TEXT characters (at a space in the last quarter when there is one) plus the marker. */
+function cap(s: string): string {
+  if (s.length <= MAX_TEXT + TRUNCATED.length) return s;
+  const head = s.slice(0, MAX_TEXT);
+  const sp = head.lastIndexOf(' ');
+  return (sp > (MAX_TEXT * 3) / 4 ? head.slice(0, sp) : head) + TRUNCATED;
+}
+
 /** Scrubs one string. Exported for tests; idempotent. */
 export function scrubText(input: string, opts: ScrubOptions = {}): string {
-  let s = input;
-  for (const h of opts.hosts ?? []) {
-    if (h && h.length >= 3) s = s.split(h).join(SITE);
-  }
-  // URLs: scheme://host[:port]/path?query#frag -> scheme://<site>/path
-  s = s.replace(/\b(https?|wss?):\/\/([^\s/"'<>?#]+)([^\s"'<>?#]*)(?:\?[^\s<>#]*)?(?:#[^\s<>]*)?/gi, scrubUrl);
-  s = s.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, EMAIL);
-  // Bare host names (no scheme) on common TLDs.
-  s = s.replace(new RegExp(`\\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+(?:${TLDS})\\b(?![.\\w])`, 'gi'), SITE);
-  // Currency-prefixed amounts.
-  s = s.replace(/(?:₹|\bRs\.?|\bINR|\bUSD|\$)\s*-?\d[\d,]*(?:\.\d+)?/gi, AMOUNT);
-  // Amounts followed by a currency word.
-  s = s.replace(/\b\d[\d,]*(?:\.\d+)?\s*(?:INR|USD|rupees?)\b/gi, AMOUNT);
-  // Grouped numbers (1,00,000 / 1,000,000.00) and plain 2-decimal amounts (5000.00), not inside versions.
-  s = s.replace(/(?<![\d.,])\d{1,3}(?:,\d{2,3})+(?:\.\d+)?(?![\d.,])/g, AMOUNT);
-  s = s.replace(/(?<![\d.])\d+\.\d{2}(?![\d.])/g, AMOUNT);
-  // Masked account numbers (XX6507, ****1234).
-  s = s.replace(/(?:[Xx*]{2,})\d{3,}/g, ACCT);
-  // UTR-like: letters and digits mixed, 10+ characters.
-  s = s.replace(/\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{10,}\b/g, REF);
-  // Long digit runs.
-  s = s.replace(/\d{6,}/g, NUM);
-  return s;
+  let s = cap(input);
+  const hosts = (opts.hosts ?? []).filter((h) => h && h.length >= 3).sort((a, b) => b.length - a.length);
+  for (const h of hosts) s = s.replace(new RegExp(escapeRe(h), 'gi'), SITE);
+  s = s.replace(RE_URL, scrubUrl); // scheme://host[:port]/path?query#frag -> scheme://<site>/path
+  s = s.replace(RE_EMAIL, EMAIL);
+  s = s.replace(RE_HOST, SITE); // bare host names (no scheme) on common TLDs
+  s = s.replace(RE_CURRENCY_BEFORE, AMOUNT);
+  s = s.replace(RE_CURRENCY_AFTER, AMOUNT);
+  s = s.replace(RE_GROUPED, AMOUNT); // 1,00,000 / 1,000,000.00
+  s = s.replace(RE_DECIMAL, AMOUNT);
+  s = s.replace(RE_MONEY_WORD_BEFORE, (_m, w: string, sep: string) => `${w}${sep}${AMOUNT}`);
+  s = s.replace(RE_MONEY_WORD_AFTER, (_m, sp: string) => `${AMOUNT}${sp}`);
+  s = s.replace(RE_MASKED, ACCT); // XX6507, ****1234
+  s = s.replace(RE_REF, REF); // UTR-like: letters and digits mixed, 10+ characters
+  s = s.replace(RE_DIGIT_GROUPS, (m) => (m.replace(/\D/g, '').length >= 6 ? NUM : m));
+  s = s.replace(RE_LONG_DIGITS, NUM);
+  return cap(s);
 }
 
 type Ctx = { opts: ScrubOptions; seen: WeakMap<object, unknown> };
@@ -85,10 +122,19 @@ function scrubNumber(key: string | null, n: number): unknown {
   return Math.abs(Math.trunc(n)) >= 100000 ? NUM : n;
 }
 
-function walk(value: unknown, key: string | null, ctx: Ctx, depth: number): unknown {
+/** Sets `out[key]` (the key scrubbed like any text; `#2`, `#3` ... when two keys scrub to the same text). */
+function setScrubbedKey(out: Record<string, unknown>, key: string, value: unknown, ctx: Ctx): void {
+  const base = scrubText(key, ctx.opts);
+  let k = base;
+  for (let n = 2; Object.prototype.hasOwnProperty.call(out, k); n++) k = `${base}#${n}`;
+  Object.defineProperty(out, k, { value, enumerable: true, writable: true, configurable: true });
+}
+
+/** `keepNums`: numbers are kept as they are (device/os/app contexts: memory, storage, screen sizes). */
+function walk(value: unknown, key: string | null, ctx: Ctx, depth: number, keepNums = false): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value === 'string') return key && MONEY_KEY.test(key) ? REDACTED : scrubText(value, ctx.opts);
-  if (typeof value === 'number') return scrubNumber(key, value);
+  if (typeof value === 'number') return keepNums ? value : scrubNumber(key, value);
   if (typeof value === 'boolean') return value;
   if (typeof value === 'bigint') return NUM;
   if (typeof value !== 'object') return undefined; // functions, symbols
@@ -97,7 +143,7 @@ function walk(value: unknown, key: string | null, ctx: Ctx, depth: number): unkn
   if (Array.isArray(value)) {
     const out: unknown[] = [];
     ctx.seen.set(value, out);
-    for (const v of value) out.push(walk(v, key, ctx, depth + 1));
+    for (const v of value) out.push(walk(v, key, ctx, depth + 1, keepNums));
     return out;
   }
   const out: Record<string, unknown> = {};
@@ -110,8 +156,44 @@ function walk(value: unknown, key: string | null, ctx: Ctx, depth: number): unkn
     } catch {
       continue; // a throwing getter
     }
-    const w = walk(v, k, ctx, depth + 1);
-    if (w !== undefined) out[k] = w;
+    const w = walk(v, k, ctx, depth + 1, keepNums);
+    if (w !== undefined) setScrubbedKey(out, k, w, ctx);
+  }
+  return out;
+}
+
+// Contexts whose numbers are device facts (memory, storage, screen), not amounts or identifiers.
+const DEVICE_CONTEXTS = new Set(['device', 'os', 'app']);
+const TRACE_IDS = ['trace_id', 'span_id', 'parent_span_id'];
+const HEX_ID = /^[0-9a-f]{16,32}$/i;
+
+function scrubContexts(v: unknown, ctx: Ctx): unknown {
+  if (!isObj(v)) return walk(v, null, ctx, 1);
+  const out: Record<string, unknown> = {};
+  ctx.seen.set(v, out);
+  for (const k of Object.keys(v)) {
+    if (CREDENTIAL_KEY.test(k) || PAYLOAD_KEY.test(k)) continue;
+    let c: unknown;
+    try {
+      c = v[k];
+    } catch {
+      continue;
+    }
+    let w: unknown;
+    if (DEVICE_CONTEXTS.has(k)) {
+      w = walk(c, null, ctx, 2, true);
+    } else if (k === 'trace' && isObj(c)) {
+      // Trace and span ids are random hex, not user data: kept so events still group by trace.
+      const isId = (tk: string) => TRACE_IDS.includes(tk) && typeof c[tk] === 'string' && HEX_ID.test(c[tk] as string);
+      const rest: Record<string, unknown> = {};
+      for (const tk of Object.keys(c)) if (!isId(tk)) rest[tk] = c[tk];
+      const t = walk(rest, null, ctx, 2) as Record<string, unknown>;
+      for (const id of TRACE_IDS) if (isId(id)) t[id] = c[id];
+      w = t;
+    } else {
+      w = walk(c, null, ctx, 2);
+    }
+    if (w !== undefined) setScrubbedKey(out, k, w, ctx);
   }
   return out;
 }
@@ -196,7 +278,7 @@ export function scrubEvent<T>(event: T, opts: ScrubOptions = {}): T | null {
         // dropped
       } else {
         // extra, contexts, tags, threads (stack frames with vars), transaction, fingerprint, ...
-        const w = walk(v, k === 'extra' || k === 'contexts' || k === 'tags' ? null : k, ctx, 1);
+        const w = k === 'contexts' ? scrubContexts(v, ctx) : walk(v, k === 'extra' || k === 'tags' ? null : k, ctx, 1);
         if (w !== undefined) out[k] = w;
       }
     }

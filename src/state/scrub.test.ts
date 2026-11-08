@@ -175,5 +175,83 @@ describe('scrubText', () => {
     ['see http://10.0.2.2:8000/app/home?x=1#y', 'see http://<site>/app/home'],
     ['version 1.0.0 and 58.0.23', 'version 1.0.0 and 58.0.23'],
     ['ErpValidationError: Value missing for Cost Center', 'ErpValidationError: Value missing for Cost Center'],
+    // T20A review: 1 or 2 decimals
+    ['Paid Amount 5000.0 cannot be greater than 4000.5.', 'Paid Amount <amount> cannot be greater than <amount>.'],
+    ['fee 5000.00.', 'fee <amount>.'],
+    // plain integers next to a money word, whatever their size
+    ['Paid Amount 500 cannot be greater than Outstanding 42', 'Paid Amount <amount> cannot be greater than Outstanding <amount>'],
+    ['paid_amount=5 total: 12 balance is 7 Bal 3 rs 9 INR5', 'paid_amount=<amount> total: <amount> balance is <amount> Bal <amount> <amount> <amount>'],
+    ['500 credited to your account', '<amount> credited to your account'],
+    ['row 3 of 4', 'row 3 of 4'],
+    // digit groups split by single spaces or dashes
+    ['call +91 98765 43210 now', 'call <num> now'],
+    ['acct 5010-0123-4567', 'acct <num>'],
+    ['page 12 of 34', 'page 12 of 34'],
+    // `_` separates tokens
+    ['UTR_IDFB6292M4509651', 'UTR_<ref>'],
+    ['ref_HDFCR52025110512345678_x', 'ref_<ref>_x'],
   ])('%s', (input, want) => expect(scrubText(input)).toBe(want));
+
+  it('is idempotent on the new patterns', () => {
+    for (const x of ['Paid Amount 5000.0 x', '+91 98765 43210', 'UTR_IDFB6292M4509651', 'amount 500', 'v 1.0.0 15.1']) {
+      const once = scrubText(x);
+      expect(scrubText(once)).toBe(once);
+    }
+  });
+
+  it('caps long strings before scrubbing (8 KB + marker), and stays idempotent', () => {
+    const long = `${'word '.repeat(3000)}IDFB6292M4509651`;
+    const out = scrubText(long);
+    expect(out.length).toBeLessThanOrEqual(8192 + ' …<truncated>'.length);
+    expect(out.endsWith(' …<truncated>')).toBe(true);
+    expect(out).not.toContain('IDFB6292M4509651');
+    expect(scrubText(out)).toBe(out);
+    expect(scrubText('short')).toBe('short');
+  });
+
+  it('runs in bounded time on pathological input (email / host patterns)', () => {
+    const t0 = Date.now();
+    scrubText('a'.repeat(200000));
+    scrubText(`${'a.'.repeat(100000)}`);
+    scrubText(`${'a-'.repeat(4000)}@${'b'.repeat(4000)}`);
+    expect(Date.now() - t0).toBeLessThan(2000);
+  });
+});
+
+describe('scrubEvent: keys and contexts (T20A review)', () => {
+  it('scrubs object keys like text, collision-safe and idempotent', () => {
+    const e = { extra: { 'IDFB6292M4509651': 'a', 'HDFCR52025110512345678': 'b', [`${'ravi@x.in'}`]: 'c', ok: 1 } };
+    const out = scrubEvent(e) as any;
+    expect(out.extra).toEqual({ '<ref>': 'a', '<ref>#2': 'b', '<email>': 'c', ok: 1 });
+    expect(JSON.stringify(out)).not.toMatch(/IDFB|HDFCR|ravi/);
+    expect(scrubEvent(out)).toEqual(out);
+    // a key that is __proto__ is an ordinary key, not a prototype change
+    const proto = scrubEvent(JSON.parse('{"extra":{"__proto__":{"x":1}}}')) as any;
+    expect(Object.getPrototypeOf(proto.extra)).toBe(Object.prototype);
+    expect(Object.keys(proto.extra)).toEqual(['__proto__']);
+  });
+
+  it('keeps trace ids and device/os/app numbers, still scrubs other contexts', () => {
+    const traceId = '4c79f60c11214eb38604f4ae0781bfb2';
+    const out = scrubEvent({
+      contexts: {
+        trace: { trace_id: traceId, span_id: 'fa90fdead5f74052', op: 'IDFB6292M4509651' },
+        device: { memory_size: 8000000000, free_storage: 123456789, model: 'Pixel 8' },
+        os: { name: 'Android', build_number: 1234567 },
+        app: { app_memory: 9999999 },
+        erp: { count: 1234567, note: 'paid 500' },
+      },
+    }) as any;
+    expect(out.contexts.trace).toEqual({ trace_id: traceId, span_id: 'fa90fdead5f74052', op: '<ref>' });
+    expect(out.contexts.device).toEqual({ memory_size: 8000000000, free_storage: 123456789, model: 'Pixel 8' });
+    expect(out.contexts.os).toEqual({ name: 'Android', build_number: 1234567 });
+    expect(out.contexts.app).toEqual({ app_memory: 9999999 });
+    expect(out.contexts.erp).toEqual({ count: '<num>', note: 'paid <amount>' });
+    expect(scrubEvent(out)).toEqual(out);
+  });
+
+  it('a non-hex trace id is scrubbed like any text', () => {
+    const out = scrubEvent({ contexts: { trace: { trace_id: 'UTR IDFB6292M4509651' } } }) as any;
+    expect(out.contexts.trace.trace_id).toBe('UTR <ref>');
+  });
 });
