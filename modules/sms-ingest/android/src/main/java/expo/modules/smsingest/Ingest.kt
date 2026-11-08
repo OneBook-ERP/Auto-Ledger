@@ -43,6 +43,30 @@ sealed class Decision {
 }
 
 /**
+ * Hard-coded OTP check for when no usable template engine exists (bundled asset and override both
+ * failed, or [TemplateEngine.selfTest] failed). Without it every SMS from a configured sender,
+ * OTPs included, would be stored and returned by backfill. Covers the forms of the template set's
+ * otpPattern ("<4-8 digits> is [your|the] OTP", "OTP is|: <code>", "OTP for ... is <code>", and
+ * "one time password" spelled with a space, hyphen or nothing) and always needs a code next to the
+ * keyword, so an alert that merely says "never share your OTP" is still kept. Kotlin-only.
+ */
+object FallbackOtp {
+  private const val KW = "(?:otp|one[- ]?time\\s+password)"
+  private val RX = java.util.regex.Pattern.compile(
+    "\\b\\d{4,8}\\s+(?:is|as)\\s+(?:(?:your|the)\\s+)?$KW" +
+      "|\\b$KW\\s*(?:is|:)\\s*\\d{4,8}\\b" +
+      "|\\b$KW\\s+for\\b(?:[^.\\n]|\\.\\d){0,80}\\bis\\s+\\d{4,8}\\b",
+    java.util.regex.Pattern.CASE_INSENSITIVE,
+  )
+
+  fun matches(body: String): Boolean = try {
+    RX.matcher(TemplateEngine.normalise(body)).find()
+  } catch (e: Throwable) {
+    false
+  }
+}
+
+/**
  * Decides, before anything is stored, what happens to one SMS (R38):
  * sender not configured -> drop; parse succeeds -> store with the template kind and notify;
  * otherwise money-like (looksLikeMoney) -> store as "unrecognised", no notification; else drop
@@ -50,7 +74,8 @@ sealed class Decision {
  *
  * If the engine is unusable (no valid template set, or [TemplateEngine.selfTest] failed) the
  * message is stored as "unrecognised" without parsing, so nothing is silently lost; only the OTP
- * check (which uses no named groups) is still applied, if an engine object exists.
+ * checks still apply: the engine's otpPattern (no named groups) if an engine object exists, and
+ * always the hard-coded [FallbackOtp], so an OTP is never stored or backfilled even with no engine.
  */
 class MessageClassifier(
   private val filter: SenderFilter,
@@ -59,9 +84,11 @@ class MessageClassifier(
 ) {
   fun classify(sender: String, body: String): Decision {
     if (!filter.matches(sender)) return Decision.Drop("sender")
-    if (engine == null) return Decision.Store(UNRECOGNISED, null)
+    if (engine == null || !engineUsable) {
+      if (engine?.isOtp(body) == true || FallbackOtp.matches(body)) return Decision.Drop("otp")
+      return Decision.Store(UNRECOGNISED, null)
+    }
     if (engine.isOtp(body)) return Decision.Drop("otp")
-    if (!engineUsable) return Decision.Store(UNRECOGNISED, null)
     engine.parse(sender, body)?.let { return Decision.Store(it.kind, it) }
     return if (engine.looksLikeMoney(sender, body)) Decision.Store(UNRECOGNISED, null) else Decision.Drop("not_money")
   }
@@ -76,6 +103,13 @@ class MessageClassifier(
 
 /** Notification text, formed from the parse only (never the SMS body). */
 object NotificationText {
+  /** Lock-screen (public) version: fixed text, no amount, sender, account digits or body. */
+  const val PUBLIC_TITLE = "AutoLedger"
+  const val PUBLIC_TEXT = "New bank transaction"
+
+  /** Content text of the private notification (its title is [title]). */
+  const val PRIVATE_TEXT = "Tap to classify"
+
   fun title(p: NativeParse): String {
     val amt = amount(p.amountMinor, p.currency)
     val tail = p.accountLast4?.takeIf { it.isNotEmpty() }?.let { " …$it" } ?: ""

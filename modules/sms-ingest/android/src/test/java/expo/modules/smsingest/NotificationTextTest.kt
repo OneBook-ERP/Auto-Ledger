@@ -67,6 +67,23 @@ class NotificationTextTest {
   }
 
   @Test
+  fun lockScreenPublicVersionNeverCarriesSmsDetail() {
+    assertEquals("AutoLedger", NotificationText.PUBLIC_TITLE)
+    assertEquals("New bank transaction", NotificationText.PUBLIC_TEXT)
+    assertEquals("Tap to classify", NotificationText.PRIVATE_TEXT)
+    val pub = NotificationText.PUBLIC_TITLE + " " + NotificationText.PUBLIC_TEXT
+    assertFalse(pub, pub.any { it.isDigit() })
+    assertFalse(pub, pub.contains("₹") || pub.contains("IDFCFB") || pub.contains("INR"))
+    for (i in 0 until RepoFiles.fixtures.length()) {
+      val f = RepoFiles.fixtures.getJSONObject(i)
+      val r = RepoFiles.engine.parse(f.getString("sender"), f.getString("body")) ?: continue
+      assertFalse(pub.contains(f.getString("sender")))
+      r.accountLast4?.let { assertFalse(pub.contains(it)) }
+      assertFalse(f.getString("body").contains(pub))
+    }
+  }
+
+  @Test
   fun notificationIdIsStableAndNonNegative() {
     val a = NotificationText.notificationId("1700000000000-1")
     assertEquals(a, NotificationText.notificationId("1700000000000-1"))
