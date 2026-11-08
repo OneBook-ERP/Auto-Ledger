@@ -15,6 +15,7 @@ import { buildErp } from './erp';
 import { getNative, type SmsNative } from './native';
 import { clearSession, persistSession, restoreSession, summarize } from './session';
 import { useUiStore } from './store';
+import { LAST_SYNCED_KEY } from '../home/viewModel';
 import { maybeRefreshTemplates } from './templatesSchedule';
 
 export const SETUP_DONE_KEY = 'setupDone';
@@ -125,7 +126,18 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
           const { erp } = buildErp(s, { fetchImpl });
           return runForegroundCycle({ repo: r, native, erp, now, fetchImpl });
         },
-        after: refreshBanners,
+        after: async (summary) => {
+          // Home's "last synced": only a cycle where every step worked counts (spec section 14).
+          const r = repoRef.current;
+          if (r && summary && !summary.skipped && summary.failedSteps.length === 0) {
+            try {
+              await r.setSetting(LAST_SYNCED_KEY, String(now()));
+            } catch {
+              // best effort
+            }
+          }
+          await refreshBanners();
+        },
       }),
     [native, fetchImpl, now, refreshBanners],
   );

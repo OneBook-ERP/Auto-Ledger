@@ -11,3 +11,4 @@ export { EmptyState } from './EmptyState';
 export { Money } from './Money';
 export { Card } from './Card';
 export { formatInr } from './format';
+export { Figure } from './Figure';
