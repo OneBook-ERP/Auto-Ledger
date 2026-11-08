@@ -172,6 +172,65 @@ describe('mappings, rules, outbox, settings', () => {
     await r.enqueue(op({ id: 'c' }));
     expect((await r.getOutbox('a'))?.status).toBe('superseded');
   });
+  // A driver that yields between statements, like expo-sqlite's async API, so overlapping calls interleave.
+  function yieldingDriver(failOn?: { re: RegExp; armed: boolean }) {
+    const base = createTestDriver();
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    const d: SqlDriver = {
+      exec: async (sql, params) => { await tick(); if (failOn?.armed && failOn.re.test(sql)) { failOn.armed = false; throw new Error('disk I/O error'); } return base.exec(sql, params); },
+      all: async (sql, params) => { await tick(); return base.all(sql, params); },
+    };
+    return d;
+  }
+
+  it('overlapping transactions and plain writes are serialised (no nested BEGIN, no cross-rollback)', async () => {
+    const r = await createRepo(yieldingDriver());
+    await r.enqueue(op({ id: 'o0' }));
+    await Promise.all([
+      r.enqueue(op({ id: 'a1' })),
+      r.enqueue(op({ id: 'b1', txnId: 't2' })),
+      r.upsertPending(txn({ id: 'x', rawHash: 'hx' })),
+      r.markOutbox('o0', { attempts: 7 }),
+      r.reopenOutbox('o0'),
+    ]);
+    expect((await r.listOutbox('t1')).map((o) => [o.id, o.status, o.attempts])).toEqual([['o0', 'pending', 7], ['a1', 'superseded', 0]]);
+    expect((await r.getOutbox('b1'))?.status).toBe('pending');
+    expect(await r.getPending('x')).toEqual(txn({ id: 'x', rawHash: 'hx' }));
+  });
+
+  it('a failing transaction rolls back only its own statements; a concurrent upsert survives', async () => {
+    const failOn = { re: /status = 'superseded'/, armed: false };
+    const r = await createRepo(yieldingDriver(failOn));
+    await r.enqueue(op({ id: 'a' }));
+    failOn.armed = true;
+    const [enq, ups] = await Promise.allSettled([r.enqueue(op({ id: 'b' })), r.upsertPending(txn({ id: 'y', rawHash: 'hy' }))]);
+    expect(enq.status).toBe('rejected');
+    expect(ups.status).toBe('fulfilled');
+    expect(await r.getOutbox('b')).toBeNull();
+    expect((await r.getOutbox('a'))?.status).toBe('pending');
+    expect(await r.getPending('y')).toEqual(txn({ id: 'y', rawHash: 'hy' }));
+  });
+
+  it('a driver error inside a transaction releases the mutex', async () => {
+    const failOn = { re: /^INSERT INTO outbox/, armed: true };
+    const r = await createRepo(yieldingDriver(failOn));
+    await expect(r.enqueue(op({ id: 'a' }))).rejects.toThrow('disk I/O error');
+    await r.enqueue(op({ id: 'a' }));
+    expect((await r.getOutbox('a'))?.status).toBe('pending');
+    await r.setSetting('k', 'v');
+    expect(await r.getSetting('k')).toBe('v');
+  });
+
+  it('finishOutbox marks done but never overwrites superseded', async () => {
+    const r = await mk();
+    await r.enqueue(op({ id: 'a' }));
+    await r.enqueue(op({ id: 'b' }));
+    const p = { stepIndex: 1, created: [{ doctype: 'Payment Entry', name: 'PE-1' }] };
+    await r.finishOutbox('a', p);
+    await r.finishOutbox('b', p);
+    expect(await r.getOutbox('a')).toEqual(op({ id: 'a', status: 'superseded', progress: p }));
+    expect(await r.getOutbox('b')).toEqual(op({ id: 'b', status: 'done', progress: p }));
+  });
   it('reopenOutbox re-pends an item and supersedes the other pending items of its txn atomically', async () => {
     const r = await mk();
     await r.enqueue(op({ id: 'a' }));

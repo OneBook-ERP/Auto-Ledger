@@ -194,12 +194,26 @@ describe('runPlan: success (f)', () => {
     expect(erp.calls).toHaveLength(0);
   });
 
-  it('a txn already created returns its documents and calls nothing', async () => {
+  it('a txn already created by another decision refuses readably, calls nothing and changes nothing', async () => {
     const t = txn({ state: 'created', createdDocs: [{ doctype: 'Payment Entry', name: 'PE-9', docstatus: 0 }] });
-    const { erp, deps } = await setup(t);
+    const { repo, erp, outbox, deps } = await setup(t);
     const r = await runPlan('t1', advance(t), deps);
-    expect(r).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'PE-9' }] });
+    expect(r).toMatchObject({ status: 'failed', retryable: false });
+    if (r.status === 'failed') expect(r.error.message).toBe('This transaction was already processed (PE-9); use Undo in Activity to change it.');
     expect(erp.calls).toHaveLength(0);
+    expect(await outbox()).toEqual([]);
+    expect(await repo.getPending('t1')).toEqual(t);
+  });
+
+  it('a re-run of the same plan after completion returns its own documents (idempotent)', async () => {
+    const { erp, outbox, deps } = await setup();
+    const plan = advance(txn());
+    const r1 = await runPlan('t1', plan, deps);
+    const calls = erp.calls.length;
+    expect(await runPlan('t1', plan, deps)).toEqual(r1);
+    expect(await rawRunPlan('t1', plan, deps)).toMatchObject({ status: 'failed', retryable: false }); // drainer: item is done
+    expect(erp.calls.length).toBe(calls);
+    expect((await outbox())[0].status).toBe('done');
   });
 });
 
@@ -272,7 +286,7 @@ describe('runPlan: partial failure (b)', () => {
     expect(erp.parties).toEqual([{ ...ACME, displayName: 'Acme Traders' }]);
     expect(erp.count('deleteDraft')).toBe(0); // parties are master data, never deleted
     const ob = await outbox();
-    expect(ob[0].progress).toEqual({ stepIndex: 1, created: [{ doctype: 'Customer', name: 'Acme Traders' }], attempting: 1 });
+    expect(ob[0].progress).toEqual({ stepIndex: 1, created: [{ doctype: 'Customer', name: 'Acme Traders' }] });
     expect(ob[0].status).toBe('failed');
 
     const r2 = await runPlan('t1', plan, deps);
@@ -505,7 +519,7 @@ describe('runPlan: auth (d)', () => {
     const ob = (await outbox())[0];
     expect(ob.status).toBe('pending');
     expect(ob.attempts).toBe(0);
-    expect(ob.progress).toEqual({ stepIndex: 1, created: [{ doctype: 'Customer', name: 'Acme Traders' }], attempting: 1 });
+    expect(ob.progress).toEqual({ stepIndex: 1, created: [{ doctype: 'Customer', name: 'Acme Traders' }] });
     const saved = await repo.getPending('t1');
     expect(saved!.state).toBe('new');
     expect(saved!.error).toBeNull();
@@ -547,7 +561,7 @@ describe('runPlan: network (e)', () => {
     const ob = (await outbox())[0];
     expect(ob.status).toBe('pending');
     expect(ob.attempts).toBe(2);
-    expect(ob.progress).toEqual({ stepIndex: 1, created: [{ doctype: 'Customer', name: 'Acme Traders' }], attempting: 1 });
+    expect(ob.progress).toEqual({ stepIndex: 1, created: [{ doctype: 'Customer', name: 'Acme Traders' }] });
   });
 
   it('does not delete a document created earlier in the run', async () => {
@@ -788,9 +802,9 @@ describe('runPlan: final write order (I4)', () => {
     let crash = true;
     const crashing: Repo = {
       ...repo,
-      async markOutbox(id, patch) {
-        if (crash && patch.status === 'done') { crash = false; throw new Error('process killed'); }
-        return repo.markOutbox(id, patch);
+      async finishOutbox(id, progress) {
+        if (crash) { crash = false; throw new Error('process killed'); }
+        return repo.finishOutbox(id, progress);
       },
     };
     await expect(runPlan('t1', plan, { repo: crashing, erp })).rejects.toThrow('process killed');
@@ -939,5 +953,138 @@ describe('runPlan: orphan drafts of replaced decisions (R42.5)', () => {
     const saved = await repo.getPending('t1');
     expect(saved!.state).toBe('ignored');
     expect(saved!.createdDocs).toEqual([]);
+  });
+});
+
+describe('runPlan: a definitive rejection clears the attempt marker (R43.1)', () => {
+  const BETA: PartyRef = { doctype: 'Customer', name: 'Beta Ltd' };
+  const advanceBeta = (t: PendingTxn) => planAction(t, { type: 'customer_advance', party: BETA }, ctx());
+  const ignore = () => planAction(txn(), { type: 'ignore' }, ctx());
+
+  async function rejectedThenAccountant(docstatus: number) {
+    const s = await setup();
+    const a = advance(txn());
+    s.erp.failNext('createDraft', new ErpValidationError('Value missing for Payment Entry: Cost Center', 417, ['Cost Center']));
+    expect(await runPlan('t1', a, s.deps)).toMatchObject({ status: 'failed', retryable: false });
+    expect((await s.repo.getOutbox(outboxIdFor('t1', a)))!.progress.attempting).toBeUndefined();
+    // "complete this entry in ERPNext": the accountant enters it by hand with the same reference.
+    s.erp.docs.push({ doctype: 'Payment Entry', name: 'PE-MANUAL', docstatus, body: { reference_no: 'UTR123' } });
+    return s;
+  }
+
+  it.each([0, 1])('Ignore keeps the accountant\'s document (docstatus %p)', async (ds) => {
+    const { repo, erp, deps } = await rejectedThenAccountant(ds);
+    expect(await runPlan('t1', ignore(), deps)).toEqual({ status: 'created', docs: [] });
+    expect(erp.count('deleteDraft')).toBe(0);
+    expect(erp.docs.map((d) => d.name)).toEqual(['PE-MANUAL']);
+    expect((await repo.getPending('t1'))!.state).toBe('ignored');
+  });
+
+  it.each([0, 1])('plan B keeps the accountant\'s document and is not refused (docstatus %p)', async (ds) => {
+    const { erp, deps } = await rejectedThenAccountant(ds);
+    const r = await runPlan('t1', advanceBeta(txn()), deps);
+    expect(r).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'PE-MANUAL' }] });
+    expect(erp.count('deleteDraft')).toBe(0);
+    expect(erp.docs.map((d) => d.name)).toEqual(['PE-MANUAL']);
+  });
+
+  it('an auth rejection of the create also clears the marker', async () => {
+    const { repo, erp, deps } = await setup();
+    const a = advance(txn());
+    erp.failNext('createDraft', new ErpAuthError('ERPNext did not accept the credentials.', 401));
+    expect(await runPlan('t1', a, deps)).toEqual({ status: 'needs_login' });
+    expect((await repo.getOutbox(outboxIdFor('t1', a)))!.progress.attempting).toBeUndefined();
+  });
+
+  it('a lost reply (network) keeps the marker', async () => {
+    const { repo, erp, deps } = await setup();
+    const a = advance(txn());
+    erp.failNext('createDraft', new ErpNetworkError('timeout'), { afterEffect: true });
+    await runPlan('t1', a, deps);
+    expect((await repo.getOutbox(outboxIdFor('t1', a)))!.progress.attempting).toBe(0);
+  });
+
+  it('a rejected createParty: the re-run creates a new party and does not reuse a namesake', async () => {
+    const t = txn({ kind: 'ca_debit', direction: 'out' });
+    const { erp, deps } = await setup(t);
+    erp.seriesNaming = true;
+    erp.parties.push({ doctype: 'Employee', name: 'HR-EMP-0003', displayName: 'Ravi Kumar' });
+    erp.failNext('createParty', new ErpValidationError('Value missing for Employee: Gender', 417, ['Gender']));
+    expect(await runPlan('t1', salaryNewEmployee(t), deps)).toMatchObject({ status: 'failed', retryable: false });
+    expect(await runPlan('t1', salaryNewEmployee(t), deps)).toMatchObject({ status: 'created' });
+    expect(erp.count('searchParties')).toBe(0);
+    expect(erp.count('createParty')).toBe(2);
+    expect(erp.parties.map((p) => p.name)).toEqual(['HR-EMP-0003', 'HR-EMP-0001']);
+    expect(erp.docs[0].body.party).toBe('HR-EMP-0001');
+  });
+});
+
+describe('runPlan: the created gate only answers the producing item (R43.3)', () => {
+  function gateCreate(erp: FakeErp) {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const orig = erp.createDraft.bind(erp);
+    erp.createDraft = async (d, body) => { await gate; return orig(d, body); };
+    return () => release();
+  }
+
+  it('B queued on the lock behind an in-flight A gets the readable refusal', async () => {
+    const { repo, erp, outbox, deps } = await setup();
+    const a = advance(txn());
+    const b = income(txn());
+    const release = gateCreate(erp);
+    const pA = runPlan('t1', a, deps);
+    await new Promise((r) => setTimeout(r, 5));
+    const pB = runPlan('t1', b, deps);
+    release();
+    expect(await pA).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0001' }] });
+    const rB = await pB;
+    expect(rB).toMatchObject({ status: 'failed', retryable: false });
+    if (rB.status === 'failed') expect(rB.error.message).toBe('This transaction was already processed (ACC-PAY-0001); use Undo in Activity to change it.');
+    expect(erp.docs).toHaveLength(1);
+    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0 }]);
+    expect((await outbox()).map((o) => [o.id, o.status])).toEqual([[outboxIdFor('t1', a), 'done']]);
+  });
+
+  it('B pre-enqueued while A runs: A records its docs but stays superseded; B is refused, creates nothing', async () => {
+    const { repo, erp, deps } = await setup();
+    const a = advance(txn());
+    const b = income(txn());
+    const release = gateCreate(erp);
+    const pA = runPlan('t1', a, deps);
+    await new Promise((r) => setTimeout(r, 5));
+    await repo.enqueue({ id: outboxIdFor('t1', b), txnId: 't1', plan: b, progress: { stepIndex: 0, created: [] }, attempts: 0, status: 'pending' });
+    release();
+    expect((await pA).status).toBe('created');
+    expect((await repo.getOutbox(outboxIdFor('t1', a)))!.status).toBe('superseded');
+    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0 }]);
+    expect(await drain(repo, erp)).toEqual([outboxIdFor('t1', b)]);
+    expect((await repo.getOutbox(outboxIdFor('t1', a)))!.status).toBe('superseded');
+    expect((await repo.getOutbox(outboxIdFor('t1', b)))!.status).toBe('failed');
+    expect(erp.docs).toHaveLength(1);
+    expect(erp.docs[0].doctype).toBe('Payment Entry');
+  });
+});
+
+describe('runPlan: a UTR shared with another txn (R43.4)', () => {
+  it('cleanup does not delete a draft another txn has recorded', async () => {
+    const { repo, erp, deps } = await setup();
+    await runPlan('t1', advance(txn()), deps); // txn 1 owns ACC-PAY-0001 with UTR123
+    const t2 = txn({ id: 't2', rawHash: 'h2', kind: 'ca_debit', direction: 'out' });
+    await repo.upsertPending(t2);
+    const pay = planAction(t2, { type: 'supplier_payment', party: { doctype: 'Supplier', name: 'Sup' } }, ctx());
+    // txn 2's first attempt: the lookup misses and the create's outcome is unknown (marker kept).
+    const orig = erp.findDraftByUtr.bind(erp);
+    let once = true;
+    erp.findDraftByUtr = async (ref) => { if (once) { once = false; erp.calls.push({ op: 'findDraftByUtr', args: [ref] }); return null; } return orig(ref); };
+    erp.failNext('createDraft', new ErpNetworkError('timeout'));
+    await runPlan('t2', pay, deps);
+    expect((await repo.getOutbox(outboxIdFor('t2', pay)))!.progress.attempting).toBe(0);
+    // txn 2's decision is replaced by Ignore: the draft found by UTR123 belongs to txn 1.
+    expect(await runPlan('t2', planAction(t2, { type: 'ignore' }, ctx()), deps)).toEqual({ status: 'created', docs: [] });
+    expect(erp.count('deleteDraft')).toBe(0);
+    expect(erp.docs.map((d) => d.name)).toEqual(['ACC-PAY-0001']);
+    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0 }]);
+    expect((await repo.getOutbox(outboxIdFor('t2', pay)))!.progress).toEqual({ stepIndex: 0, created: [] });
   });
 });

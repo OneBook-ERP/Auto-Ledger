@@ -199,10 +199,19 @@ type Orphans = { items: OutboxOp[]; docs: DocRef[] };
  * document create was attempted, and documents recorded on the txn that the current item did not make).
  * Throws the "already submitted" ErpValidationError when one of them is no longer a draft.
  */
-async function findOrphans(erp: ErpOps, others: OutboxOp[], txn: PendingTxn, keep: Set<string>): Promise<Orphans> {
+async function findOrphans(repo: Repo, erp: ErpOps, others: OutboxOp[], txn: PendingTxn, keep: Set<string>): Promise<Orphans> {
   const docs: DocRef[] = [];
   const seen = new Set<string>(keep);
   const items: OutboxOp[] = [];
+  // A real UTR can be shared with another txn (reversal/refund, both legs of an own-account transfer).
+  // A document that another txn has recorded is that txn's, never this txn's orphan.
+  let foreign: Set<string> | null = null;
+  const ownedElsewhere = async (d: DocRef) => {
+    if (!foreign) {
+      foreign = new Set((await repo.listPending()).filter((t) => t.id !== txn.id).flatMap((t) => t.createdDocs.map(docKey)));
+    }
+    return foreign.has(docKey(d));
+  };
   for (const o of others) {
     const steps = attemptedDocSteps(o);
     if (!steps.length) continue;
@@ -211,6 +220,7 @@ async function findOrphans(erp: ErpOps, others: OutboxOp[], txn: PendingTxn, kee
       const hit = await erp.findDraftByUtr(referenceOf(s) as string);
       // Only a document of that item's own doctype is its orphan; anything else is not ours to touch.
       if (!hit || hit.doctype !== s.doctype || seen.has(docKey(hit))) continue;
+      if (await ownedElsewhere(hit)) continue;
       if (hit.docstatus !== 0) throw submittedError(hit.name);
       seen.add(docKey(hit));
       docs.push({ doctype: hit.doctype, name: hit.name });
@@ -271,12 +281,26 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
   // recovery path when the txn write landed but the outbox 'done' write did not). 'ignored' (or anything
   // else): the user decided otherwise after this plan was queued, so the plan is superseded.
   if (txn.state === 'created' || txn.state === 'submitted') {
-    await repo.markOutbox(id, { status: 'done' });
-    return { status: 'created', docs: txn.createdDocs.map(({ doctype, name }) => ({ doctype, name })) };
+    // 'created' is reported only to the item that produced the recorded documents (its progress lists
+    // them all); any other plan is refused without touching anything else.
+    const mine = stored && plan.steps.length > 0 && stored.progress.stepIndex === plan.steps.length
+      && txn.createdDocs.every((d) => stored.progress.created.some((c) => c.doctype === d.doctype && c.name === d.name));
+    if (mine) {
+      await repo.finishOutbox(id, stored.progress);
+      return { status: 'created', docs: txn.createdDocs.map(({ doctype, name }) => ({ doctype, name })) };
+    }
+    // Stop the drainer from picking this item up again; never touch done/superseded items.
+    if (stored && stored.status === 'pending') await repo.markOutbox(id, { status: 'failed' });
+    const names = txn.createdDocs.map((d) => d.name).join(', ');
+    return {
+      status: 'failed',
+      error: new ErpValidationError(`This transaction was already processed (${names}); use Undo in Activity to change it.`, 0),
+      retryable: false,
+    };
   }
   if (txn.state !== 'new') {
     if (txn.state === 'ignored' && plan.steps.length === 0 && !plan.needsInrAmount) {
-      await repo.markOutbox(id, { status: 'done' });
+      if (stored) await repo.finishOutbox(id, stored.progress);
       return { status: 'created', docs: [] };
     }
     await repo.markOutbox(id, { status: 'superseded' });
@@ -305,7 +329,7 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
   try {
     const keep = new Set(op.progress.created.map(docKey));
     const others = (await repo.listOutbox(txnId)).filter((o) => o.id !== id && o.status !== 'done');
-    const orphans = await findOrphans(erp, others, txn, keep);
+    const orphans = await findOrphans(repo, erp, others, txn, keep);
     await removeOrphans(repo, erp, orphans);
     const kept = txn.createdDocs.filter((d) => keep.has(docKey(d)));
     if (kept.length !== txn.createdDocs.length) {
@@ -326,7 +350,7 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
 
   if (plan.steps.length === 0) {
     await writeTxn(repo, txnId, txn, { state: 'ignored', createdDocs: txn.createdDocs, error: null });
-    await writeOp(repo, id, { progress: { stepIndex: 0, created: [] }, attempts: op.attempts }, 'done');
+    await repo.finishOutbox(id, { stepIndex: 0, created: [] });
     return { status: 'created', docs: [] };
   }
 
@@ -343,6 +367,20 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
   const attempt = async (step: number) => {
     progress = { stepIndex: progress.stepIndex, created: progress.created, attempting: step };
     await writeOp(repo, id, { progress, attempts: op.attempts });
+  };
+
+  // A validation or auth rejection of the create call itself means "not created": drop the marker so later
+  // cleanup or recovery never mistakes someone else's document (or a namesake) for this attempt's.
+  // Network and unknown errors leave the outcome unknown, so the marker stays.
+  const definitive = async <T>(call: () => Promise<T>): Promise<T> => {
+    try {
+      return await call();
+    } catch (e) {
+      if (e instanceof ErpValidationError || e instanceof ErpAuthError) {
+        progress = { stepIndex: progress.stepIndex, created: progress.created };
+      }
+      throw e;
+    }
   };
 
   try {
@@ -363,7 +401,7 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
         }
         if (!ref) {
           await attempt(i);
-          ref = await erp.createParty(dt, step.body);
+          ref = await definitive(() => erp.createParty(dt, step.body));
         }
         if (refName && ref.name !== refName) renames.set(`${dt}\u0000${refName}`, ref.name);
         created[i] = { doctype: ref.doctype, name: ref.name };
@@ -382,7 +420,7 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
           const body = applyRenames(step.body, renames);
           delete body.docstatus; // checked above; createDraft forces 0 regardless
           await attempt(i);
-          const r = await erp.createDraft(step.doctype, body);
+          const r = await definitive(() => erp.createDraft(step.doctype, body));
           doc = { doctype: step.doctype, name: r.name, docstatus: 0 };
           madeHere.push(doc);
         }
@@ -398,7 +436,7 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
 
   // Txn first, then the item: if the second write is lost, the next run sees 'created' and only marks it done.
   await writeTxn(repo, txnId, txn, { state: 'created', createdDocs: docs, error: null });
-  await writeOp(repo, id, { progress, attempts: op.attempts }, 'done');
+  await repo.finishOutbox(id, progress); // stays 'superseded' if a newer decision replaced it meanwhile
   return { status: 'created', docs: docs.map(({ doctype, name }) => ({ doctype, name })) };
 
   async function fail(e: unknown): Promise<RunResult> {

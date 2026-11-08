@@ -27,6 +27,8 @@ export interface Repo {
   /** Every readable outbox item of `txnId`, oldest first. */
   listOutbox(txnId: string): Promise<OutboxOp[]>;
   markOutbox(id: string, patch: Partial<Pick<OutboxOp, 'progress' | 'attempts' | 'status'>>): Promise<void>;
+  /** One statement: writes `progress` and sets status 'done' unless the item is already 'superseded'. */
+  finishOutbox(id: string, progress: OutboxOp['progress']): Promise<void>;
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;
 }
@@ -66,8 +68,22 @@ function safeParse<T>(s: string, fallback: T): T {
   try { return JSON.parse(s) as T; } catch { return fallback; }
 }
 
+/** Async mutex: runs tasks one at a time, in call order; a failing task never blocks the next. */
+function createMutex() {
+  let tail: Promise<void> = Promise.resolve();
+  return <T>(task: () => Promise<T>): Promise<T> => {
+    const run = tail.then(task);
+    tail = run.then(() => undefined, () => undefined);
+    return run;
+  };
+}
+
 export async function createRepo(d: SqlDriver): Promise<Repo> {
   await migrate(d);
+  // The app has ONE SQLite connection. Every Repo method runs under this mutex so that statements of
+  // different callers never interleave, in particular never inside another caller's BEGIN..COMMIT.
+  // Methods only use the raw driver `d` (never other Repo methods), so holding the lock cannot deadlock.
+  const exclusive = createMutex();
 
   async function inTransaction(fn: () => Promise<void>): Promise<void> {
     await d.exec('BEGIN');
@@ -80,7 +96,7 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
     }
   }
 
-  return {
+  const impl: Repo = {
     async listPending(state) {
       const rows = state
         ? await d.all<PendingRow>(`SELECT ${PENDING_COLS} FROM pending_txn WHERE state = ? ORDER BY received_at, id`, [state])
@@ -186,6 +202,12 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
         return op;
       }
     },
+    async finishOutbox(id, progress) {
+      await d.exec(
+        `UPDATE outbox SET progress = ?, status = CASE WHEN status = 'superseded' THEN status ELSE 'done' END WHERE id = ?`,
+        [JSON.stringify(progress), id],
+      );
+    },
     async markOutbox(id, patch) {
       const sets: string[] = []; const params: unknown[] = [];
       if (patch.progress !== undefined) { sets.push('progress = ?'); params.push(JSON.stringify(patch.progress)); }
@@ -202,4 +224,10 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
       await d.exec('INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [key, value]);
     },
   };
+
+  const locked = {} as Record<string, unknown>;
+  for (const [k, fn] of Object.entries(impl) as [string, (...a: unknown[]) => Promise<unknown>][]) {
+    locked[k] = (...args: unknown[]) => exclusive(() => fn(...args));
+  }
+  return locked as unknown as Repo;
 }
