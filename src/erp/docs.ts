@@ -51,6 +51,17 @@ export async function listLedgerAccounts(
   return rows.map((r) => ({ name: r.name, accountType: r.account_type ?? null }));
 }
 
+/** Enabled Modes of Payment (R18: the setup wizard lets the user pick a default per account). */
+export async function listModesOfPayment(c: ErpClient): Promise<{ name: string; type: string | null }[]> {
+  const rows = await list<{ name: string; type: string | null }>(c, 'Mode of Payment', {
+    fields: ['name', 'type'],
+    filters: [['enabled', '=', 1]],
+    order_by: 'name asc',
+    limit_page_length: 0,
+  });
+  return rows.map((r) => ({ name: r.name, type: r.type ?? null }));
+}
+
 const NAME_FIELD: Record<PartyRef['doctype'], string> = { Customer: 'customer_name', Supplier: 'supplier_name', Employee: 'employee_name' };
 
 /** `name` is the document id (may be a naming series such as HR-EMP-00007); `displayName` is the

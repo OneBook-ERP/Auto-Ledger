@@ -12,6 +12,7 @@ import {
   listBankAccounts,
   listCompanies,
   listLedgerAccounts,
+  listModesOfPayment,
   listOpenInvoices,
   searchParties,
   toMinor,
@@ -89,6 +90,18 @@ describe('simple lists', () => {
     const { c, calls } = setup({ body: { data: [] } });
     await listLedgerAccounts(c, 'ZP Co', {});
     expect(calls[0].url).toContain(encodeURIComponent(JSON.stringify([['company', '=', 'ZP Co'], ['is_group', '=', 0]])));
+  });
+
+  it('listModesOfPayment: enabled modes with their type, explicit page length', async () => {
+    const { c, calls } = setup({ body: { data: [{ name: 'Bank Draft', type: 'Bank' }, { name: 'Cash', type: 'Cash' }, { name: 'Other', type: null }] } });
+    expect(await listModesOfPayment(c)).toEqual([
+      { name: 'Bank Draft', type: 'Bank' },
+      { name: 'Cash', type: 'Cash' },
+      { name: 'Other', type: null },
+    ]);
+    expect(calls[0].url).toBe(
+      `${BASE}/api/resource/Mode%20of%20Payment?${q({ fields: ['name', 'type'], filters: [['enabled', '=', 1]], order_by: 'name asc', limit_page_length: 0 })}`,
+    );
   });
 
   it('searchParties queries name and display name', async () => {
