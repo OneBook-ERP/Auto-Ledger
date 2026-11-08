@@ -66,6 +66,20 @@ describe('named cases', () => {
     expect(parseSms('AX-HDFCBK-S', 'Rs 5 debited from A/c', 0, templates))
       .toEqual({ ok: false, reason: 'unknown_template' });
   });
+  it('widened heuristic (template v2): rupee sign, sent/transferred, suffix amounts are kept, statements are not', () => {
+    for (const body of [
+      '₹1,250.00 debited from A/c XX1234',
+      '1,250.00₹ debited from A/c XX1234',
+      'Rs 500 sent to ABC via UPI',
+      '500 INR transferred to ABC',
+    ]) {
+      expect(parseSms('JM-IDFCFB-S', body, 0, templates)).toEqual({ ok: false, reason: 'unknown_template' });
+    }
+    expect(parseSms('JM-IDFCFB-S', 'Payment Due by 07-05-2026 Min Due: INR 384.00 on your credit card', 0, templates))
+      .toEqual({ ok: false, reason: 'not_money' });
+    expect(parseSms('JM-IDFCFB-S', 'Get ₹500 cashback on your next order', 0, templates))
+      .toEqual({ ok: false, reason: 'not_money' });
+  });
   it('card payment thank-you is not_money', () => {
     expect(parse('idfc-057')).toEqual({ ok: false, reason: 'not_money' });
   });

@@ -37,7 +37,7 @@ class EngineLoaderTest {
     val l = EngineLoader.choose(null, bundled, selfTestOk = true)
     assertTrue(l.usable)
     assertEquals("bundled", l.source)
-    assertEquals(1, l.version)
+    assertEquals(JSONObject(bundled).getInt("version"), l.version)
     assertNotNull(l.engine)
   }
 

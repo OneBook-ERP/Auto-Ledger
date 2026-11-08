@@ -43,7 +43,29 @@ class LooksLikeMoneyTest {
 
   @Test
   fun versionIsRead() {
-    assertEquals(1, engine.version)
+    assertEquals(org.json.JSONObject(RepoFiles.templateJson).getInt("version"), engine.version)
+    assertTrue(engine.version!! >= 2)
+  }
+
+  @Test
+  fun widenedHeuristicKeepsRupeeSignSentAndSuffixForms() {
+    for (b in listOf(
+      "₹1,250.00 debited from A/c XX1234",
+      "₹ 1,250.00 debited from A/c XX1234",
+      "1,250.00₹ debited from A/c XX1234",
+      "Rs 500 sent to ABC via UPI",
+      "Rs.500 transferred to ABC",
+      "500 INR received from ABC",
+      "INR 20.00 refunded to your card",
+      "Rs 99 reversed to your A/c",
+      "Your payment of ₹1,000 was successful",
+    )) {
+      assertTrue(b, engine.looksLikeMoney("JM-IDFCFB-S", b))
+      assertTrue(b, engine.looksLikeMoney("AX-HDFCBK-S", b))
+    }
+    // Statements and card names: bare "payment"/"credit" are not money verbs (fixture idfc-052).
+    assertFalse(engine.looksLikeMoney("JM-IDFCFB-S", "Payment Due by 07-05-2026 Min Due: INR 384.00 on your credit card"))
+    assertFalse(engine.looksLikeMoney("JM-IDFCFB-S", "Get ₹500 cashback on your next order"))
   }
 }
 
@@ -74,6 +96,9 @@ class MessageClassifierTest {
         exp.getBoolean("ok") ->
           assertEquals(f.getString("id"), exp.getJSONObject("txn").getString("kind"), (d as Decision.Store).kind)
         exp.getString("reason") == "otp" -> assertEquals(Decision.Drop("otp"), d)
+        // Money-like but no template: kept for the Inbox, never notified.
+        exp.getString("reason") == "unknown_template" ->
+          assertEquals(f.getString("id"), Decision.Store("unrecognised", null), d)
         else -> assertEquals(f.getString("id"), Decision.Drop("not_money"), d)
       }
     }
@@ -93,6 +118,48 @@ class MessageClassifierTest {
     val siNotice =
       "INR 2240.71 for Facebook will be deducted from IDFC FIRST Bank Credit Card XX3455 on 06/11/2026 basis standing instruction (SI)."
     assertEquals(Decision.Drop("not_money"), c.classify(idfc, siNotice))
+  }
+
+  @Test
+  fun widenedFixturesAreKeptWithoutNotification() {
+    for (id in listOf(
+      "synthetic-idfc-rupee-debit",
+      "synthetic-idfc-upi-sent",
+      "synthetic-idfc-rupee-received",
+      "synthetic-idfc-inr-suffix-transferred",
+    )) {
+      val f = fixture(id)
+      assertEquals(id, Decision.Store("unrecognised", null), c.classify(f.getString("sender"), f.getString("body")))
+      assertTrue(id, c.keep(f.getString("sender"), f.getString("body")))
+    }
+  }
+
+  @Test
+  fun marketingWithRupeeAmountsNeverProducesANotification() {
+    val ids = listOf(
+      "synthetic-idfc-marketing-cashback",
+      "synthetic-idfc-marketing-loan",
+      "synthetic-idfc-marketing-loan-credited",
+      "synthetic-idfc-marketing-voucher-received",
+    )
+    for (id in ids) {
+      val f = fixture(id)
+      val d = c.classify(f.getString("sender"), f.getString("body"))
+      // Dropped, or kept as "unrecognised" (an accepted false keep): never a parse, so never a notification.
+      assertTrue("$id: $d", d == Decision.Drop("not_money") || d == Decision.Store("unrecognised", null))
+      assertNull(id, (d as? Decision.Store)?.parse)
+      assertNull(id, RepoFiles.engine.parse(f.getString("sender"), f.getString("body")))
+    }
+    assertEquals(Decision.Drop("not_money"), c.classify(idfc, fixture("synthetic-idfc-marketing-cashback").getString("body")))
+    assertEquals(Decision.Drop("not_money"), c.classify(idfc, fixture("synthetic-idfc-marketing-loan").getString("body")))
+  }
+
+  private fun fixture(id: String): org.json.JSONObject {
+    for (i in 0 until RepoFiles.fixtures.length()) {
+      val f = RepoFiles.fixtures.getJSONObject(i)
+      if (f.getString("id") == id) return f
+    }
+    throw AssertionError("no fixture $id")
   }
 
   @Test

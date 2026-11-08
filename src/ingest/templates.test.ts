@@ -11,7 +11,9 @@ const byId = (id: string) => (fixtures as Fixture[]).find((f) => f.id === id)!;
 
 const bundled = idfc as TemplateSet;
 const clone = (): any => JSON.parse(JSON.stringify(bundled));
-const v2 = (): any => ({ ...clone(), version: 2 });
+// Relative to the bundled version so bumping templates/idfc.json does not break these tests.
+const NEXT = bundled.version + 1;
+const v2 = (): any => ({ ...clone(), version: NEXT });
 
 class FakeNative {
   calls: string[] = [];
@@ -77,11 +79,11 @@ describe('validateTemplateSet', () => {
   }
 
   it('rejects a version that is not newer than the active one', () => {
-    expect(validateTemplateSet(v2(), { activeVersion: 2 }).ok).toBe(false);
-    const r = validateTemplateSet(clone(), { activeVersion: 3 });
+    expect(validateTemplateSet(v2(), { activeVersion: NEXT }).ok).toBe(false);
+    const r = validateTemplateSet(clone(), { activeVersion: NEXT });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toMatch(/version/i);
-    expect(validateTemplateSet(v2(), { activeVersion: 1 }).ok).toBe(true);
+    expect(validateTemplateSet(v2(), { activeVersion: bundled.version }).ok).toBe(true);
   });
 
   it('rejects a set that compiles but fails the built-in smoke check', () => {
@@ -157,13 +159,13 @@ describe('loadTemplates', () => {
   it('uses the bundled set when nothing is persisted', async () => {
     const repo = await mk();
     expect(await loadTemplates(repo)).toBe(bundled);
-    expect(await activeTemplateVersion(repo)).toBe(1);
+    expect(await activeTemplateVersion(repo)).toBe(bundled.version);
   });
   it('uses a valid persisted set', async () => {
     const repo = await mk();
     await repo.setSetting('templates_json', JSON.stringify(v2()));
-    expect((await loadTemplates(repo)).version).toBe(2);
-    expect(await activeTemplateVersion(repo)).toBe(2);
+    expect((await loadTemplates(repo)).version).toBe(NEXT);
+    expect(await activeTemplateVersion(repo)).toBe(NEXT);
   });
   it('falls back to the bundled set when the persisted one is corrupt or invalid', async () => {
     const repo = await mk();
@@ -195,8 +197,8 @@ describe('refreshTemplates', () => {
     expect(await refreshTemplates({ url: URL_OK, fetchImpl: f.impl, repo, native })).toBe('updated');
     expect(native.calls).toEqual([json]);
     expect(await repo.getSetting('templates_json')).toBe(json);
-    expect(await repo.getSetting('templates_version')).toBe('2');
-    expect((await loadTemplates(repo)).version).toBe(2);
+    expect(await repo.getSetting('templates_version')).toBe(String(NEXT));
+    expect((await loadTemplates(repo)).version).toBe(NEXT);
 
     expect(await refreshTemplates({ url: URL_OK, fetchImpl: f.impl, repo, native })).toBe('unchanged');
     expect(native.calls.length).toBe(1);
@@ -270,9 +272,9 @@ describe('refreshTemplates', () => {
   it('a lower version than an applied override fails and keeps the override', async () => {
     const repo = await mk();
     const native = new FakeNative();
-    await refreshTemplates({ url: URL_OK, fetchImpl: fakeFetch(JSON.stringify({ ...clone(), version: 3 })).impl, repo, native });
+    await refreshTemplates({ url: URL_OK, fetchImpl: fakeFetch(JSON.stringify({ ...clone(), version: NEXT + 1 })).impl, repo, native });
     expect(await refreshTemplates({ url: URL_OK, fetchImpl: fakeFetch(JSON.stringify(v2())).impl, repo, native })).toBe('failed');
-    expect((await loadTemplates(repo)).version).toBe(3);
+    expect((await loadTemplates(repo)).version).toBe(NEXT + 1);
     expect(native.calls.length).toBe(1);
   });
 

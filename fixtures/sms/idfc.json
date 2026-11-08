@@ -1194,5 +1194,105 @@
       "ok": false,
       "reason": "unknown_template"
     }
+  },
+  {
+    "id": "synthetic-idfc-rupee-debit",
+    "sender": "JM-IDFCFB-S",
+    "receivedAt": 1793880660000,
+    "body": "₹1,250.00 debited from your IDFC FIRST Bank A/c XX1234 on 08-11-26. Not you? Call 1800 10 888. Team IDFC FIRST Bank",
+    "expected": {
+      "ok": false,
+      "reason": "unknown_template"
+    }
+  },
+  {
+    "id": "synthetic-idfc-upi-sent",
+    "sender": "JM-IDFCFB-S",
+    "receivedAt": 1793880720000,
+    "body": "Rs 500.00 sent to PERSON_90 via UPI from your IDFC FIRST Bank A/c XX1234 on 08-11-26. UPI Ref 61234567. Not you? Call 1800 10 888. Team IDFC FIRST Bank",
+    "expected": {
+      "ok": false,
+      "reason": "unknown_template"
+    }
+  },
+  {
+    "id": "synthetic-idfc-rupee-received",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793880780000,
+    "body": "₹2,000.00 received in your IDFC FIRST Bank A/c XX1234 from PERSON_91 via UPI on 08-11-26. UPI Ref 61234568. Team IDFC FIRST Bank",
+    "expected": {
+      "ok": false,
+      "reason": "unknown_template"
+    }
+  },
+  {
+    "id": "synthetic-idfc-inr-suffix-transferred",
+    "sender": "AX-IDFCFB-S",
+    "receivedAt": 1793880840000,
+    "body": "1,500.00 INR transferred from your IDFC FIRST Bank A/c XX1234 to PERSON_92 on 08-11-26 via IMPS. Team IDFC FIRST Bank",
+    "expected": {
+      "ok": false,
+      "reason": "unknown_template"
+    }
+  },
+  {
+    "id": "synthetic-idfc-marketing-cashback",
+    "sender": "VA-IDFCFB-S",
+    "receivedAt": 1793880900000,
+    "body": "Get ₹500 cashback on your next order with your IDFC FIRST Bank Credit Card. T&C apply. https://idfcfr.in/IDFCFB/Ab12Cd",
+    "expected": {
+      "ok": false,
+      "reason": "not_money"
+    }
+  },
+  {
+    "id": "synthetic-idfc-marketing-loan",
+    "sender": "VA-IDFCFB-S",
+    "receivedAt": 1793880960000,
+    "body": "Congratulations! You are pre-approved for a Personal Loan of up to ₹5,00,000 from IDFC FIRST Bank. Apply now: https://idfcfr.in/IDFCFB/Xy34Zw",
+    "expected": {
+      "ok": false,
+      "reason": "not_money"
+    }
+  },
+  {
+    "id": "synthetic-idfc-marketing-loan-credited",
+    "sender": "VA-IDFCFB-S",
+    "receivedAt": 1793881020000,
+    "body": "Get a Personal Loan of up to Rs 2,00,000 credited to your IDFC FIRST Bank account in 10 minutes. Apply now: https://idfcfr.in/IDFCFB/Qw56Er",
+    "expected": {
+      "ok": false,
+      "reason": "unknown_template"
+    }
+  },
+  {
+    "id": "synthetic-idfc-marketing-voucher-received",
+    "sender": "VA-IDFCFB-S",
+    "receivedAt": 1793881080000,
+    "body": "Congratulations! You have received a ₹250 shopping voucher on your IDFC FIRST Bank Credit Card spends. Claim by 30-11-26: https://idfcfr.in/IDFCFB/Ty78Ui",
+    "expected": {
+      "ok": false,
+      "reason": "unknown_template"
+    }
+  },
+  {
+    "id": "synthetic-otp-is-code",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881140000,
+    "body": "Your OTP for IDFC FIRST Bank login is 482913. Do not share it with anyone.",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
+  },
+  {
+    "id": "synthetic-otp-one-time-password",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881200000,
+    "body": "One Time Password for your IDFC FIRST Bank Credit Card ending XX3455 is 998877. Do not share it with anyone.",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
   }
 ]

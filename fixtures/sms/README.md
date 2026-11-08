@@ -12,7 +12,12 @@ Each entry:
 - `expected.txn` lists the fields the SMS determines. `sender`, `receivedAt` and `rawHash` are not repeated: they come from the fixture or are computed. Fields that the SMS does not state are `null`; fields the SMS does not determine unambiguously are omitted (for example `accountLast4` on IMPS messages, which only show a 3-digit mask).
 - When the body has no date (NEFT confirmations), `occurredOn` is the Asia/Kolkata date of `receivedAt` and `occurredTime` is `null`.
 - Amounts are integer minor units. `utr` for IMPS messages is the IMPS reference number.
-- Ids starting with `synthetic-` are hand-written (OTP, non-IDFC senders).
+- Ids starting with `synthetic-` are hand-written (OTP, non-IDFC senders, and the widened-heuristic cases below). Their account digits, references and `PERSON_n` names are invented.
+- Widened money heuristic (template version 2, Task 20B), all from IDFC senders, none matching a template:
+  - kept as `unknown_template` (money-like, so stored as "unrecognised" natively and shown in-app, never notified): `synthetic-idfc-rupee-debit` (amount with the rupee sign), `synthetic-idfc-upi-sent` ("sent ... via UPI"), `synthetic-idfc-rupee-received` (rupee-sign credit), `synthetic-idfc-inr-suffix-transferred` (amount followed by `INR`);
+  - marketing that must never notify: `synthetic-idfc-marketing-cashback` and `synthetic-idfc-marketing-loan` stay `not_money` (no money verb); `synthetic-idfc-marketing-loan-credited` and `synthetic-idfc-marketing-voucher-received` are `unknown_template`: accepted false keeps (a money verb plus an amount), stored unparsed but never notified.
+- `synthetic-otp-is-code` and `synthetic-otp-one-time-password` cover the "OTP for ... is <code>" and "One Time Password ... is <code>" forms.
+- Do not change an existing fixture's `expected` to fit a template change; if a change flips one, narrow the change.
 
 ## Redaction
 
