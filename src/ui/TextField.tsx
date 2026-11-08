@@ -19,11 +19,11 @@ export function TextField({ label, hint, error, secret, right, ...input }: TextF
       <Text className="mb-1.5 text-sm font-medium text-ink dark:text-ink-dark">{label}</Text>
       <View
         className={`min-h-[52px] flex-row items-center rounded-xl border bg-surface px-4 dark:bg-surface-dark ${
-          error ? 'border-danger' : 'border-line dark:border-line-dark'
+          error ? 'border-danger dark:border-danger-dark' : 'border-line dark:border-line-dark'
         }`}>
         <TextInput
           accessibilityLabel={label}
-          accessibilityHint={hint}
+          accessibilityHint={error ? (hint ? `${error} ${hint}` : error) : hint}
           placeholderTextColor={dark ? '#6B7A91' : '#8793A5'}
           secureTextEntry={secret && !shown}
           className="min-h-[48px] flex-1 py-2 text-base text-ink dark:text-ink-dark"
@@ -42,7 +42,7 @@ export function TextField({ label, hint, error, secret, right, ...input }: TextF
         )}
       </View>
       {error ? (
-        <Text accessibilityRole="alert" className="mt-1.5 text-sm text-danger">
+        <Text accessibilityRole="alert" accessibilityLiveRegion="assertive" className="mt-1.5 text-sm text-danger dark:text-danger-dark">
           {error}
         </Text>
       ) : hint ? (

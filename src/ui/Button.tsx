@@ -13,13 +13,13 @@ export interface ButtonProps {
 const BOX = {
   primary: 'bg-accent dark:bg-accent-dark active:opacity-80',
   secondary: 'border border-line bg-surface active:bg-paper dark:border-line-dark dark:bg-surface-dark',
-  danger: 'border border-danger bg-surface active:bg-danger-soft dark:bg-surface-dark',
+  danger: 'border border-danger bg-surface active:bg-danger-soft dark:border-danger-dark dark:bg-surface-dark dark:active:bg-danger-soft-dark',
   quiet: 'active:bg-accent-soft dark:active:bg-accent-soft-dark',
 } as const;
 const TEXT = {
   primary: 'text-white dark:text-paper-dark',
   secondary: 'text-ink dark:text-ink-dark',
-  danger: 'text-danger',
+  danger: 'text-danger dark:text-danger-dark',
   quiet: 'text-accent dark:text-accent-dark',
 } as const;
 
