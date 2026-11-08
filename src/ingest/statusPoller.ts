@@ -3,10 +3,13 @@
 // per-txn lock and re-reads the txn first, so a poll cannot race runPlan, Undo or a field update (R32).
 import type { PendingTxn } from '../core/types';
 import type { Repo } from '../data/repo';
+import { ErpAuthError } from '../erp/client';
 import { withTxnLock, type ErpOps } from '../outbox/runner';
+import { NEEDS_LOGIN_SINCE_KEY } from './drain';
 
 export type PollDeps = { repo: Repo; erp: Pick<ErpOps, 'getDocStatuses'>; now?: () => number };
-export type PollResult = { checked: number; submitted: number; cancelled: number; missing: number };
+/** `needsLogin`: ERPNext answered 401; `needs_login_since` was recorded the way the drain does. */
+export type PollResult = { checked: number; submitted: number; cancelled: number; missing: number; needsLogin?: boolean };
 
 /** docstatus recorded for a document that ERPNext no longer returns (deleted or not accessible). */
 export const DOC_MISSING = -1;
@@ -27,7 +30,8 @@ export async function pollStatuses(deps: PollDeps): Promise<PollResult> {
     const st = await deps.erp.getDocStatuses(waiting.flatMap((t) => t.createdDocs.map(({ doctype, name }) => ({ doctype, name }))));
     for (const t of waiting) {
       try {
-        const r = await withTxnLock(t.id, () => apply(deps.repo, t.id, st));
+        const asked = new Set(t.createdDocs.map(key));
+        const r = await withTxnLock(t.id, () => apply(deps.repo, t.id, st, asked));
         if (!r) continue;
         out.checked += 1;
         out.submitted += r.submitted ? 1 : 0;
@@ -37,16 +41,27 @@ export async function pollStatuses(deps: PollDeps): Promise<PollResult> {
         // a local write failure for one txn must not stop the others
       }
     }
-  } catch {
+  } catch (e) {
     // offline, signed out, server error: nothing was changed; the next poll tries again
+    if (e instanceof ErpAuthError && e.status === 401) {
+      out.needsLogin = true;
+      try {
+        if (!(await deps.repo.getSetting(NEEDS_LOGIN_SINCE_KEY))) await deps.repo.setSetting(NEEDS_LOGIN_SINCE_KEY, String((deps.now ?? Date.now)()));
+      } catch {
+        // best effort
+      }
+    }
   }
   return out;
 }
 
-async function apply(repo: Repo, id: string, st: Record<string, number>) {
+async function apply(repo: Repo, id: string, st: Record<string, number>, asked: Set<string>) {
   const cur = await repo.getPending(id);
   // Undone, submitted by another path or otherwise changed since the list was read: leave it alone.
   if (!cur || cur.state !== 'created' || !cur.createdDocs.length) return null;
+  // The answer covers only the documents that were asked about. If the set changed (Undo, then answered again),
+  // the new documents are not in it: a missing key would wrongly read as "not found". Skip; the next poll asks again.
+  if (cur.createdDocs.length !== asked.size || cur.createdDocs.some((d) => !asked.has(key(d)))) return null;
   let cancelled = 0;
   let missing = 0;
   const docs = cur.createdDocs.map((d) => {

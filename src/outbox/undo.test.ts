@@ -122,6 +122,35 @@ describe('undoTxn', () => {
     expect(erp.count('deleteDraft')).toBe(0);
   });
 
+  it('403 is a permission failure (not needs_login); 401 is needs_login', async () => {
+    const t = txn();
+    const { repo, erp, deps } = await setup(t);
+    erp.failNext('getDocStatuses', new ErpAuthError('forbidden', 403));
+    const r = await undoTxn('t1', deps);
+    expect(r).toMatchObject({ status: 'failed', retryable: false });
+    if (r.status === 'failed') expect(r.error.message).toBe('Your ERPNext user is not allowed to delete this entry. Ask your administrator.');
+    erp.failNext('deleteDraft', new ErpAuthError('forbidden', 403));
+    expect(await undoTxn('t1', deps)).toMatchObject({ status: 'failed', retryable: false });
+    erp.failNext('deleteDraft', new ErpAuthError('nope', 401));
+    expect(await undoTxn('t1', deps)).toEqual({ status: 'needs_login' });
+    expect(await repo.getPending('t1')).toEqual(t);
+  });
+
+  it('a DELETE rejected with 417 because the accountant just submitted is refused as submitted', async () => {
+    const { repo, erp, deps } = await setup();
+    erp.submitOnDelete.add('PE-1');
+    expect(await undoTxn('t1', deps)).toMatchObject({ status: 'refused', reason: 'submitted', message: SUBMITTED_MSG });
+    expect((await repo.getPending('t1'))!.state).toBe('submitted');
+    expect(erp.docs.get(PE('PE-1'))).toBe(1);
+  });
+
+  it('a DELETE rejected with a validation error while the doc is still a draft is a plain failure', async () => {
+    const { repo, erp, deps } = await setup();
+    erp.failNext('deleteDraft', new ErpValidationError('Linked to other documents', 417));
+    expect(await undoTxn('t1', deps)).toMatchObject({ status: 'failed', retryable: false });
+    expect((await repo.getPending('t1'))!.state).toBe('created');
+  });
+
   it('auth errors give needs_login and change nothing', async () => {
     const t = txn();
     const { repo, erp, deps } = await setup(t);
@@ -155,13 +184,37 @@ describe('undoTxn', () => {
     expect(await undoTxn('nope', deps)).toMatchObject({ status: 'refused', reason: 'not_found' });
   });
 
-  it('docsAlreadyGone: cancelled/missing docs are not deleted and no network is needed when all are gone', async () => {
+  it('Put back always re-reads the status: recorded gone and really gone -> undone, nothing deleted', async () => {
     const t = txn({ createdDocs: [doc('PE-1', 2), doc('PE-2', -1)] });
-    const { repo, erp, deps } = await setup(t, {});
+    const { repo, erp, deps } = await setup(t, { [PE('PE-1')]: 2 });
     expect(await undoTxn('t1', deps, { docsAlreadyGone: true })).toEqual({ status: 'undone' });
-    expect(erp.calls).toHaveLength(0);
+    expect(erp.count('getDocStatuses')).toBe(1);
+    expect(erp.count('deleteDraft')).toBe(0);
     expect((await repo.getPending('t1'))!).toMatchObject({ state: 'new', createdDocs: [] });
     expect((await repo.listOutbox('t1'))[0].status).toBe('superseded');
+  });
+
+  it('Put back: a doc recorded missing (-1) that exists again as a draft is deleted, not abandoned', async () => {
+    const t = txn({ createdDocs: [doc('PE-1', -1)] });
+    const { repo, erp, deps } = await setup(t, { [PE('PE-1')]: 0 });
+    expect(await undoTxn('t1', deps, { docsAlreadyGone: true })).toEqual({ status: 'undone' });
+    expect(erp.docs.size).toBe(0);
+    expect((await repo.getPending('t1'))!.state).toBe('new');
+  });
+
+  it('Put back: a doc recorded missing that is submitted now refuses', async () => {
+    const t = txn({ createdDocs: [doc('PE-1', -1)] });
+    const { repo, deps } = await setup(t, { [PE('PE-1')]: 1 });
+    expect(await undoTxn('t1', deps, { docsAlreadyGone: true })).toMatchObject({ status: 'refused', reason: 'submitted' });
+    expect((await repo.getPending('t1'))!.state).toBe('submitted');
+  });
+
+  it('Put back offline changes nothing (the stale record is never trusted)', async () => {
+    const t = txn({ createdDocs: [doc('PE-1', -1)] });
+    const { repo, erp, deps } = await setup(t, {});
+    erp.failNext('getDocStatuses', new ErpNetworkError('offline'));
+    expect(await undoTxn('t1', deps, { docsAlreadyGone: true })).toMatchObject({ status: 'failed', retryable: true });
+    expect(await repo.getPending('t1')).toEqual(t);
   });
 
   it('docsAlreadyGone: a remaining draft is still deleted, a gone doc is not', async () => {
@@ -186,6 +239,38 @@ describe('undoTxn', () => {
   });
 });
 
+describe('undoTxn provenance (never deletes documents it did not create)', () => {
+  it('an adopted draft survives: only detached, txn goes back to new', async () => {
+    const t = txn({ createdDocs: [{ ...doc('PE-1'), adopted: true }] });
+    const { repo, erp, deps } = await setup(t, { [PE('PE-1')]: 0 });
+    expect(await undoTxn('t1', deps)).toEqual({ status: 'undone', kept: [{ doctype: 'Payment Entry', name: 'PE-1' }] });
+    expect(erp.count('deleteDraft')).toBe(0);
+    expect(erp.docs.get(PE('PE-1'))).toBe(0);
+    expect((await repo.getPending('t1'))!).toMatchObject({ state: 'new', createdDocs: [] });
+  });
+
+  it('a mix: the created doc is deleted, the adopted one stays', async () => {
+    const t = txn({ createdDocs: [{ ...doc('PE-1'), adopted: true }, doc('PE-2')] });
+    const { repo, erp, deps } = await setup(t, { [PE('PE-1')]: 0, [PE('PE-2')]: 0 });
+    expect(await undoTxn('t1', deps)).toMatchObject({ status: 'undone', kept: [{ name: 'PE-1' }] });
+    expect([...erp.docs.keys()]).toEqual([PE('PE-1')]);
+    expect((await repo.getPending('t1'))!.state).toBe('new');
+  });
+
+  it('a legacy entry (no flag) that another txn also lists is never deleted and the other txn is untouched', async () => {
+    const t1 = txn({ id: 't1' });
+    const t2 = txn({ id: 't2', rawHash: 'h2', createdDocs: [doc('PE-1')] });
+    const { repo, erp, deps } = await setup(t1, { [PE('PE-1')]: 0 });
+    await repo.upsertPending(t2);
+    expect(await undoTxn('t1', deps)).toMatchObject({ status: 'undone', kept: [{ name: 'PE-1' }] });
+    expect(erp.count('deleteDraft')).toBe(0);
+    expect(await repo.getPending('t2')).toEqual(t2);
+    // the other txn can still be undone and then really deletes it
+    expect(await undoTxn('t2', deps)).toEqual({ status: 'undone' });
+    expect(erp.docs.size).toBe(0);
+  });
+});
+
 describe('undoTxn under the per-txn lock', () => {
   const gate = () => { let open!: () => void; const p = new Promise<void>((r) => (open = r)); return { p, open }; };
 
@@ -194,14 +279,13 @@ describe('undoTxn under the per-txn lock', () => {
     const g = gate();
     erp.gates.deleteDraft = () => g.p;
     const u = undoTxn('t1', deps);
-    await new Promise((r) => setTimeout(r, 5));
+    await erp.called('deleteDraft');
     const poll = pollStatuses({ repo, erp: erp as unknown as ErpOps, now: () => 0 });
-    await new Promise((r) => setTimeout(r, 5));
+    await erp.called('getDocStatuses', 2); // the poll has its answer and is queued behind the lock
     g.open();
     expect(await u).toEqual({ status: 'undone' });
     await poll;
-    const saved = (await repo.getPending('t1'))!;
-    expect(saved).toMatchObject({ state: 'new', createdDocs: [] });
+    expect(await repo.getPending('t1')).toMatchObject({ state: 'new', createdDocs: [] });
   });
 
   it('two Undos in parallel delete once', async () => {

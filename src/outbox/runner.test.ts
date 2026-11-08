@@ -5,7 +5,7 @@ import type { ActionPlan, OutboxOp, PartyRef, PendingTxn } from '../core/types';
 import { ErpAuthError, ErpNetworkError, ErpValidationError } from '../erp/client';
 import { NotDraftError } from '../erp/docs';
 import type { ErpOps } from './erpOps';
-import { outboxIdFor, referenceOf, runPlan as rawRunPlan, type RunOptions } from './runner';
+import { outboxIdFor, referenceOf, runPlan as rawRunPlan, undoTxn, type RunOptions } from './runner';
 
 // Most tests act as the UI (the user's decision); the drainer path calls rawRunPlan without options.
 const runPlan = (txnId: string, plan: ActionPlan, deps: { repo: Repo; erp: ErpOps }, opts: RunOptions = { userAction: true }) =>
@@ -224,7 +224,7 @@ describe('runPlan: idempotent retry (a)', () => {
     const r = await runPlan('t1', advance(txn()), deps);
     expect(r).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'PE-OLD' }] });
     expect(erp.count('createDraft')).toBe(0);
-    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'PE-OLD', docstatus: 0 }]);
+    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'PE-OLD', docstatus: 0, adopted: true }]);
     expect((await outbox())[0].status).toBe('done');
   });
 
@@ -234,7 +234,7 @@ describe('runPlan: idempotent retry (a)', () => {
     const r = await runPlan('t1', income(txn()), deps);
     expect(r).toEqual({ status: 'created', docs: [{ doctype: 'Journal Entry', name: 'JV-1' }] });
     expect(erp.count('createDraft')).toBe(0);
-    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Journal Entry', name: 'JV-1', docstatus: 1 }]);
+    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Journal Entry', name: 'JV-1', docstatus: 1, adopted: true }]);
   });
 
   it('running the same plan twice in sequence creates one document', async () => {
@@ -1086,5 +1086,61 @@ describe('runPlan: a UTR shared with another txn (R43.4)', () => {
     expect(erp.docs.map((d) => d.name)).toEqual(['ACC-PAY-0001']);
     expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0 }]);
     expect((await repo.getOutbox(outboxIdFor('t2', pay)))!.progress).toEqual({ stepIndex: 0, created: [] });
+  });
+});
+
+describe('Undo provenance with runPlan (R49 C1)', () => {
+  it('A: a document adopted by a second txn (shared UTR) survives the second txn\'s Undo; the first txn is unaffected', async () => {
+    const t1 = txn();
+    const { repo, erp, deps } = await setup(t1);
+    await runPlan('t1', advance(t1), deps);
+    const before = await repo.getPending('t1');
+    const t2 = txn({ id: 't2', rawHash: 'h2' }); // same UTR (the other leg)
+    await repo.upsertPending(t2);
+    const r = await runPlan('t2', advance(t2), deps);
+    expect(r).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0001' }] });
+    expect((await repo.getPending('t2'))!.createdDocs[0].adopted).toBe(true);
+    expect(await undoTxn('t2', deps)).toMatchObject({ status: 'undone', kept: [{ name: 'ACC-PAY-0001' }] });
+    expect(erp.count('deleteDraft')).toBe(0);
+    expect(erp.docs).toHaveLength(1);
+    expect(await repo.getPending('t1')).toEqual(before);
+    expect((await repo.getPending('t2'))!.state).toBe('new');
+  });
+
+  it('B: a draft the accountant entered by hand and the app adopted is not deleted by Undo', async () => {
+    const { repo, erp, deps } = await setup();
+    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body: { reference_no: 'UTR123' } });
+    await runPlan('t1', advance(txn()), deps);
+    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, adopted: true }]);
+    expect(await undoTxn('t1', deps)).toMatchObject({ status: 'undone', kept: [{ name: 'PE-HAND' }] });
+    expect(erp.docs.map((d) => d.name)).toEqual(['PE-HAND']);
+    expect((await repo.getPending('t1'))!.state).toBe('new');
+  });
+
+  it('a draft created by this app is not flagged, and a recovered one (write-ahead marker) stays deletable', async () => {
+    const { repo, erp, deps } = await setup();
+    const plan = advance(txn());
+    erp.failNext('createDraft', new ErpNetworkError('Could not reach the ERPNext site.'), { afterEffect: true });
+    expect(await runPlan('t1', plan, deps)).toMatchObject({ status: 'failed', retryable: true });
+    expect(await runPlan('t1', plan, deps)).toMatchObject({ status: 'created' });
+    const saved = (await repo.getPending('t1'))!;
+    expect(saved.createdDocs[0].adopted).toBeUndefined();
+    expect(await undoTxn('t1', deps)).toEqual({ status: 'undone' });
+    expect(erp.docs).toHaveLength(0);
+  });
+
+  it('re-answering after Undo reopens the superseded item and creates a NEW document', async () => {
+    const { repo, erp, outbox, deps } = await setup();
+    const plan = advance(txn());
+    await runPlan('t1', plan, deps);
+    expect(await undoTxn('t1', deps)).toEqual({ status: 'undone' });
+    expect((await outbox())[0].status).toBe('superseded');
+    expect(await rawRunPlan('t1', plan, deps)).toMatchObject({ status: 'failed', retryable: false }); // the drainer never re-runs it
+    expect(erp.docs).toHaveLength(0);
+    const r = await runPlan('t1', plan, deps);
+    expect(r).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0002' }] });
+    expect(erp.docs).toHaveLength(1);
+    expect((await outbox()).map((o) => o.status)).toEqual(['done']);
+    expect((await repo.getPending('t1'))!).toMatchObject({ state: 'created', createdDocs: [{ name: 'ACC-PAY-0002', docstatus: 0 }] });
   });
 });
