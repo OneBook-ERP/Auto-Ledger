@@ -143,7 +143,7 @@ export interface PendingTxn extends ParsedTxn {
 - [ ] **Step 1: Failing tests** (`money.test.ts`): `parseMinor('INR 5,12,932.76') === 51293276`, `parseMinor('Rs. 115,000.00') === 11500000`, `parseMinor('Rs 8,000.00') === 800000`, `parseMinor('INR 78948.53') === 7894853`, `parseMinor('USD 100.00') === 10000`.
 - [ ] **Step 2: Failing tests** (`parser.test.ts`): run every fixture in `fixtures/sms/idfc.json` and compare to `expected`; plus named cases:
   - short CA credit → `{kind:'ca_credit', direction:'in', amountMinor:1293200, occurredOn:'2026-09-02', occurredTime:'09:13', counterparty:null, utr:null, balanceMinor:51293276}`;
-  - long CA credit → `counterparty:'SSK TEXTILE EXPORTS'` (or its placeholder), `accountLast4:'6507'`, `occurredTime:null`;
+  - long CA credit → `counterparty` equal to that fixture's redacted name (e.g. `'COMPANY_88'`), `accountLast4:'6507'`, `occurredTime:null`;
   - USD card spend → `{kind:'card_spend', currency:'USD', amountMinor:10000, accountLast4:'3455', merchant:'ANTHROPIC* CLAUDE SUB', occurredOn:'2026-11-08', occurredTime:'17:41'}`;
   - "will be deducted" SI → `{ok:false, reason:'si_notice'}`; "paid from … standing instruction" → `kind:'card_si_paid'`;
   - an OTP body → `{ok:false, reason:'otp'}`; a limit alert → `{ok:false, reason:'not_money'}`; sender `AX-HDFCBK-S` → `{ok:false, reason:'unknown_template'}`;
