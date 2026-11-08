@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { AccountMapping } from '../src/core/types';
 import { ErpClient } from '../src/erp/client';
+import { useUiStore } from '../src/state/store';
 import { fakeApp } from '../src/state/testUtils';
 import Accounts from '../app/(setup)/accounts';
 import Company from '../app/(setup)/company';
@@ -55,6 +56,24 @@ describe('company step', () => {
   });
 });
 
+describe('query keys carry the site', () => {
+  it("site A's company list is never offered while signed in to site B", async () => {
+    const A = client({ '/Company': [{ name: 'A Co', default_currency: 'INR' }] }).c;
+    const B = client({ '/Company': [{ name: 'B Co', default_currency: 'INR' }, { name: 'B Two', default_currency: 'INR' }] }).c;
+    useUiStore.setState({ session: { siteUrl: 'https://a.example', user: 'u' } });
+    const app = await fakeApp({ client: A });
+    const view = await render(<app.Wrap><Company /></app.Wrap>);
+    expect(await screen.findByText('A Co')).toBeTruthy();
+    // sign-in to B without the provider clearing anything: the key alone must keep the lists apart
+    app.value.client = B;
+    await act(async () => useUiStore.setState({ session: { siteUrl: 'https://b.example', user: 'u' } }));
+    await view.rerender(<app.Wrap><Company /></app.Wrap>);
+    expect(await screen.findByText('B Two')).toBeTruthy();
+    expect(screen.queryByText('A Co')).toBeNull();
+    await act(async () => useUiStore.setState(useUiStore.getInitialState()));
+  });
+});
+
 describe('accounts step', () => {
   const setup = async (existing: AccountMapping[] = []) => {
     const { c, urls } = client({ '/Bank%20Account': BANKS, '/Mode%20of%20Payment': MODES });
@@ -84,6 +103,13 @@ describe('accounts step', () => {
     expect(screen.getByRole('checkbox', { name: /ICICI - ZP/ }).props.accessibilityState.disabled).toBe(true);
   });
 
+  it('a saved account cannot be un-ticked and says why', async () => {
+    const existing: AccountMapping = { bankAccount: 'IDFC First - ZP', glAccount: 'IDFC First - ZP', kind: 'bank', senderIds: ['IDFCFB'], last4: ['6507'], modeOfPayment: 'Wire Transfer' };
+    await setup([existing]);
+    expect(screen.getByRole('checkbox', { name: /IDFC First - ZP/ }).props.accessibilityState.disabled).toBe(true);
+    expect(screen.getByText(/Saved accounts cannot be removed from the app yet/)).toBeTruthy();
+  });
+
   it('requires at least one account and a valid last-4', async () => {
     const { repo } = await setup();
     await press('Continue');
@@ -99,7 +125,7 @@ describe('accounts step', () => {
   it('re-running setup prefills the existing mapping and keeps it', async () => {
     const existing: AccountMapping = { bankAccount: 'IDFC Credit Card - ZP', glAccount: 'IDFC Credit Card - ZP', kind: 'card', senderIds: ['IDFCFB'], last4: ['3455', '8129'], modeOfPayment: 'Cash' };
     const { repo } = await setup([existing]);
-    expect(screen.getByRole('checkbox', { name: 'IDFC Credit Card - ZP' }).props.accessibilityState.checked).toBe(true);
+    expect(screen.getByRole('checkbox', { name: /IDFC Credit Card - ZP/ }).props.accessibilityState.checked).toBe(true);
     expect(screen.getByLabelText('Last 4 digits for IDFC Credit Card - ZP').props.value).toBe('3455, 8129');
     await press('Continue');
     await waitFor(() => expect(mockPush).toHaveBeenCalled());

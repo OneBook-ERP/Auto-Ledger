@@ -8,6 +8,8 @@ export type AccountDraft = {
   /** Only IDFC templates exist, so other banks cannot be selected yet. */
   supported: boolean;
   selected: boolean;
+  /** Already saved as a mapping: it cannot be removed from the app yet, so it stays selected. */
+  saved: boolean;
   kind: 'bank' | 'card';
   /** Comma/space separated sender ids as typed. */
   senders: string;
@@ -38,27 +40,31 @@ export const defaultKind = (name: string): 'bank' | 'card' => (/card/i.test(name
 export const isSupportedBank = (name: string): boolean => /idfc/i.test(name);
 
 export function pickDefaultMode(modes: { name: string; type?: string | null }[], kind: 'bank' | 'card'): string {
-  const re = kind === 'card' ? /card/i : /bank|wire transfer/i;
-  return (modes.find((m) => re.test(m.name)) ?? modes.find((m) => /bank|wire transfer/i.test(m.name)) ?? modes[0])?.name ?? '';
+  if (kind === 'card') {
+    const card = modes.find((m) => /card/i.test(m.name));
+    if (card) return card.name;
+  }
+  // ERPNext lists modes by name, so "Bank Draft" would win a prefix match: prefer the exact usual one, then any Bank type.
+  return (modes.find((m) => m.name === 'Wire Transfer') ?? modes.find((m) => m.type === 'Bank') ?? modes[0])?.name ?? '';
 }
 
 export function buildDrafts(
-  accounts: { name: string; glAccount: string }[],
+  accounts: { name: string; glAccount: string; bank?: string | null }[],
   existing: AccountMapping[],
   modes: { name: string; type?: string | null }[],
 ): AccountDraft[] {
   return accounts.map((a) => {
     const m = existing.find((x) => x.bankAccount === a.name);
-    const supported = isSupportedBank(a.name) || isSupportedBank(a.glAccount);
+    const supported = isSupportedBank(a.bank || a.name);
     if (m) {
       return {
-        bankAccount: a.name, glAccount: m.glAccount || a.glAccount, supported: true, selected: true, kind: m.kind,
+        bankAccount: a.name, glAccount: m.glAccount || a.glAccount, supported: true, selected: true, saved: true, kind: m.kind,
         senders: m.senderIds.join(', '), last4: m.last4.join(', '), modeOfPayment: m.modeOfPayment,
       };
     }
     const kind = defaultKind(a.name);
     return {
-      bankAccount: a.name, glAccount: a.glAccount, supported, selected: false, kind,
+      bankAccount: a.name, glAccount: a.glAccount, supported, selected: false, saved: false, kind,
       senders: supported ? IDFC_SENDER : '', last4: '', modeOfPayment: pickDefaultMode(modes, kind),
     };
   });
@@ -68,13 +74,20 @@ export function validateDrafts(drafts: AccountDraft[]): { mappings: AccountMappi
   const mappings: AccountMapping[] = [];
   const errors: Record<string, string> = {};
   const chosen = drafts.filter((d) => d.selected);
+  const owner = new Map<string, string>(); // `${kind}:${last4}` -> account that claimed it
   for (const d of chosen) {
+    let clash: string | undefined;
     const last4 = parseLast4(d.last4);
     const senderIds = parseSenders(d.senders);
     if (!last4.ok) errors[d.bankAccount] = last4.error;
     else if (senderIds.length === 0) errors[d.bankAccount] = 'Enter the sender id the bank uses, for example IDFCFB.';
     else if (!d.modeOfPayment) errors[d.bankAccount] = 'Choose a default mode of payment.';
-    else mappings.push({ bankAccount: d.bankAccount, glAccount: d.glAccount, kind: d.kind, senderIds, last4: last4.value, modeOfPayment: d.modeOfPayment });
+    else if ((clash = last4.value.find((x) => owner.has(`${d.kind}:${x}`)))) {
+      errors[d.bankAccount] = `Digits ${clash} are already used by ${owner.get(`${d.kind}:${clash}`)}. Each card or account number can belong to one account only.`;
+    } else {
+      for (const x of last4.value) owner.set(`${d.kind}:${x}`, d.bankAccount);
+      mappings.push({ bankAccount: d.bankAccount, glAccount: d.glAccount, kind: d.kind, senderIds, last4: last4.value, modeOfPayment: d.modeOfPayment });
+    }
   }
   return { mappings, errors, none: chosen.length === 0 };
 }

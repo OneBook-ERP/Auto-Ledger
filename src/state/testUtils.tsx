@@ -34,6 +34,7 @@ export async function fakeApp(over: Partial<AppContextValue> = {}) {
     repo,
     native,
     client: null,
+    previewSiteSwitch: jest.fn(async () => ({ switching: false, queuedActions: 0 })),
     signIn: jest.fn(async () => undefined),
     signOut: jest.fn(async () => undefined),
     completeSetup: jest.fn(async () => undefined),

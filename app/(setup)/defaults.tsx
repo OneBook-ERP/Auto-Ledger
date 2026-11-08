@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { listLedgerAccounts } from '../../src/erp/docs';
 import { useApp } from '../../src/state/AppProvider';
+import { useUiStore } from '../../src/state/store';
 import { COMPANY_KEY, DEFAULT_EXPENSE_KEY, DRAWINGS_KEY, useSetting } from '../../src/state/useSetting';
 import { Banner, Button, ChoiceRow, Screen, StepHeader, TextField } from '../../src/ui';
 
@@ -31,17 +32,19 @@ function Picker({ label, hint, options, value, onChange }: { label: string; hint
 export default function DefaultsStep() {
   const { client, repo } = useApp();
   const router = useRouter();
+  const site = useUiStore((s) => s.session?.siteUrl ?? '');
   const company = useSetting(COMPANY_KEY);
   const savedDrawings = useSetting(DRAWINGS_KEY);
   const savedExpense = useSetting(DEFAULT_EXPENSE_KEY);
   const [drawings, setDrawings] = useState<string | null>(null);
   const [expense, setExpense] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
 
   const on = !!client && !!company;
-  const equity = useQuery({ queryKey: ['accounts', company, 'Equity'], queryFn: () => listLedgerAccounts(client!, company as string, { rootType: 'Equity' }), enabled: on });
-  const liability = useQuery({ queryKey: ['accounts', company, 'Liability'], queryFn: () => listLedgerAccounts(client!, company as string, { rootType: 'Liability' }), enabled: on });
-  const expenseQ = useQuery({ queryKey: ['accounts', company, 'Expense'], queryFn: () => listLedgerAccounts(client!, company as string, { rootType: 'Expense' }), enabled: on });
+  const equity = useQuery({ queryKey: ['accounts', site, company, 'Equity'], queryFn: () => listLedgerAccounts(client!, company as string, { rootType: 'Equity' }), enabled: on });
+  const liability = useQuery({ queryKey: ['accounts', site, company, 'Liability'], queryFn: () => listLedgerAccounts(client!, company as string, { rootType: 'Liability' }), enabled: on });
+  const expenseQ = useQuery({ queryKey: ['accounts', site, company, 'Expense'], queryFn: () => listLedgerAccounts(client!, company as string, { rootType: 'Expense' }), enabled: on });
 
   useEffect(() => {
     if (drawings === null && savedDrawings !== undefined) setDrawings(savedDrawings ?? '');
@@ -55,10 +58,13 @@ export default function DefaultsStep() {
 
   const next = async () => {
     setSaving(true);
+    setSaveFailed(false);
     try {
       await repo.setSetting(DRAWINGS_KEY, drawings ?? '');
       await repo.setSetting(DEFAULT_EXPENSE_KEY, expense ?? '');
       router.push('/(setup)/permissions');
+    } catch {
+      setSaveFailed(true);
     } finally {
       setSaving(false);
     }
@@ -70,6 +76,7 @@ export default function DefaultsStep() {
       title="Pick your default accounts"
       subtitle="These are suggested when you classify a transaction. You can change them later by running setup again."
       footer={<Button label="Continue" onPress={next} loading={saving} disabled={drawings === null || expense === null} />}>
+      {saveFailed ? <Banner tone="error" message="Could not save these accounts on this phone. Try again." /> : null}
       {failed ? (
         <Banner tone="error" title="Could not load your accounts" message="Check your internet connection and that your ERPNext user can read Account records." actionLabel="Try again" onAction={() => { equity.refetch(); liability.refetch(); expenseQ.refetch(); }} />
       ) : null}

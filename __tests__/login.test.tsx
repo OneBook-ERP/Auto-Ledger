@@ -160,3 +160,32 @@ describe('login', () => {
     expect(screen.getByLabelText('Password').props.secureTextEntry).toBe(false);
   });
 });
+
+describe('login: switching sites', () => {
+  const switching = { previewSiteSwitch: jest.fn(async () => ({ switching: true, queuedActions: 2 })) };
+
+  it('asks for confirmation naming the queued actions; Cancel keeps the old data and does not sign in', async () => {
+    const calls = mockSite({ roles: [] });
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation((_t, _m, b) => void b?.find((x) => x.text === 'Cancel')?.onPress?.());
+    const { Wrap, value } = await fakeApp(switching);
+    await render(<Wrap><Login /></Wrap>);
+    await fill();
+    await press('Sign in');
+    await waitFor(() => expect(alert).toHaveBeenCalled());
+    expect(alert.mock.calls[0][0]).toBe('Sign in to a different site?');
+    expect(alert.mock.calls[0][1]).toBe("Signing in to a different ERPNext site removes this phone's saved accounts, settings and 2 queued actions from the previous site.");
+    expect(alert.mock.calls[0][2]?.map((b) => b.text)).toEqual(['Cancel', 'Continue']);
+    expect(calls).toEqual([]); // no request at all
+    expect(value.signIn).not.toHaveBeenCalled();
+  });
+
+  it('Continue proceeds with the sign-in', async () => {
+    mockSite({ roles: [] });
+    jest.spyOn(Alert, 'alert').mockImplementation((_t, _m, b) => void b?.find((x) => x.text === 'Continue')?.onPress?.());
+    const { Wrap, value } = await fakeApp(switching);
+    await render(<Wrap><Login /></Wrap>);
+    await fill();
+    await press('Sign in');
+    await waitFor(() => expect(value.signIn).toHaveBeenCalled());
+  });
+});

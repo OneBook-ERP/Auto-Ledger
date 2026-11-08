@@ -7,13 +7,15 @@ export type CycleRunner = { trigger(): Promise<void> };
  * Runs the foreground cycle one at a time: a trigger while a cycle is running joins it (no overlap, no
  * queueing). `after` runs once per finished cycle (banner refresh). Never rejects.
  */
-export function createCycleRunner(opts: { run: () => Promise<CycleSummary>; after: (s: CycleSummary | null) => Promise<void> }): CycleRunner {
+export type CycleOutcome = CycleSummary & { skipped?: 'site_mismatch' };
+
+export function createCycleRunner(opts: { run: () => Promise<CycleOutcome>; after: (s: CycleOutcome | null) => Promise<void> }): CycleRunner {
   let inFlight: Promise<void> | null = null;
   return {
     trigger() {
       if (inFlight) return inFlight;
       const p = (async () => {
-        let summary: CycleSummary | null = null;
+        let summary: CycleOutcome | null = null;
         try {
           summary = await opts.run();
         } catch {

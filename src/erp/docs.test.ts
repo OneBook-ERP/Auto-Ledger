@@ -67,14 +67,14 @@ describe('simple lists', () => {
 
   it('listBankAccounts maps fields', async () => {
     const { c, calls } = setup({
-      body: { data: [{ name: 'IDFC - Zen', account: 'IDFC First - ZP', bank_account_no: '123', is_company_account: 1 }, { name: 'B', account: 'X - ZP', bank_account_no: null, is_company_account: 0 }] },
+      body: { data: [{ name: 'IDFC - Zen', account: 'IDFC First - ZP', bank_account_no: '123', is_company_account: 1, bank: 'IDFC First Bank' }, { name: 'B', account: 'X - ZP', bank_account_no: null, is_company_account: 0, bank: null }] },
     });
     expect(await listBankAccounts(c, 'ZP Co')).toEqual([
-      { name: 'IDFC - Zen', glAccount: 'IDFC First - ZP', bankAccountNo: '123', isCompanyAccount: true },
-      { name: 'B', glAccount: 'X - ZP', bankAccountNo: null, isCompanyAccount: false },
+      { name: 'IDFC - Zen', glAccount: 'IDFC First - ZP', bankAccountNo: '123', isCompanyAccount: true, bank: 'IDFC First Bank' },
+      { name: 'B', glAccount: 'X - ZP', bankAccountNo: null, isCompanyAccount: false, bank: null },
     ]);
     expect(calls[0].url).toBe(
-      `${BASE}/api/resource/Bank%20Account?${q({ fields: ['name', 'account', 'bank_account_no', 'is_company_account'], filters: [['company', '=', 'ZP Co']], limit_page_length: 0 })}`,
+      `${BASE}/api/resource/Bank%20Account?${q({ fields: ['name', 'account', 'bank_account_no', 'is_company_account', 'bank'], filters: [['company', '=', 'ZP Co']], limit_page_length: 0 })}`,
     );
   });
 

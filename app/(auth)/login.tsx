@@ -26,6 +26,24 @@ function confirmRotate(): Promise<boolean> {
   });
 }
 
+export const SWITCH_TITLE = 'Sign in to a different site?';
+export const switchMessage = (n: number) =>
+  `Signing in to a different ERPNext site removes this phone's saved accounts, settings and ${n} queued action${n === 1 ? '' : 's'} from the previous site.`;
+
+function confirmSiteSwitch(queued: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    Alert.alert(
+      SWITCH_TITLE,
+      switchMessage(queued),
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Continue', style: 'destructive', onPress: () => resolve(true) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
+  });
+}
+
 export default function Login() {
   const app = useApp();
   const router = useRouter();
@@ -54,6 +72,8 @@ export default function Login() {
     }
     setBusy(true);
     try {
+      const sw = await app.previewSiteSwitch(site.url);
+      if (sw.switching && !(await confirmSiteSwitch(sw.queuedActions))) return; // nothing changed, no sign-in
       let session: Session;
       if (mode === 'password') {
         session = await login({ siteUrl: site.url, username: username.trim(), password, confirmRotate, allowHttp: __DEV__ });

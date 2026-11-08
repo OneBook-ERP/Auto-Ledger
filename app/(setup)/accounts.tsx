@@ -5,12 +5,16 @@ import { Text, View } from 'react-native';
 import { listBankAccounts, listModesOfPayment } from '../../src/erp/docs';
 import { useApp } from '../../src/state/AppProvider';
 import { NOT_SUPPORTED, buildDrafts, validateDrafts, type AccountDraft } from '../../src/state/setup';
+import { useUiStore } from '../../src/state/store';
 import { COMPANY_KEY, useSetting } from '../../src/state/useSetting';
 import { Banner, Button, Card, Chip, ChoiceRow, Screen, StepHeader, TextField } from '../../src/ui';
+
+export const SAVED_NOTE = 'Already saved. Saved accounts cannot be removed from the app yet; edit their details below.';
 
 export default function AccountsStep() {
   const { client, repo } = useApp();
   const router = useRouter();
+  const site = useUiStore((s) => s.session?.siteUrl ?? '');
   const company = useSetting(COMPANY_KEY);
   const [drafts, setDrafts] = useState<AccountDraft[] | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -19,12 +23,12 @@ export default function AccountsStep() {
   const [saveFailed, setSaveFailed] = useState(false);
 
   const accountsQ = useQuery({
-    queryKey: ['bank-accounts', company],
+    queryKey: ['bank-accounts', site, company],
     queryFn: () => listBankAccounts(client!, company as string),
     enabled: !!client && !!company,
   });
-  const modesQ = useQuery({ queryKey: ['modes-of-payment'], queryFn: () => listModesOfPayment(client!), enabled: !!client });
-  const mappingsQ = useQuery({ queryKey: ['mappings'], queryFn: () => repo.listMappings(), gcTime: 0 });
+  const modesQ = useQuery({ queryKey: ['modes-of-payment', site], queryFn: () => listModesOfPayment(client!), enabled: !!client });
+  const mappingsQ = useQuery({ queryKey: ['mappings', site], queryFn: () => repo.listMappings(), gcTime: 0 });
 
   useEffect(() => {
     if (drafts || !accountsQ.data || !modesQ.data || !mappingsQ.data) return;
@@ -80,9 +84,9 @@ export default function AccountsStep() {
           <ChoiceRow
             role="checkbox"
             title={d.bankAccount}
-            subtitle={d.supported ? undefined : NOT_SUPPORTED}
+            subtitle={!d.supported ? NOT_SUPPORTED : d.saved ? SAVED_NOTE : undefined}
             selected={d.selected}
-            disabled={!d.supported}
+            disabled={!d.supported || d.saved}
             onPress={() => patch(d.bankAccount, { selected: !d.selected })}
           />
           {d.selected ? (

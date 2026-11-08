@@ -51,7 +51,21 @@ beforeEach(() => {
 
 const signedInDone = async () => {
   mockMem.set('autoledger.session', JSON.stringify(SAVED));
-  await (await createRepo(driver)).setSetting('setupDone', '1');
+  const r = await createRepo(driver);
+  await r.setSetting('setupDone', '1');
+  await r.setSetting('site_url', SAVED.siteUrl); // recorded when setup completed
+};
+
+const MAP = { bankAccount: 'IDFC', glAccount: 'IDFC - ZP', kind: 'bank' as const, senderIds: ['IDFCFB'], last4: ['6507'], modeOfPayment: 'Wire Transfer' };
+const PEND = { id: 't1', mergedCount: 1, state: 'new' as const, createdDocs: [], error: null, kind: 'ca_credit' as const, direction: 'in' as const, amountMinor: 100, currency: 'INR', occurredOn: '2026-01-02', occurredTime: null, accountType: 'bank' as const, accountLast4: '6507', counterparty: null, utr: null, merchant: null, balanceMinor: null, sender: 'AX-IDFCFB', receivedAt: 1, rawHash: 'h1' };
+const OP = { id: 'o1', txnId: 't1', plan: { steps: [], summary: [], needsInrAmount: false }, progress: { stepIndex: 0, created: [] }, attempts: 0, status: 'pending' as const };
+/** Site A's leftovers: a mapping, a txn and a queued outbox item. */
+const seedA = async () => {
+  const r = await createRepo(driver);
+  await r.saveMapping(MAP);
+  await r.upsertPending(PEND);
+  await r.enqueue(OP);
+  await r.setSetting('company', 'A Co');
 };
 
 describe('AppProvider', () => {
@@ -123,15 +137,68 @@ describe('AppProvider', () => {
     expect(await ctx!.repo.getSetting('needs_login_since')).toBe('');
   });
 
-  it('signing in to a different site requires setup again', async () => {
+  it('previewSiteSwitch counts the queued actions of the saved site', async () => {
     await signedInDone();
+    await seedA();
+    await mount();
+    await waitFor(() => expect(ctx).not.toBeNull());
+    expect(await ctx!.previewSiteSwitch(SAVED.siteUrl)).toEqual({ switching: false, queuedActions: 0 });
+    expect(await ctx!.previewSiteSwitch('https://other.example.app')).toEqual({ switching: true, queuedActions: 1 });
+  });
+
+  it('signing in to a different site wipes the old site data and restarts setup', async () => {
+    await signedInDone();
+    await seedA();
     await mount();
     await waitFor(() => expect(useUiStore.getState().setupDone).toBe(true));
-    await act(async () => { await ctx!.signIn(SAVED); });
-    expect(useUiStore.getState().setupDone).toBe(true);
     await act(async () => { await ctx!.signIn({ ...SAVED, siteUrl: 'https://other.example.app' }); });
     expect(useUiStore.getState().setupDone).toBe(false);
-    expect(await ctx!.repo.getSetting('setupDone')).toBe('0');
+    expect(await ctx!.repo.listMappings()).toEqual([]);
+    expect(await ctx!.repo.nextOutbox()).toBeNull();
+    expect(await ctx!.repo.getSetting('company')).toBeNull();
+    expect(await ctx!.repo.getSetting('setupDone')).toBeNull();
+    expect(await ctx!.repo.getSetting('site_url')).toBe('https://other.example.app');
+  });
+
+  it('signing in again to the SAME site keeps mappings, settings and the outbox', async () => {
+    await signedInDone();
+    await seedA();
+    await mount();
+    await waitFor(() => expect(useUiStore.getState().setupDone).toBe(true));
+    await act(async () => { await ctx!.signIn({ ...SAVED, apiKey: 'NEWKEY' }); });
+    expect(useUiStore.getState().setupDone).toBe(true);
+    expect(await ctx!.repo.listMappings()).toEqual([MAP]);
+    expect((await ctx!.repo.nextOutbox())?.id).toBe('o1');
+    expect(await ctx!.repo.getSetting('company')).toBe('A Co');
+  });
+
+  it('never runs a cycle when the saved site differs from the session site (site A outbox is not posted to site B)', async () => {
+    await signedInDone();
+    await seedA();
+    await (await createRepo(driver)).setSetting('site_url', 'https://site-a.example.app'); // data of A, session of B
+    const actual = jest.requireActual('../src/ingest/pipeline');
+    mockCycle.mockImplementation(actual.runForegroundCycle);
+    const fetchImpl = jest.fn(async () => new Response('{}', { status: 200 }));
+    await mount({ fetchImpl: fetchImpl as never });
+    await waitFor(() => expect(useUiStore.getState().boot).toBe('ready'));
+    await act(async () => { await ctx!.runCycle(); });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect((await ctx!.repo.nextOutbox())?.id).toBe('o1'); // still queued, untouched
+    expect(await ctx!.repo.getSetting('needs_login_since')).toBeNull();
+  });
+
+  it('clears the query cache on sign-in and sign-out', async () => {
+    const { useQueryClient } = require('@tanstack/react-query');
+    let qc: import('@tanstack/react-query').QueryClient | null = null;
+    const QProbe = () => { qc = useQueryClient(); return null; };
+    await render(<AppProvider openDriver={open} native={fakeNative().native} templatesUrl=""><Probe /><QProbe /></AppProvider>);
+    await waitFor(() => expect(qc).not.toBeNull());
+    qc!.setQueryData(['companies', 'https://a'], [{ name: 'A Co' }]);
+    await act(async () => { await ctx!.signIn(SAVED); });
+    expect(qc!.getQueryData(['companies', 'https://a'])).toBeUndefined();
+    qc!.setQueryData(['companies', 'https://a'], [{ name: 'A Co' }]);
+    await act(async () => { await ctx!.signOut(); });
+    expect(qc!.getQueryData(['companies', 'https://a'])).toBeUndefined();
   });
 
   it('signOut forgets the credentials but keeps local data', async () => {

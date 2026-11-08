@@ -1,7 +1,8 @@
 import type { AccountMapping } from '../core/types';
 import { buildDrafts, defaultKind, parseLast4, pickDefaultMode, validateDrafts } from './setup';
 
-const MODES = [{ name: 'Cash', type: 'Cash' }, { name: 'Credit Card', type: 'General' }, { name: 'Wire Transfer', type: 'Bank' }, { name: 'Bank Draft', type: 'Bank' }];
+// Sorted by name ascending, like the ERPNext API: "Bank Draft" comes before "Wire Transfer".
+const MODES = [{ name: 'Bank Draft', type: 'Bank' }, { name: 'Cash', type: 'Cash' }, { name: 'Credit Card', type: 'General' }, { name: 'Wire Transfer', type: 'Bank' }];
 const ACCOUNTS = [
   { name: 'IDFC First - ZP', glAccount: 'IDFC First - ZP', bankAccountNo: null, isCompanyAccount: true },
   { name: 'IDFC Credit Card - ZP', glAccount: 'IDFC Credit Card - ZP', bankAccountNo: null, isCompanyAccount: true },
@@ -29,6 +30,8 @@ describe('defaults', () => {
     expect(pickDefaultMode(MODES, 'bank')).toBe('Wire Transfer');
     expect(pickDefaultMode(MODES, 'card')).toBe('Credit Card');
     expect(pickDefaultMode([{ name: 'Cash', type: 'Cash' }], 'bank')).toBe('Cash');
+    // no Wire Transfer: any Bank-type mode, not a name guess
+    expect(pickDefaultMode([{ name: 'Bank Draft', type: 'General' }, { name: 'NEFT', type: 'Bank' }], 'bank')).toBe('NEFT');
     expect(pickDefaultMode([], 'bank')).toBe('');
   });
 });
@@ -49,7 +52,33 @@ describe('buildDrafts', () => {
   });
 });
 
+describe('bank support uses the Bank Account bank field', () => {
+  it('trusts bank over the account name, falling back to the name', () => {
+    const d = buildDrafts([
+      { name: 'Current ZP', glAccount: 'Current - ZP', bank: 'IDFC First Bank' },
+      { name: 'IDFC looking name', glAccount: 'x', bank: 'ICICI Bank' },
+      { name: 'IDFC Card', glAccount: 'x', bank: null },
+    ], [], MODES);
+    expect(d.map((x) => x.supported)).toEqual([true, false, true]);
+  });
+  it('marks existing mappings as saved', () => {
+    const m: AccountMapping = { bankAccount: 'IDFC First - ZP', glAccount: 'g', kind: 'bank', senderIds: ['IDFCFB'], last4: ['6507'], modeOfPayment: 'Cash' };
+    expect(buildDrafts(ACCOUNTS, [m], MODES)[0].saved).toBe(true);
+    expect(buildDrafts(ACCOUNTS, [], MODES)[0].saved).toBe(false);
+  });
+});
+
 describe('validateDrafts', () => {
+  it('rejects the same last-4 on two accounts of the same kind, allows it across kinds', () => {
+    const d = buildDrafts(ACCOUNTS, [], MODES);
+    d[0] = { ...d[0], selected: true, last4: '6507' };
+    d[1] = { ...d[1], selected: true, last4: '3455, 6507', kind: 'bank' };
+    const r = validateDrafts(d);
+    expect(r.errors['IDFC Credit Card - ZP']).toMatch(/6507 are already used by IDFC First - ZP/);
+    expect(r.mappings).toHaveLength(1);
+    d[1] = { ...d[1], kind: 'card' };
+    expect(validateDrafts(d).errors).toEqual({});
+  });
   it('builds one mapping with two last-4 groups', () => {
     const d = buildDrafts(ACCOUNTS, [], MODES);
     d[1] = { ...d[1], selected: true, last4: '3455, 8129' };

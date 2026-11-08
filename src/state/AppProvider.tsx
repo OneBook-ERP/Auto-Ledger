@@ -25,11 +25,16 @@ export type AppContextValue = {
   native: SmsNative;
   /** Null while signed out. */
   client: ErpClient | null;
-  /** Stores the new session (without roles), clears the "sign in again" flag and runs a cycle. */
+  /** Whether signing in to `siteUrl` would replace another site's saved data, and how many actions are queued. */
+  previewSiteSwitch(siteUrl: string): Promise<{ switching: boolean; queuedActions: number }>;
+  /**
+   * Stores the new session (without roles), clears the "sign in again" flag and runs a cycle. Signing in to a
+   * different site than the saved one first wipes the old site's local data (the caller must have confirmed).
+   */
   signIn(s: Session): Promise<void>;
   /** Forgets the credentials. Local data (mappings, pending items) is kept. */
   signOut(): Promise<void>;
-  /** Marks setup finished and runs one foreground cycle. */
+  /** Marks setup finished (and records the site) and starts one foreground cycle without waiting for it. */
   completeSetup(): Promise<void>;
   runCycle(): Promise<void>;
 };
@@ -111,10 +116,12 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
   const runner = useMemo(
     () =>
       createCycleRunner({
-        run: async (): Promise<CycleSummary> => {
+        run: async (): Promise<CycleSummary & { skipped?: 'site_mismatch' }> => {
           const r = repoRef.current;
           const s = sessionRef.current;
           if (!r || !s) return { failedSteps: [] };
+          // Defence in depth: local data belongs to one site. Never post or match it against another.
+          if ((await r.getSetting(SITE_URL_KEY)) !== s.siteUrl) return { failedSteps: [], skipped: 'site_mismatch' };
           const { erp } = buildErp(s, { fetchImpl });
           return runForegroundCycle({ repo: r, native, erp, now, fetchImpl });
         },
@@ -148,16 +155,26 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
       repo,
       native,
       client,
+      async previewSiteSwitch(siteUrl) {
+        const prev = await repo.getSetting(SITE_URL_KEY);
+        if (!prev || prev === siteUrl) return { switching: false, queuedActions: 0 };
+        let queued = 0;
+        for (const t of await repo.listPending()) {
+          queued += (await repo.listOutbox(t.id)).filter((o) => o.status === 'pending').length;
+        }
+        return { switching: true, queuedActions: queued };
+      },
       async signIn(s) {
-        await persistSession(s);
-        sessionRef.current = s;
-        // A different site means the saved accounts belong to another books file: the wizard must run again.
+        // A different site than the saved one: nothing of the old books may reach (or match on) the new one.
         const prevSite = await repo.getSetting(SITE_URL_KEY);
         if (prevSite && prevSite !== s.siteUrl) {
-          await repo.setSetting(SETUP_DONE_KEY, '0');
+          await repo.resetForNewSite();
           useUiStore.getState().setSetupDone(false);
         }
-        await repo.setSetting(SITE_URL_KEY, s.siteUrl);
+        await persistSession(s);
+        sessionRef.current = s;
+        queryClient.clear();
+        if (!prevSite || prevSite !== s.siteUrl) await repo.setSetting(SITE_URL_KEY, s.siteUrl);
         await repo.setSetting(NEEDS_LOGIN_SINCE_KEY, '');
         useUiStore.getState().setNeedsLogin(false);
         setFull(s);
@@ -167,19 +184,21 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
       async signOut() {
         await clearSession();
         sessionRef.current = null;
+        queryClient.clear();
         setFull(null);
         started.current = false;
         useUiStore.getState().setSession(null);
         useUiStore.getState().setNeedsLogin(false);
       },
       async completeSetup() {
+        if (sessionRef.current) await repo.setSetting(SITE_URL_KEY, sessionRef.current.siteUrl);
         await repo.setSetting(SETUP_DONE_KEY, '1');
         useUiStore.getState().setSetupDone(true);
-        await startCycle();
+        void startCycle(); // do not make the user wait for the whole cycle
       },
       runCycle: () => startCycle(),
     };
-  }, [repo, native, client, startCycle]);
+  }, [repo, native, client, startCycle, queryClient]);
 
   if (failed) {
     return (
