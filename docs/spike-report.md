@@ -239,3 +239,66 @@ Throwaway Users, the temporary Accounting Period, drafts and the one throwaway C
 | Account balance | `GET /api/method/frappe.client.get_list` over GL Entry with `{"SUM":...}` fields (B.8) |
 | Payment Entry mandatory extras | `mode_of_payment`, `reference_no`, `reference_date` |
 | Journal Entry extras | `cheque_no` + `cheque_date` together |
+
+## A. SMS receiver on the OEM phone
+
+Status: **PENDING: results to be filled in by the controller after the second-handset test.** Build and plumbing were verified; the "survives swipe-away" question needs a real SMS.
+
+### A.1 What was built
+
+- Local Expo module `modules/sms-ingest/` (autolinked from `modules/`): `expo-module.config.json`, `android/build.gradle`, `android/src/main/AndroidManifest.xml`, Kotlin `SmsReceiver` and `SmsIngestModule`, `src/index.ts`.
+- Manifest: `RECEIVE_SMS` and `POST_NOTIFICATIONS`; `<receiver expo.modules.smsingest.SmsReceiver android:exported="true" android:permission="android.permission.BROADCAST_SMS">` with an `android.provider.Telephony.SMS_RECEIVED` filter (priority 999). Merged into the app manifest by Gradle.
+- `SmsReceiver` runs no JavaScript (works with the process dead). On each SMS it appends `{sender, body, ts}` to SharedPreferences file `sms_ingest_spike`, key `queue` (JSON array, written with `commit()`), then posts a notification on channel `sms_spike` reading "Spike: SMS from <sender> (<n> chars)" (no body). **SPIKE ONLY: it accepts ANY sender. Remove in Task 9 (IDFC filter).**
+- `SmsIngestModule` (JS name `SmsIngest`): `requestPermissions()` (fires the system dialogs for RECEIVE_SMS and, on Android 13+, POST_NOTIFICATIONS; resolves immediately), `hasPermission()`, `peekQueue(): Promise<string>`.
+- `app/index.tsx` is a throwaway screen with "Request SMS permissions" and "Show queue" buttons.
+
+### A.2 Verified on the phone without a second handset (CPH2487, 2026-11-08)
+
+- Debug APK built and installed; `dumpsys package` shows `app.onebook.autoledger/expo.modules.smsingest.SmsReceiver` registered for `android.provider.Telephony.SMS_RECEIVED`, priority 999.
+- `RECEIVE_SMS` and `POST_NOTIFICATIONS` appear in the requested permissions.
+- `adb shell pm grant` is NOT allowed on this phone (`GRANT_RUNTIME_PERMISSIONS` SecurityException): permissions must be granted by tapping "Request SMS permissions" on the phone. Before that, both were `granted=false`; `RECEIVE_SMS` carries flag `RESTRICTION_INSTALLER_EXEMPT` (sideloaded-app restricted-permission handling: if the system dialog does not appear, enable it manually in App info > Permissions, possibly via the three-dot "Allow restricted settings" entry).
+- Queue file absent before the first SMS (`run-as ... cat` gives "No such file"), as expected. The `sms_spike` channel is created lazily on the first SMS, so it is not listed yet.
+- App info shows "Manage notifications: Don't allow" until the notification permission is granted.
+- `npm test`: 193 passed; `npm run typecheck` clean.
+
+### A.3 How to read the results
+
+```
+adb shell run-as app.onebook.autoledger cat shared_prefs/sms_ingest_spike.xml
+adb shell dumpsys notification --noredact | grep -A8 app.onebook.autoledger
+```
+Or tap "Show queue" in the app (works only if the app is opened again; the notification and the XML file are the evidence that the receiver ran while the app was dead). The queue holds the message text: do not paste real SMS bodies into the repo.
+
+### A.4 ColorOS menu names seen on the phone (App info for AutoLedger)
+
+Open via `adb shell am start -a android.settings.APPLICATION_DETAILS_SETTINGS -d package:app.onebook.autoledger`, or long-press the icon > App info.
+- Manage notifications (value "Don't allow" initially); Permissions.
+- **Battery usage**, opening "Power consumption control" with three options: **Allow background activity** ("No restrictions on any background activity."), **Smart mode (Recommended)** (the default, selected on this phone), **Restrict background activity**.
+- Data usage (has a "Background data" switch, on); Storage usage; Open by default; **Manage app if unused** (switch, ON by default: turn OFF, since it can revoke permissions and hibernate the app); Display over other apps.
+- No "Autostart" entry was visible on the top of this App info page (the page below "Display over other apps" was not checked). If ColorOS has an Auto-launch / Autostart toggle, look in Settings > Apps > Auto launch, or Settings > Battery; record the exact path in the results below.
+
+### A.5 Test procedure (user + controller, second handset)
+
+Preparation: open the app, tap "Request SMS permissions", allow SMS and notifications; confirm in App info > Permissions. Note the number of the second handset (do not commit it). Before each scenario clear the evidence: `adb shell run-as app.onebook.autoledger rm -f shared_prefs/sms_ingest_spike.xml` (only valid while the app process is not running, otherwise SharedPreferences rewrites it; if in doubt just count entries) and dismiss notifications. Send one SMS from the second handset per scenario with a unique text (e.g. "A1", "A2"...). Do NOT use force-stop from adb: the swipe-away is the real test. Battery optimisation stays at the default (Smart mode) for scenarios 1 to 4.
+
+| # | Scenario | Steps |
+|---|----------|-------|
+| 1 | App in foreground | App open on its screen, screen on. Send SMS. |
+| 2 | App in background | Press Home (app still in recents), screen on. Send SMS. |
+| 3 | Swiped away, screen on | Open recents, swipe AutoLedger away, screen on. Send SMS. |
+| 4 | Swiped away, screen off 10 min | Swipe away, lock the screen, wait 10 minutes, send SMS, wait 10 more minutes with the screen off, then wake the phone. Check notification and queue file. |
+| 5 | Swiped away + background activity allowed | App info > Battery usage > Allow background activity; Manage app if unused OFF; enable autostart/auto launch if present. Swipe away, screen off 10 minutes, send SMS. Repeat after a phone reboot without opening the app (optional, strongest test). |
+
+### A.6 RESULTS (to be filled in)
+
+| # | Scenario | Notification shown? | Entry in queue file? | Delay | Notes |
+|---|----------|---------------------|----------------------|-------|-------|
+| 1 | Foreground | | | | |
+| 2 | Background (Home) | | | | |
+| 3 | Swiped away, screen on | | | | |
+| 4 | Swiped away, screen off 10 min | | | | |
+| 5 | Swiped away + Allow background activity / autostart | | | | |
+
+Exact steps the user must take on ColorOS (feeds Task 16 onboarding copy): _to be filled in_
+
+Go / no-go for the Kotlin receiver: _to be filled in_ (if no-go, stop and escalate; the fallback is native Kotlin per spec section 6).
