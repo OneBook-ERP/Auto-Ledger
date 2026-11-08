@@ -302,3 +302,19 @@ Preparation: open the app, tap "Request SMS permissions", allow SMS and notifica
 Exact steps the user must take on ColorOS (feeds Task 16 onboarding copy): _to be filled in_
 
 Go / no-go for the Kotlin receiver: _to be filled in_ (if no-go, stop and escalate; the fallback is native Kotlin per spec section 6).
+
+### A. Results (2026-11-08, Oppo/OnePlus CPH2487, ColorOS, default "Smart mode" background setting, debug build, sideloaded)
+
+Method: plain SMS from a second handset; results read over adb from the app's private queue file (`run-as`), the notification list, and the process start time versus the SMS timestamp. `am force-stop` was never used.
+
+| # | Scenario | Result | Evidence |
+|---|---|---|---|
+| 1 | App open in foreground | PASS | message stored, notification on `sms_spike` channel |
+| 2 | App in background (Home) | PASS | launcher was the resumed activity; message stored |
+| 3 | Swiped away, screen on | PASS (inferred) | process started 2-3 s after the SMS timestamp with the launcher in front |
+| 4b | Swiped away, screen off about 1 min | PASS | process confirmed dead before the SMS (screen Dozing); process start matched the SMS |
+| 5-idle | Swiped away, screen off about 12 min | PASS | process checked dead every minute for 10 min (21:17-21:27); message stored, process started at the SMS time |
+
+Notes: a first attempt returned nothing because the message was sent as RCS/chat, not SMS (not delivered to the SMS inbox at all). A test where the app had not actually been swiped away (process still alive from the previous SMS) was discarded as inconclusive. Real bank alerts are plain SMS. `RECEIVE_SMS` had to be granted by tapping the in-app request on the phone (`adb shell pm grant` is blocked on this phone). The "Allow background activity" scenario was not needed.
+
+**Go/no-go: GO.** The Kotlin broadcast receiver inside the Expo module receives SMS on this phone when the app has been swiped away and has been idle for about 12 minutes. Not tested: a reboot, battery-saver mode, deep overnight idle, other OEMs (Samsung/Xiaomi), and a release (non-debug) build.
