@@ -1,6 +1,6 @@
 // App wiring: the single Repo, the stored Session, ErpClient/ErpOps, the foreground cycle, template refresh
 // and the banners. Nothing runs at import time; everything starts from effects.
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState, Text, View } from 'react-native';
 import type { Session } from '../erp/auth';
@@ -15,10 +15,16 @@ import { buildErp } from './erp';
 import { getNative, type SmsNative } from './native';
 import { clearSession, persistSession, restoreSession, summarize } from './session';
 import { useUiStore } from './store';
+import { cycleCountsAsSynced, LAST_SYNCED_KEY } from '../home/viewModel';
 import { maybeRefreshTemplates } from './templatesSchedule';
 
 export const SETUP_DONE_KEY = 'setupDone';
 export const SITE_URL_KEY = 'site_url';
+
+/** Local data belongs to one site: true when the saved data is that of `siteUrl` (the signed-in site). */
+export async function siteMatches(repo: Repo, siteUrl: string): Promise<boolean> {
+  return (await repo.getSetting(SITE_URL_KEY)) === siteUrl;
+}
 
 export type AppContextValue = {
   repo: Repo;
@@ -61,6 +67,13 @@ export type AppProviderProps = {
 
 export function AppProvider({ children, openDriver, native: nativeProp, fetchImpl, now = Date.now, templatesUrl = TEMPLATES_URL }: AppProviderProps) {
   const [queryClient] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 30_000 } } }));
+  // TanStack Query's "window focus" is the app returning to the foreground.
+  useEffect(() => {
+    focusManager.setEventListener((handleFocus) => {
+      const sub = AppState.addEventListener('change', (st) => handleFocus(st === 'active'));
+      return () => sub.remove();
+    });
+  }, []);
   const [repo, setRepo] = useState<Repo | null>(null);
   const [failed, setFailed] = useState(false);
   const [full, setFull] = useState<Session | null>(null);
@@ -121,13 +134,26 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
           const s = sessionRef.current;
           if (!r || !s) return { failedSteps: [] };
           // Defence in depth: local data belongs to one site. Never post or match it against another.
-          if ((await r.getSetting(SITE_URL_KEY)) !== s.siteUrl) return { failedSteps: [], skipped: 'site_mismatch' };
+          if (!(await siteMatches(r, s.siteUrl))) return { failedSteps: [], skipped: 'site_mismatch' };
           const { erp } = buildErp(s, { fetchImpl });
           return runForegroundCycle({ repo: r, native, erp, now, fetchImpl });
         },
-        after: refreshBanners,
+        after: async (summary) => {
+          // Home's "last synced": only a cycle where every step worked counts (spec section 14).
+          const r = repoRef.current;
+          if (r && cycleCountsAsSynced(summary)) {
+            try {
+              await r.setSetting(LAST_SYNCED_KEY, String(now()));
+            } catch {
+              // best effort
+            }
+          }
+          await refreshBanners();
+          // Whatever the cycle changed (drafts, answers, sync time) must reach Home.
+          void queryClient.invalidateQueries({ queryKey: ['home'] });
+        },
       }),
-    [native, fetchImpl, now, refreshBanners],
+    [native, fetchImpl, now, refreshBanners, queryClient],
   );
 
   const startCycle = useCallback(() => {
