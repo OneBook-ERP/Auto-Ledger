@@ -13,7 +13,8 @@ export interface Repo {
   getPending(id: string): Promise<PendingTxn | null>;
   /** Correlation write (Task 15), one transaction: unless SMS `sourceRawHash` was merged before ('already'),
    *  applies `patch` to txn `targetId` (never its id, rawHash, state, createdDocs, error), increments its
-   *  mergedCount and records the source SMS (setting `merged_sms:<hash>` = targetId). Re-reads the row
+   *  mergedCount and records the source SMS (setting `merged_sms:<hash>` = targetId). When the target's
+   *  state is not 'new' only `utr` and `counterparty` are taken from the patch. Re-reads the row
    *  under the lock, so a concurrent state change is never overwritten. */
   mergeInto(targetId: string, patch: Partial<ParsedTxn>, sourceRawHash: string): Promise<
     { status: 'merged'; txn: PendingTxn } | { status: 'already' | 'missing' }>;
@@ -142,7 +143,12 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
         const cur = toPending(rows[0]);
         const { id: _i, rawHash: _h, state: _s, createdDocs: _c, error: _e, mergedCount: _m, ...fields } =
           patch as Partial<PendingTxn>;
-        const next: PendingTxn = { ...cur, ...fields, mergedCount: cur.mergedCount + 1 };
+        // A handled txn keeps what was posted: only the identifying utr/counterparty may still be filled in.
+        const allowed: Partial<ParsedTxn> = cur.state === 'new' ? fields : {
+          ...(fields.utr !== undefined ? { utr: fields.utr } : {}),
+          ...(fields.counterparty !== undefined ? { counterparty: fields.counterparty } : {}),
+        };
+        const next: PendingTxn = { ...cur, ...allowed, mergedCount: cur.mergedCount + 1 };
         await writePending(next);
         await d.exec('INSERT INTO settings (key, value) VALUES (?,?)', [MERGED_PREFIX + sourceRawHash, targetId]);
         out = { status: 'merged', txn: next };

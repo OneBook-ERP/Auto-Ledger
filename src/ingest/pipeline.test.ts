@@ -216,13 +216,33 @@ describe('ingest: peek and ack', () => {
     expect((await repo.listPending()).length).toBe(3);
   });
 
-  it('items that parse as {ok:false} are acked and dropped', async () => {
+  it('items that parse as {ok:false} are dropped: acked live (non-money native kind) and via backfill', async () => {
+    const ids = ['synthetic-otp', 'idfc-042', 'idfc-051', 'idfc-057', 'idfc-053'];
     const { deps, native, repo } = await setup();
-    for (const id of ['synthetic-otp', 'idfc-042', 'idfc-051', 'idfc-057', 'idfc-053']) native.push(fx(id), 'card_si_paid');
+    for (const id of ids) native.push(fx(id), 'ignore');
     expect(await ingest(deps)).toEqual({ ...empty, ignored: 5 });
     expect(native.queue).toEqual([]);
+    native.inbox = ids.map(fx);
+    expect(await ensureBackfill(deps)).toEqual({ ...empty, ignored: 5 });
     expect(await repo.listPending()).toEqual([]);
     expect(await repo.getSetting('unrecognised_count')).toBeNull();
+    expect(await repo.getSetting('engine_disagreement_count')).toBeNull();
+  });
+
+  it('engine disagreement: a native money kind TS cannot parse is acked and counted, never silently dropped', async () => {
+    const { deps, native, repo, driver } = await setup();
+    // Native read it as a debit (e.g. a refreshed set TS does not have); the bundled TS set cannot.
+    const body = 'IDFC FIRST Bank: INR 4,200.00 debited from A/c XX1234 on 06/11/26 towards EXAMPLE PAYEE. Team IDFC FIRST Bank';
+    native.push({ sender: 'AX-IDFCFB-S', body, receivedAt: NOW - HOUR }, 'ca_debit');
+    native.push(fx('synthetic-otp'), 'card_spend'); // even an OTP verdict counts: native kept it as money
+    native.push(fx('idfc-001')); // agreement: stored as usual
+    expect(await ingest(deps)).toEqual({ ...empty, inserted: 1, unrecognised: 2 });
+    expect(native.queue).toEqual([]);
+    expect(await repo.getSetting('unrecognised_count')).toBe('2');
+    expect(await repo.getSetting('engine_disagreement_count')).toBe('2');
+    expect((await repo.listPending()).length).toBe(1);
+    const dump = JSON.stringify([await driver.all('SELECT * FROM pending_txn'), await driver.all('SELECT * FROM settings')]);
+    expect(dump).not.toMatch(/EXAMPLE PAYEE|is your OTP/);
   });
 
   it('an item from a sender no mapping knows is acked and dropped', async () => {
@@ -371,6 +391,25 @@ describe('ingest: correlation', () => {
     const rows = await repo.listPending();
     expect(rows.length).toBe(1);
     expect(rows[0]).toMatchObject({ id: idOf(conf), kind: 'ca_debit', accountLast4: '6507', occurredTime: '12:30', mergedCount: 2, utr: 'IDFB6292M4509651' });
+  });
+
+  it('a handled target keeps what was posted: confirmation first, created, then the debit only bumps mergedCount', async () => {
+    const { deps, native, repo } = await setup();
+    const conf = fx('idfc-018');
+    native.push(conf, 'neft_confirm');
+    await ingest(deps);
+    const handled: PendingTxn = {
+      ...(await repo.getPending(idOf(conf)))!, state: 'created',
+      createdDocs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0 }],
+    };
+    await repo.upsertPending(handled);
+    const debit = shortDebit('30,000.00', conf.receivedAt + 60_000);
+    native.push(debit, 'ca_debit');
+    expect(await ingest(deps)).toEqual({ ...empty, enriched: 1 });
+    expect(await repo.listPending()).toEqual([{ ...handled, mergedCount: 2 }]); // kind, date, time, last-4, balance unchanged
+    native.push(debit, 'ca_debit'); // re-delivery: the marker was written
+    expect(await ingest(deps)).toEqual({ ...empty, duplicates: 1 });
+    expect(await repo.listPending()).toEqual([{ ...handled, mergedCount: 2 }]);
   });
 
   it('one pairing per item: debit + NEFT confirmation + a later equal-amount debit + its confirmation', async () => {

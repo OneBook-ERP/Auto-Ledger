@@ -61,7 +61,10 @@ export const UNRECOGNISED_COUNT_KEY = 'unrecognised_count';
 export const BACKFILL_DONE_AT_KEY = 'backfill_done_at';
 export const unrecognisedAccountKey = (last4: string) => `unrecognised_account:${last4}`;
 const CORRELATE_LOOKBACK_MS = 7 * 24 * 3600_000;
+export const ENGINE_DISAGREEMENT_COUNT_KEY = 'engine_disagreement_count';
 const NATIVE_UNRECOGNISED = 'unrecognised';
+// The native receiver queues only these template kinds, or 'unrecognised'.
+const NATIVE_MONEY_KINDS: ReadonlySet<string> = new Set(['ca_credit', 'ca_debit', 'neft_confirm', 'card_spend', 'card_si_paid']);
 
 const emptyResult = (): IngestResult => ({
   inserted: 0, enriched: 0, duplicates: 0, ignored: 0, unrecognised: 0, unmappedAccounts: [], errors: 0,
@@ -120,7 +123,7 @@ function serial<T>(repo: Repo, fn: () => Promise<T>): Promise<T> {
 // ---------- processing ----------
 
 type Sms = { sender: string; body: string; receivedAt: number };
-type Outcome = 'inserted' | 'enriched' | 'duplicate' | 'ignored' | 'unrecognised' | { unmapped: string };
+type Outcome = 'inserted' | 'enriched' | 'duplicate' | 'ignored' | 'unrecognised' | 'disagreement' | { unmapped: string };
 
 class Batch {
   readonly result = emptyResult();
@@ -142,7 +145,11 @@ class Batch {
     if (!r.ok) {
       // A native "unrecognised" item is a money-like SMS the native engine could not read; when TS cannot
       // read it either it is counted for the "N messages could not be read" notice.
-      return nativeKind === NATIVE_UNRECOGNISED ? 'unrecognised' : 'ignored';
+      if (nativeKind === NATIVE_UNRECOGNISED) return 'unrecognised';
+      // Native read a money template but TS cannot (template sets out of step, regex semantics): a real
+      // transaction must not vanish silently, so it is counted as unreadable plus a diagnostics counter.
+      if (nativeKind !== null && NATIVE_MONEY_KINDS.has(nativeKind)) return 'disagreement';
+      return 'ignored';
     }
     const txn = r.txn;
 
@@ -188,7 +195,7 @@ class Batch {
     else if (o === 'enriched') r.enriched++;
     else if (o === 'duplicate') r.duplicates++;
     else if (o === 'ignored') r.ignored++;
-    else r.unrecognised++;
+    else r.unrecognised++; // 'unrecognised' and 'disagreement'
   }
 
   private replace(t: PendingTxn): void {
@@ -198,12 +205,19 @@ class Batch {
   }
 }
 
+async function addToCounter(repo: Repo, key: string, n: number): Promise<void> {
+  const cur = parseInt((await repo.getSetting(key)) ?? '0', 10) || 0;
+  await repo.setSetting(key, String(cur + n));
+}
+
 const oldestFirst = <T extends { receivedAt: number }>(xs: T[]) => [...xs].sort((a, b) => a.receivedAt - b.receivedAt);
 
 /**
  * Drains the native queue: peek -> parse -> correlate -> repo -> ack (only fully processed items). OTP,
  * ignore, non-money, unknown-template and unknown-sender items are acked and dropped; native "unrecognised"
- * items TS cannot parse either are acked and added to `unrecognised_count`; an SMS from an unmapped account
+ * items TS cannot parse either are acked and added to `unrecognised_count`; an item native queued with a
+ * money kind that TS cannot parse is acked and added to `unrecognised_count` and `engine_disagreement_count`
+ * (never stored: the body is not kept); an SMS from an unmapped account
  * (known sender, unknown last-4) is acked, not stored, and flags `unrecognised_account:<last4>` once.
  */
 export function ingest(deps: { repo: Repo; native: Pick<NativeBridge, 'peek' | 'ack'>; now: () => number }): Promise<IngestResult> {
@@ -214,19 +228,21 @@ export function ingest(deps: { repo: Repo; native: Pick<NativeBridge, 'peek' | '
     await batch.load();
     const done: string[] = [];
     const unrecognisedIds: string[] = [];
+    let disagreements = 0;
     for (const q of oldestFirst(items)) {
       try {
         const o = await batch.process(q, q.kind);
         batch.count(o);
-        (o === 'unrecognised' ? unrecognisedIds : done).push(q.id);
+        if (o === 'disagreement') disagreements++;
+        (o === 'unrecognised' || o === 'disagreement' ? unrecognisedIds : done).push(q.id);
       } catch {
         batch.result.errors++;
       }
     }
     if (unrecognisedIds.length) {
       try {
-        const cur = parseInt((await deps.repo.getSetting(UNRECOGNISED_COUNT_KEY)) ?? '0', 10) || 0;
-        await deps.repo.setSetting(UNRECOGNISED_COUNT_KEY, String(cur + unrecognisedIds.length));
+        await addToCounter(deps.repo, UNRECOGNISED_COUNT_KEY, unrecognisedIds.length);
+        if (disagreements) await addToCounter(deps.repo, ENGINE_DISAGREEMENT_COUNT_KEY, disagreements);
         done.push(...unrecognisedIds);
       } catch {
         batch.result.errors += unrecognisedIds.length;

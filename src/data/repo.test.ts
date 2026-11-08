@@ -322,6 +322,21 @@ describe('mergeInto (Task 15: correlation writes)', () => {
     expect(await r.isMergedSms('src1')).toBe(true);
     expect(await r.isMergedSms('src2')).toBe(false);
   });
+  it('a handled target (state other than new) only takes utr and counterparty from the patch', async () => {
+    for (const state of ['created', 'submitted', 'ignored', 'failed'] as const) {
+      const r = await mk();
+      const t = txn({ state, kind: 'neft_confirm', utr: null, counterparty: null, accountLast4: null, occurredTime: null, balanceMinor: null });
+      await r.upsertPending(t);
+      const res = await r.mergeInto('t1', {
+        kind: 'ca_debit', occurredOn: '2026-02-02', occurredTime: '11:11', accountLast4: '6507', balanceMinor: 5,
+        utr: 'U9', counterparty: 'P9',
+      }, 'src1');
+      const want = { ...t, utr: 'U9', counterparty: 'P9', mergedCount: 2 };
+      expect(res).toEqual({ status: 'merged', txn: want });
+      expect(await r.getPending('t1')).toEqual(want);
+      expect(await r.isMergedSms('src1')).toBe(true);
+    }
+  });
   it('a second merge of the same source SMS changes nothing', async () => {
     const r = await mk();
     await r.upsertPending(txn());
