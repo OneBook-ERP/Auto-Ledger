@@ -2,6 +2,12 @@
  * Spike B: ERPNext (v16) API behaviour on the STAGE site.
  * Run: npx tsx scripts/spike/erp-spike.ts
  *
+ * Opt-in flags:
+ *   --create-pi  Build and submit a real Purchase Invoice on stage for check 5(b). A submitted-then-cancelled
+ *                Purchase Invoice CANNOT be deleted through the API, so this leaves permanent residue.
+ *                It additionally requires --i-accept-undeletable-residue (or ACCEPT_STAGE_RESIDUE=1);
+ *                without it the script exits before contacting stage.
+ *
  * Reads ONEBOOK_STAGE_URL / ONEBOOK_STAGE_KEY / ONEBOOK_STAGE_SECRET from .env.local.
  * Refuses to run against anything but stageatom.onebook.app. Never prints the key/secret.
  * Every document it creates is registered for cleanup and deleted in a finally block
@@ -143,6 +149,8 @@ async function cleanupAll() {
 
 // ---------- reporting ----------
 const results: { id: number; title: string; pass: boolean }[] = [];
+const subs: { id: number; label: string; pass: boolean }[] = [];
+const sub = (id: number, label: string, pass: boolean) => { subs.push({ id, label, pass }); log(`  [sub ${pass ? 'PASS' : 'FAIL'}] ${label}`); };
 function log(...a: unknown[]) {
   console.log(...a);
 }
@@ -160,6 +168,21 @@ async function check(id: number, title: string, fn: () => Promise<boolean>) {
 
 // ---------- shared fixtures ----------
 const CREATE_PI = process.argv.includes('--create-pi');
+if (CREATE_PI && !(process.argv.includes('--i-accept-undeletable-residue') || process.env.ACCEPT_STAGE_RESIDUE === '1')) {
+  console.error(
+    [
+      '################################################################',
+      '# WARNING: --create-pi submits a real Purchase Invoice on stage.',
+      '# Once cancelled it CANNOT be deleted via the API (LinkExistsError',
+      '# on Payment Ledger Entry). It leaves PERMANENT residue on stage.',
+      '# To proceed anyway add --i-accept-undeletable-residue',
+      '# (or set ACCEPT_STAGE_RESIDUE=1). Exiting without touching stage.',
+      '################################################################',
+    ].join('\n'),
+  );
+  process.exit(3);
+}
+if (CREATE_PI) console.warn('!!! --create-pi accepted: this run WILL leave an undeletable cancelled Purchase Invoice on stage !!!');
 let customer = '';
 let supplier = '';
 let limitedKey = '';
@@ -523,6 +546,7 @@ async function main() {
       const sumOut = dictRows.reduce((a, x) => a + (Number(x.outstanding) || 0), 0);
       log(`   total row: outstanding=${out} advance=${adv}; sum of dict rows outstanding=${sumOut}`);
       totals[report_name] = out;
+      sub(8, `${report_name} total outstanding is a number`, Number.isFinite(out));
       if (!Number.isFinite(out)) ok = false;
     }
     const si = await sumOutstanding('Sales Invoice');
@@ -533,6 +557,7 @@ async function main() {
     // spec 11: erpnext.accounts.utils.get_balance_on
     const gb = await raw('GET', `/api/method/erpnext.accounts.utils.get_balance_on?${qs({ account: BANK_GL, date: TODAY, company: COMPANY })}`);
     log('  erpnext.accounts.utils.get_balance_on ->', gb.status, short(trimErr(gb.body), 400));
+    sub(8, 'erpnext.accounts.utils.get_balance_on returns a number (spec s11 method)', gb.status === 200 && typeof gb.body?.message === 'number');
     // alternatives
     const brt = await raw('GET', `/api/method/erpnext.accounts.doctype.bank_reconciliation_tool.bank_reconciliation_tool.get_account_balance?${qs({ bank_account: 'IDFC First - Zen Pivot - IDFC First', till_date: TODAY, company: COMPANY })}`);
     log('  bank_reconciliation_tool.get_account_balance ->', brt.status, short(brt.body), '(NOT the book balance: it is bank-statement-side, ~0 when reconciled)');
@@ -543,6 +568,7 @@ async function main() {
       const bal = (Number(row?.debit) || 0) - (Number(row?.credit) || 0);
       book[a] = Math.round(bal * 100) / 100;
       log(`  GL sum ${a}: status ${g.status} debit=${row?.debit} credit=${row?.credit} => balance(debit-credit)=${book[a]}`);
+      sub(8, `GL Entry SUM balance for ${a} is a number`, g.status === 200 && Number.isFinite(bal));
       if (g.status !== 200 || !Number.isFinite(bal)) ok = false;
     }
     // cross-check against Trial Balance
@@ -640,6 +666,9 @@ async function main() {
       log(`  sweep ${dt}.${f} like ${TAG}%:`, short(r.status === 200 ? r.body.data : trimErr(r.body), 300));
     }
     log('\n=== SUMMARY ===');
-    for (const r of results) log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.id}. ${r.title}`);
+    for (const r of results) {
+      log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.id}. ${r.title}`);
+      for (const x of subs.filter((x) => x.id === r.id)) log(`        ${x.pass ? 'PASS' : 'FAIL'}  - ${x.label}`);
+    }
   }
 })();

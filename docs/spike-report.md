@@ -2,9 +2,9 @@
 
 ## B. ERPNext API behaviour on stage (Frappe 16.54 / ERPNext 16.53 / India Compliance 16.11)
 
-Run: `npx tsx scripts/spike/erp-spike.ts` (add `--create-pi` only if no open Purchase Invoice exists; see "Residue"). Target: `https://stageatom.onebook.app` only; the script refuses any other URL. Date of run: 2026-11-08. Company: Zen Pivot Venture Studio Private Limited (INR).
+Run: `npx tsx scripts/spike/erp-spike.ts` (`--create-pi --i-accept-undeletable-residue` builds a test Purchase Invoice and leaves undeletable residue; see B.12). Target: `https://stageatom.onebook.app` only; the script refuses any other URL. Date of run: 2026-11-08. Company: Zen Pivot Venture Studio Private Limited (INR).
 
-Result: **9 PASS / 0 FAIL** in the final run. Four checks only passed after the first run exposed real v16 differences (see the "differs from spec" list). Everything below is observed unless marked **(source)** or **(not verified)**.
+Result: **9 checks PASS, with one failing sub-result inside check 8**: `erpnext.accounts.utils.get_balance_on` FAIL (not whitelisted in v16), replaced by the GL Entry SUM (PASS, matched the Trial Balance exactly); AR/AP Summary report PASS. The script prints this per-check sub-result in its summary. Four checks only passed after the first run exposed real v16 differences (see the "differs from spec" list). Everything below is observed unless marked **(source)** or **(not verified)**.
 
 ### B.0 Differences from spec section 11 (read this first)
 
@@ -63,8 +63,8 @@ Response `200 {"data":{ "name":"ACC-PAY-2026-00039","docstatus":0,"paid_from":"D
 
 - `paid_from` is filled by the server from the party (Debtors - ZP). Send it explicitly anyway.
 - Without `mode_of_payment`: `417 {"exception":"frappe.exceptions.MandatoryError: [Payment Entry, ACC-PAY-2026-00039]: mode_of_payment","exc_type":"MandatoryError","_server_messages":[{"message":"Error: Value missing for Payment Entry: Mode of Payment","title":"Message"}]}`.
-- Mode of Payment names on stage (type Bank): `Bank Draft, Cheque, Credit Card Bank Entry, Current Account Bank Entry, ICICI, Wire Transfer` (plus `Cash`). Recommend the app lists `Mode of Payment` (enabled=1) in the setup wizard and stores one default per mapped account (suggest `Current Account Bank Entry` for a current account, `Credit Card Bank Entry` for a card).
-- Bank-type modes make `reference_no` + `reference_date` mandatory (`getdoctype` shows `mandatory_depends_on` on both). Omitted: `417 ValidationError "Reference No and Reference Date is mandatory for Bank transaction"`. The app always has the UTR (or the derived hash, per plan Task 12), so this is satisfied.
+- Mode of Payment names on stage (type Bank): `Bank Draft, Cheque, Credit Card Bank Entry, Current Account Bank Entry, ICICI, Wire Transfer` (plus `Cash`). Recommend the app lists `Mode of Payment` (enabled=1) in the setup wizard and stores one default per mapped account (suggest `Current Account Bank Entry` for a current account, `Credit Card Bank Entry` for a card). (ad-hoc observation, not reproduced by erp-spike.ts)
+- Bank-type modes make `reference_no` + `reference_date` mandatory (`getdoctype` shows `mandatory_depends_on` on both). Omitted: `417 ValidationError "Reference No and Reference Date is mandatory for Bank transaction"`. The app always has the UTR (or the derived hash, per plan Task 12), so this is satisfied. (ad-hoc observation, not reproduced by erp-spike.ts)
 - Find by UTR: `GET /api/resource/Payment Entry?filters=[["reference_no","=","<UTR>"]]&fields=["name","docstatus","reference_no"]` => `200 {"data":[{"name":"ACC-PAY-2026-00039","docstatus":0,"reference_no":"<UTR>"}]}`. Exact match works (filters are JSON-encoded query params).
 - Delete draft: `DELETE /api/resource/Payment Entry/<name>` => `202 {"data":"ok"}`.
 - Receive against an open Sales Invoice with a partial amount also works as a draft: add `"references":[{"reference_doctype":"Sales Invoice","reference_name":"ZP-SI-26-00012","allocated_amount":1000}]` (`unallocated_amount` becomes 0). The invoice's `outstanding_amount` does not change while the PE is a draft.
@@ -90,7 +90,7 @@ Response `200 {"data":{ "name":"ACC-PAY-2026-00039","docstatus":0,"paid_from":"D
 
 ### B.5 Payment Entry (Pay, Supplier) with `paid_from` = card liability account: PASS (accepted)
 
-**Recommendation: use the Payment Entry; no Journal Entry fallback is needed.** `IDFC Credit Card - ZP` is `account_type: Bank`, `root_type: Asset` on this site, so ERPNext treats it as a bank-like account. Body accepted as a draft, both unallocated and against a freshly submitted Purchase Invoice (`PINV-26-00030`, outstanding 1000):
+**Recommendation: use the Payment Entry; no Journal Entry fallback is needed.** `IDFC Credit Card - ZP` is `account_type: Bank`, `root_type: Asset` on this site, so ERPNext treats it as a bank-like account. Body accepted as a draft, both unallocated and against a freshly submitted Purchase Invoice (`PINV-26-00030`, outstanding 1000): (ad-hoc observation, not reproduced by erp-spike.ts)
 
 ```json
 { "company": "<company>", "posting_date": "2026-11-08", "payment_type": "Pay",
@@ -106,7 +106,7 @@ Response `200`, `docstatus 0`, `unallocated_amount 0`, found by `reference_no`, 
 
 Validation errors seen when the reference is wrong: `417 ValidationError "Purchase Invoice PINV-26-00001 is not associated with Supplier Bharti Airtel Limited"` (party must match the invoice).
 
-**Not verified:** that the accountant's later **submit** of such a PE succeeds (I did not submit or cancel any Payment Entry, to avoid un-deletable ledger residue). The card account is type Bank so I expect it to, but flag it in the user docs. If an accountant reports a submit failure, the Journal Entry fallback (party row with `reference_type: "Purchase Invoice"`, `reference_name`) is the documented alternative; it was accepted as a draft in an earlier run of this spike using a PI of the same shape (debit `Creditors - ZP` with `party_type: Supplier`, `party`, credit card GL).
+**Not verified:** that the accountant's later **submit** of such a PE succeeds (I did not submit or cancel any Payment Entry, to avoid un-deletable ledger residue). The card account is type Bank so I expect it to, but flag it in the user docs. If an accountant reports a submit failure, the Journal Entry fallback (party row with `reference_type: "Purchase Invoice"`, `reference_name`) is the documented alternative; it was accepted as a draft in an earlier run of this spike using a PI of the same shape (debit `Creditors - ZP` with `party_type: Supplier`, `party`, credit card GL). (ad-hoc observation, not reproduced by erp-spike.ts)
 
 Helper for building a PE from an invoice (not required): `GET /api/method/erpnext.accounts.doctype.payment_entry.payment_entry.get_payment_entry?dt=Purchase Invoice&dn=<name>` returns a full unsaved PE (with `paid_from` defaulted to the company bank account; override with the card GL).
 
@@ -184,7 +184,7 @@ All Frappe errors carry `exc_type` (stable), `_server_messages` (a JSON **string
 | No report access | 403 | `PermissionError` | `"You don't have access to Report: Accounts Receivable Summary"` |
 | Non-whitelisted method | 403 | `PermissionError` | `"Function <strong>erpnext.accounts.utils.get_balance_on</strong> is not whitelisted."` |
 | `generate_keys` as non-System-Manager | 403 | `PermissionError` | no message at all |
-| Not found | 404 | `DoesNotExistError` | e.g. `"User x not found"` |
+| Not found | 404 | `DoesNotExistError` | e.g. `"User x not found"` | (ad-hoc observation, not reproduced by erp-spike.ts)
 
 **No 403 message names a role.** The plan's `ErpAuthError.missingRole` must be changed to `deniedDoctype?: string` (parse the text between `document <strong>` and `</strong>`, or `No permission for X` from `_error_message`), and the plain-language message becomes "Your ERPNext user is not allowed to do this on <doctype>. Ask your ERPNext administrator for access." Task 10's test "a 403 body naming a role yields missingRole" cannot be written against real payloads as stated.
 
@@ -196,7 +196,7 @@ A date before any Fiscal Year (2020-01-15) was **accepted** as a draft Journal E
 
 - Payment Entry: `reference_no` (+ `reference_date`). Filter works: `[["reference_no","=",utr]]`.
 - Journal Entry: `cheque_no` (+ `cheque_date`). Filter works: `[["cheque_no","=",utr]]`.
-- Both are plain Data fields, indexed or not, query time is fine on stage (hundreds of rows). Existing real Payment Entries on the site store free-text bank narrations in `reference_no` (e.g. `NEFT/AXODH24720831250/CONTISHIP LOGISTICS PRIVATE`, `HDFCH01307872608`), so **exact match on the UTR will miss entries the accountant typed in a different format**. Task 11's `findDraftByUtr` should use exact match for idempotency of the app's own documents; a looser `like %UTR%` lookup is optional later, not required for phase 1.
+- Both are plain Data fields, indexed or not, query time is fine on stage (hundreds of rows). Existing real Payment Entries on the site store free-text bank narrations in `reference_no` (e.g. `NEFT/AXODH24720831250/CONTISHIP LOGISTICS PRIVATE`, `HDFCH01307872608`), so **exact match on the UTR will miss entries the accountant typed in a different format**. Task 11's `findDraftByUtr` should use exact match for idempotency of the app's own documents; a looser `like %UTR%` lookup is optional later, not required for phase 1. (ad-hoc observation, not reproduced by erp-spike.ts)
 - Dedupe must cover submitted docs too (the accountant may have submitted before retry): `findDraftByUtr` already returns `docstatus`; keep the name but do not filter on docstatus in the query.
 
 ### B.11 `frappe-js-sdk` vs thin client: choose the thin typed client over `fetch`
@@ -218,7 +218,7 @@ Left on stage from earlier iterations of this spike (cannot be deleted via the A
 - Purchase Invoice `PINV-26-00029` (supplier "Bharti Airtel Limited", bill_no `ZZSPIKE663AE6-BILL`, 1000)
 - Purchase Invoice `PINV-26-00030` (same supplier, bill_no `ZZSPIKE124140-BILL`, 1000)
 
-Both are cancelled with reversing GL and Payment Ledger Entries (`delinked = 1`). Deleting them needs delete permission on "Payment Ledger Entry" (the pilot key got `403` on it). An administrator can delete them from the desk. Do not rerun the script with `--create-pi` unless an open Purchase Invoice is genuinely needed.
+Both are cancelled with reversing GL and Payment Ledger Entries (`delinked = 1`). Deleting them needs delete permission on "Payment Ledger Entry" (the pilot key got `403` on it). An administrator can delete them from the desk. `--create-pi` is now guarded: it prints a warning and exits before touching stage unless `--i-accept-undeletable-residue` (or `ACCEPT_STAGE_RESIDUE=1`) is also given. Only use it if an open Purchase Invoice is genuinely needed and an admin will clean up afterwards.
 
 Throwaway Users, the temporary Accounting Period, drafts and the one throwaway Customer were all removed (the Customer needed the extra delete permission the owner granted mid-spike; before that it was only disabled). Document number series (ACC-PAY, ACC-JV, HR-EMP, etc.) skipped a few numbers; harmless.
 
