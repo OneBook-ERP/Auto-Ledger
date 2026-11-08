@@ -91,10 +91,12 @@ class SmsQueue(
       }
       Doc(o.getLong("seq"), items)
     } catch (e: Exception) {
-      // Keep the bad file for inspection; never silently empty it. Ids stay unique because they
-      // carry the clock as well as the restarted sequence.
-      store.quarantine(KEY, clock())
-      Doc(0L, ArrayList())
+      // Keep the bad file for inspection; never silently empty it. The sequence restarts from the
+      // clock in seconds (through the notification-id derivation, so it is a valid id), not 0: a
+      // restart from 0 would reuse the notification ids of earlier, possibly unread, messages.
+      val now = clock()
+      store.quarantine(KEY, now)
+      Doc(NotificationText.notificationId(now / 1000).toLong(), ArrayList())
     }
   }
 

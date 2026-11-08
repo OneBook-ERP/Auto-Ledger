@@ -38,6 +38,23 @@ fun KeyValueStore.quarantine(key: String, stamp: Long): String? {
 
 object Quarantine {
   const val MARK = ".corrupt-"
+  private const val TMP_SUFFIX = ".tmp"
+
+  /**
+   * [prune] plus deletion of every leftover `*.tmp` (a write that was killed between creating the
+   * temp file and the atomic rename can leave one holding raw SMS text). Only call it while no
+   * write can be in flight, i.e. under the queue lock. Returns how many files were deleted.
+   */
+  fun pruneAll(store: KeyValueStore, now: Long): Int {
+    var deleted = 0
+    for (k in store.keys()) {
+      if (k.endsWith(TMP_SUFFIX)) {
+        store.delete(k)
+        deleted++
+      }
+    }
+    return deleted + prune(store, now)
+  }
   const val MAX_AGE_MS = 7L * 86_400_000L
 
   private val NAME = Regex("^(.+)\\.corrupt-(\\d{1,19})$")

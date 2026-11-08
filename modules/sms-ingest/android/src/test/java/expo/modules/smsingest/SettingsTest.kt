@@ -124,4 +124,17 @@ class EngineLoaderTest {
     assertNull(l.engine)
     assertNull(l.version)
   }
+
+  @Test
+  fun setTemplatesRejectsAnOverrideOlderThanBundled() {
+    val ver = JSONObject(bundled).getInt("version")
+    assertTrue(EngineLoader.acceptsOverride(withVersion(ver), bundled))
+    assertTrue(EngineLoader.acceptsOverride(withVersion(ver + 1), bundled))
+    assertFalse(EngineLoader.acceptsOverride(withVersion(ver - 1), bundled))
+    // A missing version counts as 0.
+    assertFalse(EngineLoader.acceptsOverride(JSONObject(bundled).also { it.remove("version") }.toString(), bundled))
+    // Invalid templates are rejected; with no usable bundled set any valid override is accepted.
+    assertFalse(EngineLoader.acceptsOverride("{nope", bundled))
+    assertTrue(EngineLoader.acceptsOverride(withVersion(0), null))
+  }
 }

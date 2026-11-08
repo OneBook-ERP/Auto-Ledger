@@ -70,6 +70,17 @@ class LazyEngine {
 
 object EngineLoader {
   /**
+   * Whether [overrideJson] may be stored as the override: it must build, and (when the bundled set
+   * is valid) its version must be >= the bundled set's, a missing version counting as 0. Otherwise
+   * [choose] would ignore it anyway, so the caller is told false instead of silently succeeding.
+   */
+  fun acceptsOverride(overrideJson: String, bundledJson: String?): Boolean {
+    val ov = TemplateEngine.fromJson(overrideJson) ?: return false
+    val b = bundledJson?.let { TemplateEngine.fromJson(it) } ?: return true
+    return ov.version >= b.version
+  }
+
+  /**
    * The override (app files dir) is used only when it builds and its version is >= the bundled
    * set's (the TS side applies the same rule to `templates_json`), so a stale override cannot
    * shadow newer bundled templates after an app update; a missing version counts as 0. If the

@@ -103,4 +103,21 @@ class QuarantineTest {
       dir.deleteRecursively()
     }
   }
+
+  @Test
+  fun pruneAllAlsoDeletesLeftoverTmpFiles() {
+    for ((s, done) in stores()) {
+      try {
+        s.write("queue.json", "{}")
+        s.write("queue.json.tmp", "raw sms text")
+        s.write("sender_patterns.json.tmp", "x")
+        s.write("queue.json.corrupt-$t0", "old")
+        s.write("queue.json.corrupt-${t0 + 1}", "new")
+        assertEquals(3, Quarantine.pruneAll(s, t0 + 2))
+        assertEquals(listOf("queue.json", "queue.json.corrupt-${t0 + 1}"), s.keys().sorted())
+      } finally {
+        done()
+      }
+    }
+  }
 }

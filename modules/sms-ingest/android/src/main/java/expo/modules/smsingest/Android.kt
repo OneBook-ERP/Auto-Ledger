@@ -23,8 +23,8 @@ internal object Storage {
 
   /**
    * Once per process (module start or a receiver-only process start): deletes Task 2's spike
-   * queue (any sender) and prunes quarantined `*.corrupt-*` files, which can hold raw SMS text
-   * (see [Quarantine.prune]). Cheap: one prefs delete and one directory listing.
+   * queue (any sender) and prunes quarantined `*.corrupt-*` files and leftover `*.tmp` files, which can hold raw
+   * SMS text (see [Quarantine.pruneAll]). Cheap: one prefs delete and one directory listing.
    */
   fun housekeeping(ctx: Context, now: Long = System.currentTimeMillis()) {
     if (housekept) return
@@ -36,7 +36,7 @@ internal object Storage {
     }
     try {
       // Same lock as every queue/settings read-modify-write, which is where quarantine happens.
-      synchronized(SmsQueue.LOCK) { Quarantine.prune(store(ctx), now) }
+      synchronized(SmsQueue.LOCK) { Quarantine.pruneAll(store(ctx), now) }
     } catch (t: Throwable) {
       Log.w(TAG, "quarantine prune failed: ${t.javaClass.simpleName}")
     }
@@ -59,9 +59,14 @@ internal object EngineProvider {
     if (!it.usable) Log.e(TAG, "template engine unusable: ${it.reason}")
   }
 
-  /** Validates (TemplateEngine.fromJson) and writes atomically only when valid. */
+  /** Validates (see [EngineLoader.acceptsOverride]: valid and not older than bundled) and writes atomically only then. */
   fun setOverride(ctx: Context, json: String): Boolean {
-    if (TemplateEngine.fromJson(json) == null) return false
+    val bundled = try {
+      ctx.assets.open(ASSET).use { it.readBytes().toString(Charsets.UTF_8) }
+    } catch (t: Throwable) {
+      null
+    }
+    if (!EngineLoader.acceptsOverride(json, bundled)) return false
     lazy.update { FileKeyValueStore(overrideDir(ctx)).write("idfc.json", json) }
     return true
   }

@@ -104,6 +104,21 @@ class SmsQueueTest {
   }
 
   @Test
+  fun seqRestartsFromTheClockAfterAQuarantineSoNotificationIdsDoNotCollide() {
+    val store = MemoryKeyValueStore()
+    val now = 1_800_000_123_456L
+    val q = SmsQueue(store, { now }, 500)
+    val before = (1..3).map { q.append("S", "m$it", 1L, "k") }
+    store.data[SmsQueue.KEY] = "{not json"
+    val after = q.append("S", "after", 1L, "k")
+    val expectedSeed = NotificationText.notificationId(now / 1000).toLong()
+    assertEquals(expectedSeed + 1, after.seq)
+    assertTrue(after.seq > 1_000_000L)
+    assertTrue(before.none { NotificationText.notificationId(it.seq) == NotificationText.notificationId(after.seq) })
+    assertEquals(after.seq + 1, q.append("S", "next", 1L, "k").seq)
+  }
+
+  @Test
   fun structurallyInvalidItemQuarantinesToo() {
     val store = MemoryKeyValueStore()
     store.data[SmsQueue.KEY] = """{"v":1,"seq":3,"items":[{"id":"x","sender":"S"}]}"""
