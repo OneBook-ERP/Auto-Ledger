@@ -3,7 +3,7 @@
 import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState, Text, View } from 'react-native';
-import type { Session } from '../erp/auth';
+import { logoutSession, type Session } from '../erp/auth';
 import type { ErpClient } from '../erp/client';
 import type { Repo, SqlDriver } from '../data/repo';
 import { NEEDS_LOGIN_SINCE_KEY } from '../ingest/drain';
@@ -204,6 +204,9 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
         if (useUiStore.getState().setupDone) void startCycle();
       },
       async signOut() {
+        // Best effort, not awaited: end the server session behind the login's sid cookie (Task 16 minor).
+        const was = sessionRef.current;
+        if (was) void logoutSession({ siteUrl: was.siteUrl, fetchImpl, allowHttp: __DEV__ });
         await clearSession();
         sessionRef.current = null;
         queryClient.clear();
@@ -220,7 +223,7 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
       },
       runCycle: () => startCycle(),
     };
-  }, [repo, native, client, startCycle, queryClient]);
+  }, [repo, native, client, startCycle, queryClient, fetchImpl]);
 
   if (failed) {
     return (

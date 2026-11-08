@@ -1,4 +1,4 @@
-import { SessionCookieMissing, KeyGenerationNotPermitted, TwoFactorRequired, RotateDeclined, loadSession, login, loginWithKeys, saveSession } from './auth';
+import { SessionCookieMissing, KeyGenerationNotPermitted, TwoFactorRequired, RotateDeclined, loadSession, login, loginWithKeys, logoutSession, saveSession } from './auth';
 import { ErpAuthError, ErpNetworkError } from './client';
 
 const PASSWORD = 'hunter2-very-secret';
@@ -205,5 +205,52 @@ describe('login hardening', () => {
     const store = { getItem: async () => s };
     expect(await loadSession(store)).toBeNull();
     expect((await loadSession(store, { allowHttp: true }))?.siteUrl).toBe('http://x.example');
+  });
+});
+
+describe('logoutSession (sign-out hygiene)', () => {
+  it('POSTs /api/method/logout with the cookie jar and no token', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const impl = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response('{"message":null}', { status: 200 });
+    }) as unknown as typeof fetch;
+    await expect(logoutSession({ siteUrl: 'https://x.example', fetchImpl: impl })).resolves.toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://x.example/api/method/logout');
+    expect(calls[0].init.method).toBe('POST');
+    expect(calls[0].init.credentials).toBe('include');
+    expect(JSON.stringify(calls[0].init.headers)).not.toMatch(/authorization|token/i);
+  });
+
+  it.each([
+    ['a network failure', async () => { throw new TypeError('Network request failed'); }],
+    ['a 401', async () => new Response('{}', { status: 401 })],
+    ['a 500', async () => new Response('oops', { status: 500 })],
+  ])('ignores %s', async (_l, f) => {
+    await expect(logoutSession({ siteUrl: 'https://x.example', fetchImpl: f as unknown as typeof fetch })).resolves.toBeUndefined();
+  });
+
+  it('gives up after a short timeout when the site never answers', async () => {
+    jest.useFakeTimers();
+    try {
+      let aborted = false;
+      const impl = ((_u: string, init: RequestInit) => new Promise((_r, reject) => {
+        init.signal?.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')); });
+      })) as unknown as typeof fetch;
+      const p = logoutSession({ siteUrl: 'https://x.example', fetchImpl: impl });
+      jest.advanceTimersByTime(5000);
+      await expect(p).resolves.toBeUndefined();
+      expect(aborted).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('sends nothing to an http site in release, and never throws on a bad address', async () => {
+    const impl = jest.fn() as unknown as typeof fetch;
+    await logoutSession({ siteUrl: 'http://x.example', fetchImpl: impl });
+    await logoutSession({ siteUrl: '', fetchImpl: impl });
+    expect(impl).not.toHaveBeenCalled();
   });
 });

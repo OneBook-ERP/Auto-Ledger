@@ -211,6 +211,33 @@ describe('AppProvider', () => {
     expect(await ctx!.repo.getSetting('setupDone')).toBe('1');
   });
 
+  it('signOut asks the site to end the cookie session, best effort, without waiting for it', async () => {
+    await signedInDone();
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = jest.fn((url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Promise<Response>(() => undefined); // the site never answers
+    }) as unknown as typeof fetch;
+    await mount({ fetchImpl });
+    await waitFor(() => expect(useUiStore.getState().session).not.toBeNull());
+    await act(async () => { await ctx!.signOut(); });
+    expect(useUiStore.getState().session).toBeNull();
+    expect(mockMem.has('autoledger.session')).toBe(false);
+    const logout = calls.filter((c) => c.url === `${SAVED.siteUrl}/api/method/logout`);
+    expect(logout).toHaveLength(1);
+    expect(logout[0].init).toMatchObject({ method: 'POST', credentials: 'include' });
+  });
+
+  it('signOut completes when the logout call fails', async () => {
+    await signedInDone();
+    const fetchImpl = jest.fn(async () => { throw new TypeError('Network request failed'); }) as unknown as typeof fetch;
+    await mount({ fetchImpl });
+    await waitFor(() => expect(useUiStore.getState().session).not.toBeNull());
+    await act(async () => { await ctx!.signOut(); });
+    expect(useUiStore.getState().session).toBeNull();
+    expect(mockMem.has('autoledger.session')).toBe(false);
+  });
+
   it('skips template refresh silently when TEMPLATES_URL is empty', async () => {
     await signedInDone();
     const fetchImpl = jest.fn();
