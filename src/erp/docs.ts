@@ -103,18 +103,24 @@ export async function listOpenInvoices(c: ErpClient, partyType: 'Customer' | 'Su
 
 /** Creates a DRAFT only (never submits). Any 2xx is success. */
 export async function createDraft(c: ErpClient, doctype: 'Payment Entry' | 'Journal Entry', body: Record<string, unknown>): Promise<{ name: string }> {
-  const r = await c.post<{ data?: { name?: string } }>(resource(doctype), body);
+  // docstatus is forced to 0: this app never submits, whatever the caller passed.
+  const r = await c.post<{ data?: { name?: string } }>(resource(doctype), { ...body, docstatus: 0 });
   const name = r?.data?.name;
   if (typeof name !== 'string' || !name) throw unexpectedResponse();
   return { name };
 }
 
-/** Exact match (idempotency for the app's own documents); docstatus is returned, not filtered on. */
+/**
+ * Exact match (idempotency for the app's own documents). Cancelled documents (docstatus 2) are ignored so
+ * they never block a new draft. The hit may be docstatus 0 (draft) OR 1 (submitted by the accountant):
+ * callers must read `docstatus`. Earliest by creation wins when several match.
+ */
 export async function findDraftByUtr(c: ErpClient, reference: string): Promise<{ doctype: string; name: string; docstatus: number } | null> {
   for (const [doctype, field] of [['Payment Entry', 'reference_no'], ['Journal Entry', 'cheque_no']] as const) {
     const rows = await list<{ name: string; docstatus: number }>(c, doctype, {
       fields: ['name', 'docstatus'],
-      filters: [[field, '=', reference]],
+      filters: [[field, '=', reference], ['docstatus', '!=', 2]],
+      order_by: 'creation asc',
       limit_page_length: 1,
     });
     if (rows.length > 0) return { doctype, name: rows[0].name, docstatus: rows[0].docstatus };
@@ -131,18 +137,29 @@ export async function deleteDraft(c: ErpClient, doctype: string, name: string): 
   await c.delete(path);
 }
 
-/** Keyed `${doctype}:${name}`; one request per doctype. Documents that no longer exist are absent. */
+const STATUS_CHUNK = 50;
+
+/**
+ * Keyed `${doctype}:${name}`; names are de-duplicated and requested 50 per call per doctype (long URLs
+ * fail with 414). A missing key means the document was deleted or is not accessible to this user.
+ */
 export async function getDocStatuses(c: ErpClient, refs: { doctype: string; name: string }[]): Promise<Record<string, number>> {
-  const byType = new Map<string, string[]>();
-  for (const r of refs) byType.set(r.doctype, [...(byType.get(r.doctype) ?? []), r.name]);
+  const byType = new Map<string, Set<string>>();
+  for (const r of refs) {
+    if (!byType.has(r.doctype)) byType.set(r.doctype, new Set());
+    byType.get(r.doctype)!.add(r.name);
+  }
   const out: Record<string, number> = {};
-  for (const [doctype, names] of byType) {
-    const rows = await list<{ name: string; docstatus: number }>(c, doctype, {
-      fields: ['name', 'docstatus'],
-      filters: [['name', 'in', names]],
-      limit_page_length: 0,
-    });
-    for (const row of rows) out[`${doctype}:${row.name}`] = row.docstatus;
+  for (const [doctype, set] of byType) {
+    const names = [...set];
+    for (let i = 0; i < names.length; i += STATUS_CHUNK) {
+      const rows = await list<{ name: string; docstatus: number }>(c, doctype, {
+        fields: ['name', 'docstatus'],
+        filters: [['name', 'in', names.slice(i, i + STATUS_CHUNK)]],
+        limit_page_length: 0,
+      });
+      for (const row of rows) out[`${doctype}:${row.name}`] = row.docstatus;
+    }
   }
   return out;
 }

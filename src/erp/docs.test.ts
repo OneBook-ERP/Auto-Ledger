@@ -45,8 +45,15 @@ describe('toMinor', () => {
     ['1234.56', 123456],
     [0, 0],
     [null, 0],
+    [undefined, 0],
   ])('%p -> %p', (x, want) => {
     expect(toMinor(x as number)).toBe(want);
+  });
+});
+
+describe('toMinor invalid input', () => {
+  it.each([[NaN], ['1,234.56'], ['abc'], [Infinity]])('throws for %p', (x) => {
+    expect(() => toMinor(x as number)).toThrow();
   });
 });
 
@@ -212,7 +219,13 @@ describe('createDraft', () => {
     expect(await createDraft(c, 'Payment Entry', body)).toEqual({ name: 'ACC-PAY-2026-00039' });
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe(`${BASE}/api/resource/Payment%20Entry`);
-    expect(calls[0].body).toEqual(body);
+    expect(calls[0].body).toEqual({ ...body, docstatus: 0 });
+  });
+
+  it('forces docstatus 0 even if the caller passes 1', async () => {
+    const { c, calls } = setup({ body: { data: { name: 'X' } } });
+    await createDraft(c, 'Journal Entry', { company: 'ZP', docstatus: 1 });
+    expect((calls[0].body as { docstatus: number }).docstatus).toBe(0);
   });
 });
 
@@ -222,7 +235,7 @@ describe('findDraftByUtr', () => {
     expect(await findDraftByUtr(c, 'U/1 #')).toEqual({ doctype: 'Payment Entry', name: 'ACC-PAY-1', docstatus: 0 });
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe(
-      `${BASE}/api/resource/Payment%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['reference_no', '=', 'U/1 #']], limit_page_length: 1 })}`,
+      `${BASE}/api/resource/Payment%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['reference_no', '=', 'U/1 #'], ['docstatus', '!=', 2]], order_by: 'creation asc', limit_page_length: 1 })}`,
     );
   });
 
@@ -230,8 +243,22 @@ describe('findDraftByUtr', () => {
     const { c, calls } = setup({ body: { data: [] } }, { body: { data: [{ name: 'ACC-JV-9', docstatus: 1 }] } });
     expect(await findDraftByUtr(c, 'U2')).toEqual({ doctype: 'Journal Entry', name: 'ACC-JV-9', docstatus: 1 });
     expect(calls[1].url).toBe(
-      `${BASE}/api/resource/Journal%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['cheque_no', '=', 'U2']], limit_page_length: 1 })}`,
+      `${BASE}/api/resource/Journal%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['cheque_no', '=', 'U2'], ['docstatus', '!=', 2]], order_by: 'creation asc', limit_page_length: 1 })}`,
     );
+  });
+
+  it('sends quotes and brackets inside the JSON filter, encoded', async () => {
+    const utr = 'A"B]["C\\';
+    const { c, calls } = setup({ body: { data: [{ name: 'P1', docstatus: 1 }] } });
+    expect(await findDraftByUtr(c, utr)).toEqual({ doctype: 'Payment Entry', name: 'P1', docstatus: 1 });
+    expect(calls[0].url).toContain(`filters=${encodeURIComponent(JSON.stringify([['reference_no', '=', utr], ['docstatus', '!=', 2]]))}`);
+  });
+
+  it('only-cancelled documents (server returns none) give null; the live draft is the hit', async () => {
+    const { c } = setup({ body: { data: [] } }, { body: { data: [] } });
+    expect(await findDraftByUtr(c, 'U9')).toBeNull();
+    const live = setup({ body: { data: [{ name: 'LIVE', docstatus: 0 }] } });
+    expect(await findDraftByUtr(live.c, 'U9')).toEqual({ doctype: 'Payment Entry', name: 'LIVE', docstatus: 0 });
   });
 
   it('null when neither has it', async () => {
@@ -281,6 +308,28 @@ describe('getDocStatuses', () => {
     const { c, calls } = setup({ body: {} });
     expect(await getDocStatuses(c, [])).toEqual({});
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('getDocStatuses chunking', () => {
+  it('dedupes, chunks 50 per request per doctype, merges', async () => {
+    const names = Array.from({ length: 120 }, (_, i) => `N${i}`);
+    const refs = [...names, ...names.slice(0, 10)].map((name) => ({ doctype: 'Payment Entry', name }));
+    const { c, calls } = setup(
+      { body: { data: names.slice(0, 50).map((name) => ({ name, docstatus: 0 })) } },
+      { body: { data: names.slice(50, 99).map((name) => ({ name, docstatus: 1 })) } }, // N99 absent
+      { body: { data: names.slice(100).map((name) => ({ name, docstatus: 2 })) } },
+    );
+    const r = await getDocStatuses(c, refs);
+    expect(calls).toHaveLength(3);
+    const sent = calls.map((x) => (JSON.parse(decodeURIComponent(/filters=([^&]*)/.exec(x.url)![1])) as unknown[][])[0][2] as string[]);
+    expect(sent.map((a) => a.length)).toEqual([50, 50, 20]);
+    expect(new Set(sent.flat()).size).toBe(120);
+    expect(Object.keys(r)).toHaveLength(119);
+    expect(r['Payment Entry:N0']).toBe(0);
+    expect(r['Payment Entry:N60']).toBe(1);
+    expect(r['Payment Entry:N119']).toBe(2);
+    expect('Payment Entry:N99' in r).toBe(false);
   });
 });
 

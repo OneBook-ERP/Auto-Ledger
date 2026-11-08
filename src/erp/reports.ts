@@ -4,12 +4,13 @@ import { ErpClient, unexpectedResponse } from './client';
 /**
  * Decimal amount (ERPNext returns JSON numbers like 1131.5) to integer minor units (paise).
  * Works on the decimal string of the number, not on `x * 100`, so there is no binary drift;
- * rounds half away from zero at the 3rd decimal digit.
+ * Throws on NaN or unparseable input; rounds half away from zero at the 3rd decimal digit.
  */
 export function toMinor(x: number | string | null | undefined): number {
+  // null/undefined/'' mean "no value" (e.g. a SUM over no GL entries) and are 0; anything else must parse.
   if (x === null || x === undefined || x === '') return 0;
   const n = typeof x === 'number' ? x : Number(x);
-  if (!Number.isFinite(n)) return 0;
+  if (!Number.isFinite(n)) throw new Error(`Not a valid amount: ${String(x)}`);
   const s = Math.abs(n) < 1e-6 || Math.abs(n) >= 1e21 ? Math.abs(n).toFixed(10) : String(Math.abs(n));
   const [intPart, fracPart = ''] = s.split('.');
   const frac = (fracPart + '000').slice(0, 3);
