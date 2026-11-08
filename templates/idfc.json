@@ -1,5 +1,17 @@
 {
   "version": 1,
+  "otpPattern": "\\b\\d{4,8}\\s+(?:is|as)\\s+(?:(?:your|the)\\s+)?(?:otp|one[- ]time password)|\\b(?:otp|one[- ]time password)\\s*(?:is|:)\\s*\\d{4,8}\\b|\\b(?:otp|one[- ]time password)\\s+for\\b[^.\\n]{0,60}\\bis\\s+\\d{4,8}\\b",
+  "moneyVerbPattern": "\\b(?:debited|credited|spent|deducted|paid|received|withdrawn)\\b",
+  "amountPattern": "(?:INR|USD|Rs\\.?)\\s?\\d",
+  "notes": [
+    "Decision order: first the OTP check (otpPattern) on the whole body, then the sender match (a bank applies when its senderPattern is a substring of the sender; no bank means unknown_template), then the first template whose regex matches wins.",
+    "A template of kind ignore returns its ignoreReason. A body from a known sender that matches no template is unknown_template if it matches both moneyVerbPattern and amountPattern, otherwise not_money.",
+    "All patterns are case-insensitive and use only syntax valid in both JavaScript and Java. Any extraction fault in a matched template (bad month, day outside 1-31, month outside 1-12, no digits in the amount) yields unknown_template, never an exception.",
+    "When the body has no date, occurredOn is the Asia/Kolkata date of receivedAt (UTC+05:30, so the day boundary is 18:30 UTC) and occurredTime is null.",
+    "Times with AM/PM convert to 24-hour: 12:xx AM becomes 00:xx, 12:xx PM stays 12:xx, other PM hours add 12.",
+    "A two-digit year yy means 2000+yy.",
+    "Currency Rs or Rs. means INR. Group names allowed: amount, currency, day, month, year, time, last4, counterparty, utr, merchant, balance."
+  ],
   "banks": [
     {
       "id": "idfc",

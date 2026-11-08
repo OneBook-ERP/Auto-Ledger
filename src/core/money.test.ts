@@ -24,3 +24,14 @@ describe('parseMinor', () => {
     expect(() => parseMinor('INR')).toThrow();
   });
 });
+
+describe('parseMinor edges', () => {
+  it('throws on prefix-only input', () => {
+    expect(() => parseMinor('Rs.')).toThrow();
+    expect(() => parseMinor('INR')).toThrow();
+  });
+  it('accepts a trailing period and pads a single-digit fraction', () => {
+    expect(parseMinor('Rs 8,000.')).toBe(800000);
+    expect(parseMinor('Rs 8,000.5')).toBe(800050);
+  });
+});

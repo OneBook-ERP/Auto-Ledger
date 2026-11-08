@@ -90,4 +90,55 @@ describe('named cases', () => {
     const r = parseSms(f.sender, f.body, Date.UTC(2026, 10, 7, 20, 0), templates);
     expect(r.ok && r.txn.occurredOn).toBe('2026-11-08');
   });
+
+  it('a money SMS mentioning OTP in a footer still parses', () => {
+    for (const id of ['idfc-001', 'idfc-040', 'idfc-006']) {
+      const f = byId(id);
+      const r = parseSms(f.sender, f.body + ' Never share your OTP with anyone.', f.receivedAt, templates);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.txn.kind).toBe(f.expected.txn.kind);
+    }
+  });
+  it('OTP phrasings are detected', () => {
+    for (const b of ['Your OTP is 123456 for login', 'OTP for txn of Rs 5 is 98765432', '4821 is the OTP to pay', 'Use one time password: 5566']) {
+      expect(parseSms('VM-IDFCFB-S', b, 0, templates)).toEqual({ ok: false, reason: 'otp' });
+    }
+  });
+  it('IST day boundary at 18:30 UTC', () => {
+    const f = byId('idfc-018');
+    const a = parseSms(f.sender, f.body, Date.UTC(2026, 10, 7, 18, 29, 59), templates);
+    const b = parseSms(f.sender, f.body, Date.UTC(2026, 10, 7, 18, 30, 0), templates);
+    expect(a.ok && a.txn.occurredOn).toBe('2026-11-07');
+    expect(b.ok && b.txn.occurredOn).toBe('2026-11-08');
+  });
+});
+
+describe('parseSms is total', () => {
+  const credit = (day: string, mon: string, amt = '1,000.00') =>
+    `Your A/C XXXXX996507 is credited with INR ${amt} on ${day}/${mon}/26 09:13. Your new balance is INR 5,12,932.76. Team IDFC FIRST Bank`;
+  const cases: [string, string][] = [
+    ['bad month name', 'Your a/c no. XXXXXXXX507 is credited by Rs. 5.00 on 01-Xyz-26 by a/c linked to mobile XXXXXXXXX612 (IMPS Ref no 40273725 ).'],
+    ['comma-only amount', credit('02', '09', ',,,')],
+    ['day 00', credit('00', '09')],
+    ['day 32', credit('32', '09')],
+    ['month 13', credit('02', '13')],
+    ['month 00', credit('02', '00')],
+  ];
+  for (const [name, body] of cases) {
+    it(name, () => {
+      let r: ParseResult | undefined;
+      expect(() => { r = parseSms('JM-IDFCFB-S', body, 0, templates); }).not.toThrow();
+      expect(r).toEqual({ ok: false, reason: 'unknown_template' });
+    });
+  }
+  it('template missing the amount group', () => {
+    const t: TemplateSet = { ...templates, banks: [{ id: 'x', senderPattern: 'IDFCFB', templates: [
+      { id: 'bad', kind: 'ca_credit', direction: 'in', accountType: 'bank', regex: 'credited' }] }] };
+    expect(parseSms('JM-IDFCFB-S', 'credited Rs 5', 0, t)).toEqual({ ok: false, reason: 'unknown_template' });
+  });
+  it('invalid regex in a template', () => {
+    const t: TemplateSet = { ...templates, banks: [{ id: 'x', senderPattern: 'IDFCFB', templates: [
+      { id: 'bad', kind: 'ca_credit', direction: 'in', accountType: 'bank', regex: '(' }] }] };
+    expect(parseSms('JM-IDFCFB-S', 'credited Rs 5', 0, t)).toEqual({ ok: false, reason: 'unknown_template' });
+  });
 });

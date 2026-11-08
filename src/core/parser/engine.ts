@@ -7,6 +7,10 @@ import { parseMinor } from '../money';
  * only these named groups: amount, currency, day, month, year, time, last4, counterparty,
  * utr, merchant, balance.
  *
+ * The OTP, money-verb and amount heuristics are in the template file (otpPattern,
+ * moneyVerbPattern, amountPattern) so Kotlin reads one source; see its `notes`.
+ * parseSms is total: any fault yields unknown_template, never an exception.
+ *
  * Order: (1) OTP check; (2) first bank whose senderPattern is a substring of the sender,
  * none -> unknown_template; (3) first template whose regex matches wins ('ignore' kind
  * returns its ignoreReason); (4) a body from a known sender matching no template is
@@ -15,9 +19,6 @@ import { parseMinor } from '../money';
  * (limit alerts, statements, marketing, KYC).
  */
 
-const OTP = /\botp\b|one[- ]time password/i;
-const MONEY_VERB = /\b(debited|credited|spent|deducted|paid|received|withdrawn)\b/i;
-const AMOUNT = /(?:INR|USD|Rs\.?)\s?\d/i;
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
@@ -35,6 +36,7 @@ function normTime(t: string): string {
   const m = /^(\d{1,2}):(\d{2})\s*([AP]M)?$/i.exec(t.trim());
   if (!m) throw new Error(`bad time ${t}`);
   let h = parseInt(m[1], 10);
+  if (h > 23 || parseInt(m[2], 10) > 59) throw new Error(`bad time ${t}`);
   if (m[3]) {
     const pm = m[3].toUpperCase() === 'PM';
     h = (h % 12) + (pm ? 12 : 0);
@@ -75,7 +77,20 @@ export function parseSms(
   receivedAt: number,
   templates: TemplateSet,
 ): ParseResult {
-  if (OTP.test(body)) return { ok: false, reason: 'otp' };
+  try {
+    return parseSmsUnsafe(sender, body, receivedAt, templates);
+  } catch {
+    return { ok: false, reason: 'unknown_template' };
+  }
+}
+
+function parseSmsUnsafe(
+  sender: string,
+  body: string,
+  receivedAt: number,
+  templates: TemplateSet,
+): ParseResult {
+  if (new RegExp(templates.otpPattern, 'i').test(body)) return { ok: false, reason: 'otp' };
 
   const bank = templates.banks.find((b) => sender.includes(b.senderPattern));
   if (!bank) return { ok: false, reason: 'unknown_template' };
@@ -90,7 +105,10 @@ export function parseSms(
     let occurredOn: string;
     if (g.day && g.month && g.year) {
       const y = g.year.length === 2 ? 2000 + parseInt(g.year, 10) : parseInt(g.year, 10);
-      occurredOn = `${y}-${pad(monthNumber(g.month))}-${pad(g.day)}`;
+      const mo = monthNumber(g.month);
+      const dd = parseInt(g.day, 10);
+      if (mo < 1 || mo > 12 || dd < 1 || dd > 31) throw new Error('bad date');
+      occurredOn = `${y}-${pad(mo)}-${pad(dd)}`;
     } else {
       occurredOn = istDate(receivedAt);
     }
@@ -116,6 +134,7 @@ export function parseSms(
 
   return {
     ok: false,
-    reason: MONEY_VERB.test(body) && AMOUNT.test(body) ? 'unknown_template' : 'not_money',
+    reason: new RegExp(templates.moneyVerbPattern, 'i').test(body) &&
+      new RegExp(templates.amountPattern, 'i').test(body) ? 'unknown_template' : 'not_money',
   };
 }

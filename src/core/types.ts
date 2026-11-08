@@ -58,6 +58,10 @@ export type OutboxOp = {
 
 export type TemplateSet = {
   version: number;
+  otpPattern: string;
+  moneyVerbPattern: string;
+  amountPattern: string;
+  notes?: string[];
   banks: {
     id: string;
     senderPattern: string;
