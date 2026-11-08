@@ -22,7 +22,7 @@ jest.mock('expo-router', () => {
 let mockErp: unknown = null;
 jest.mock('./useErpOps', () => ({ useErpOps: () => mockErp }));
 
-import Activity, { OFFLINE_MESSAGE, UNDO_CONFIRM_MESSAGE } from '../../app/(tabs)/activity';
+import Activity, { OFFLINE_MESSAGE, OFFLINE_PUT_BACK_MESSAGE, UNDO_CONFIRM_MESSAGE } from '../../app/(tabs)/activity';
 
 const doc = (name: string, docstatus = 0, doctype = 'Payment Entry') => ({ doctype, name, docstatus });
 const txn = (id: string, over: Partial<PendingTxn> = {}): PendingTxn => ({
@@ -37,6 +37,7 @@ const SUBMITTED_MSG = 'Your accountant already submitted this entry. Cancel it i
 async function open(txns: PendingTxn[], docs: Record<string, number> = {}) {
   const app = await fakeApp();
   for (const t of txns) await app.repo.upsertPending(t);
+  await app.repo.setSetting('site_url', 'https://erp.example.com');
   const erp = new FakeDocsErp(docs);
   mockErp = erp as unknown as ErpOps;
   useUiStore.setState({ session: { siteUrl: 'https://erp.example.com', user: 'a@b.c' }, needsLogin: false });
@@ -104,7 +105,7 @@ describe('Activity screen', () => {
   it('Undo asks first; cancelling does nothing; confirming undoes and refreshes', async () => {
     const { repo, erp } = await open([txn('1')], { 'Payment Entry:PE-1': 0 });
     await fireEvent.press(await screen.findByRole('button', { name: 'Undo' }));
-    expect(Alert.alert).toHaveBeenCalledWith('Undo this entry?', UNDO_CONFIRM_MESSAGE, expect.any(Array));
+    expect(Alert.alert).toHaveBeenCalledWith('Undo this entry?', UNDO_CONFIRM_MESSAGE, expect.any(Array), expect.anything());
     expect(UNDO_CONFIRM_MESSAGE).toBe('Remove the draft from ERPNext and put this message back in your Inbox?');
     expect(erp.count('deleteDraft')).toBe(0);
     await confirm('Undo');
@@ -192,4 +193,55 @@ describe('Activity screen', () => {
     await fireEvent.press(screen.getByRole('button', { name: 'Show older (5 more)' }));
     expect(await screen.findByText('Ignored (105)')).toBeTruthy();
   });
+
+  it('shows amounts in the transaction currency, not always rupees', async () => {
+    await open([txn('1', { currency: 'USD', amountMinor: 12345, createdDocs: [doc('PE-1')] })], { 'Payment Entry:PE-1': 0 });
+    expect(await screen.findByText('+USD 123.45')).toBeTruthy();
+  });
+
+  it('adopted drafts: the dialog says it only unlinks, nothing is deleted', async () => {
+    const { repo, erp } = await open([txn('1', { createdDocs: [{ ...doc('PE-1'), adopted: true }] })], { 'Payment Entry:PE-1': 0 });
+    await fireEvent.press(await screen.findByRole('button', { name: 'Undo' }));
+    const call = (Alert.alert as jest.Mock).mock.calls.at(-1)!;
+    expect(call[1]).toBe('This entry was already in ERPNext before this app recorded it. It stays there; only the link to this message is removed.');
+    await confirm('Undo');
+    await waitFor(async () => expect((await repo.getPending('1'))!.state).toBe('new'));
+    expect(erp.count('deleteDraft')).toBe(0);
+    expect(await screen.findByText(/PE-1 stays in ERPNext/)).toBeTruthy();
+  });
+
+  it('Put back in Inbox asks first when it will delete a draft, and offline says nothing was changed', async () => {
+    const { repo, erp } = await open([txn('1', { createdDocs: [doc('PE-1'), doc('PE-2')] })], { 'Payment Entry:PE-1': 2, 'Payment Entry:PE-2': 0 });
+    await waitFor(() => expect(screen.getByText('Cancelled in ERPNext')).toBeTruthy());
+    await fireEvent.press(screen.getByRole('button', { name: 'Put back in Inbox' }));
+    expect((Alert.alert as jest.Mock).mock.calls.at(-1)![1]).toBe(UNDO_CONFIRM_MESSAGE);
+    erp.failNext('getDocStatuses', new ErpNetworkError('offline'));
+    await confirm('Put back');
+    expect(await screen.findByText(OFFLINE_PUT_BACK_MESSAGE)).toBeTruthy();
+    expect(OFFLINE_PUT_BACK_MESSAGE).toBe('No connection. Nothing was changed.');
+    expect((await repo.getPending('1'))!.state).toBe('created');
+    await fireEvent.press(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(async () => expect((await repo.getPending('1'))!.state).toBe('new'));
+  });
+
+  it('a second tap while the confirm dialog is open does not open another', async () => {
+    await open([txn('1')], { 'Payment Entry:PE-1': 0 });
+    const btn = await screen.findByRole('button', { name: 'Undo' });
+    await fireEvent.press(btn);
+    await fireEvent.press(btn);
+    expect(Alert.alert).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not poll or undo against a different site than the saved data', async () => {
+    const app = await fakeApp();
+    await app.repo.upsertPending(txn('1'));
+    await app.repo.setSetting('site_url', 'https://other.example.com');
+    const erp = new FakeDocsErp({ 'Payment Entry:PE-1': 1 });
+    mockErp = erp as unknown as ErpOps;
+    useUiStore.setState({ session: { siteUrl: 'https://erp.example.com', user: 'a@b.c' }, needsLogin: false });
+    await render(<Activity />, { wrapper: app.Wrap });
+    await screen.findByText('Waiting for your accountant (1)');
+    expect(erp.calls).toHaveLength(0);
+  });
 });
+

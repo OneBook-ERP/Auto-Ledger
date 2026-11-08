@@ -7,3 +7,10 @@ export function formatInr(minor: number): string {
   const head = rupees.length > 3 ? rupees.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + rupees.slice(-3) : rupees;
   return `${neg ? '-' : ''}₹${head}.${paise}`;
 }
+
+/** Formats `minor` in the transaction's own currency: rupees for INR, otherwise the ISO code before the figure. */
+export function formatMoney(minor: number, currency: string | null | undefined): string {
+  const cur = (currency ?? '').trim().toUpperCase();
+  if (!cur || cur === 'INR') return formatInr(minor);
+  return formatInr(minor).replace('₹', `${cur} `);
+}

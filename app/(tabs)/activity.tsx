@@ -2,17 +2,21 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Linking } from 'react-native';
 import type { PendingTxn } from '../../src/core/types';
+import { NEEDS_LOGIN_SINCE_KEY } from '../../src/ingest/drain';
 import { bringBack, pollStatuses } from '../../src/ingest/statusPoller';
 import { undoTxn, type UndoResult } from '../../src/outbox/runner';
-import { PAGE_SIZE, canPutBack, canUndo, docLines, docUrl, groupActivity, signedAmount, statusOf, titleOf } from '../../src/state/activityModel';
-import { useApp } from '../../src/state/AppProvider';
+import {
+  PAGE_SIZE, UNDO_CONFIRM_MESSAGE, canPutBack, canUndo, confirmText, docLines, docUrl, groupActivity, removalPlan, signedAmount, statusOf, titleOf,
+} from '../../src/state/activityModel';
+import { siteMatches, useApp } from '../../src/state/AppProvider';
 import { useUiStore } from '../../src/state/store';
 import { useErpOps } from '../../src/state/useErpOps';
-import { ActivityRow, Banner, Button, EmptyState, Screen, SectionHeader, formatInr, type ActivityAction } from '../../src/ui';
+import { ActivityRow, Banner, Button, EmptyState, Screen, SectionHeader, formatMoney, type ActivityAction } from '../../src/ui';
 
-export const UNDO_CONFIRM_TITLE = 'Undo this entry?';
-export const UNDO_CONFIRM_MESSAGE = 'Remove the draft from ERPNext and put this message back in your Inbox?';
+export { UNDO_CONFIRM_MESSAGE };
 export const OFFLINE_MESSAGE = 'No connection. Nothing was removed yet.';
+export const OFFLINE_PUT_BACK_MESSAGE = 'No connection. Nothing was changed.';
+const SITE_CHANGED_MESSAGE = 'You are signed in to a different ERPNext site than this phone\'s data belongs to. Sign in again to the original site first.';
 
 type Notice = { tone: 'ok' | 'warn' | 'error'; message: string; retry?: () => void };
 
@@ -38,14 +42,16 @@ export default function Activity() {
   const refresh = useCallback(async () => {
     try {
       await load();
-      if (erp) {
-        await pollStatuses({ repo, erp, now: Date.now });
+      // Same guard as the foreground cycle: never ask a different site about this site's documents.
+      if (erp && siteUrl && (await siteMatches(repo, siteUrl))) {
+        const r = await pollStatuses({ repo, erp, now: Date.now });
+        if (r.needsLogin) useUiStore.getState().setNeedsLogin(true);
         await load();
       }
     } catch {
       // the list stays as it was
     }
-  }, [load, erp, repo]);
+  }, [load, erp, repo, siteUrl]);
 
   // The Activity tab gained focus: show what is stored, then ask ERPNext what the accountant did.
   useFocusEffect(useCallback(() => { void refresh(); }, [refresh]));
@@ -71,37 +77,68 @@ export default function Activity() {
     }
   };
 
-  const showResult = (r: UndoResult, retry: () => void, doneMessage: string) => {
-    if (r.status === 'undone') setNotice({ tone: 'ok', message: doneMessage });
-    else if (r.status === 'refused') setNotice({ tone: 'warn', message: r.message });
-    else if (r.status === 'needs_login') {
-      useUiStore.getState().setNeedsLogin(true);
-      setNotice(null);
-      router.push('/(auth)/login');
-    } else if (r.retryable) setNotice({ tone: 'error', message: OFFLINE_MESSAGE, retry });
+  const goLogin = async () => {
+    try {
+      if (!(await repo.getSetting(NEEDS_LOGIN_SINCE_KEY))) await repo.setSetting(NEEDS_LOGIN_SINCE_KEY, String(Date.now()));
+    } catch {
+      // the banner flag below is enough for this session
+    }
+    useUiStore.getState().setNeedsLogin(true);
+    setNotice(null);
+    router.push('/(auth)/login');
+  };
+
+  const showResult = async (r: UndoResult, retry: () => void, putBack: boolean) => {
+    if (r.status === 'undone') {
+      const n = r.kept?.length ?? 0;
+      setNotice({
+        tone: 'ok',
+        message: n ? `Put back in your Inbox. ${r.kept!.map((d) => d.name).join(', ')} stays in ERPNext.` : 'Put back in your Inbox.',
+      });
+    } else if (r.status === 'refused') setNotice({ tone: 'warn', message: r.message });
+    else if (r.status === 'needs_login') await goLogin();
+    else if (r.retryable) setNotice({ tone: 'error', message: putBack ? OFFLINE_PUT_BACK_MESSAGE : OFFLINE_MESSAGE, retry });
     else setNotice({ tone: 'error', message: r.error.message });
   };
 
+  // Undo and Put back in Inbox both re-read every document's status from ERPNext first.
   const runUndo = (t: PendingTxn, putBack: boolean) =>
     guarded(t.id, async () => {
       setNotice(null);
-      if (!erp && !(putBack && t.createdDocs.every((d) => d.docstatus === 2 || d.docstatus === -1))) {
-        useUiStore.getState().setNeedsLogin(true);
-        router.push('/(auth)/login');
+      if (!erp) {
+        await goLogin();
         return;
       }
-      const r = erp
-        ? await undoTxn(t.id, { repo, erp }, { docsAlreadyGone: putBack })
-        : await undoTxn(t.id, { repo, erp: NO_ERP }, { docsAlreadyGone: true });
-      showResult(r, () => void runUndo(t, putBack), 'Put back in your Inbox.');
+      if (!siteUrl || !(await siteMatches(repo, siteUrl))) {
+        setNotice({ tone: 'error', message: SITE_CHANGED_MESSAGE });
+        return;
+      }
+      const r = await undoTxn(t.id, { repo, erp }, { docsAlreadyGone: putBack });
+      await showResult(r, () => void runUndo(t, putBack), putBack);
       await load();
     });
 
-  const confirmUndo = (t: PendingTxn) =>
-    Alert.alert(UNDO_CONFIRM_TITLE, UNDO_CONFIRM_MESSAGE, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Undo', style: 'destructive', onPress: () => void runUndo(t, false) },
-    ]);
+  // The dialog is open: no second tap may open another or start the action behind it.
+  const confirming = useRef<Set<string>>(new Set());
+  const confirmThen = (t: PendingTxn, putBack: boolean) => {
+    if (busyRef.current.has(t.id) || confirming.current.has(t.id)) return;
+    const text = confirmText(removalPlan(t, items ?? []));
+    if (!text || (putBack && !removalPlan(t, items ?? []).remove.length)) {
+      void runUndo(t, putBack);
+      return;
+    }
+    confirming.current.add(t.id);
+    const release = () => confirming.current.delete(t.id);
+    Alert.alert(
+      text.title,
+      text.message,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: release },
+        { text: putBack ? 'Put back' : 'Undo', style: 'destructive', onPress: () => { release(); void runUndo(t, putBack); } },
+      ],
+      { cancelable: true, onDismiss: release },
+    );
+  };
 
   const doBringBack = (t: PendingTxn) =>
     guarded(t.id, async () => {
@@ -113,8 +150,8 @@ export default function Activity() {
 
   const actionsFor = (t: PendingTxn): ActivityAction[] => {
     const a: ActivityAction[] = [];
-    if (canUndo(t)) a.push({ label: 'Undo', variant: 'danger', onPress: () => confirmUndo(t) });
-    if (canPutBack(t)) a.push({ label: 'Put back in Inbox', onPress: () => void runUndo(t, true) });
+    if (canUndo(t)) a.push({ label: 'Undo', variant: 'danger', onPress: () => confirmThen(t, false) });
+    if (canPutBack(t)) a.push({ label: 'Put back in Inbox', onPress: () => confirmThen(t, true) });
     if (t.state === 'ignored') a.push({ label: 'Bring back', onPress: () => void doBringBack(t) });
     if (siteUrl && (t.state === 'created' || t.state === 'submitted')) {
       const open = t.createdDocs.filter((d) => d.docstatus !== -1);
@@ -136,7 +173,7 @@ export default function Activity() {
         key={t.id}
         testID={`activity-row-${t.id}`}
         title={titleOf(t)}
-        amount={signedAmount(t, formatInr)}
+        amount={signedAmount(t, formatMoney)}
         date={t.occurredOn}
         docs={docLines(t.createdDocs)}
         status={{ label: s.label, tone: s.tone }}
@@ -172,9 +209,3 @@ export default function Activity() {
     </Screen>
   );
 }
-
-// Put back in Inbox for entries whose documents are all recorded as gone needs no ERPNext call.
-const NO_ERP = {
-  getDocStatuses: async () => { throw new Error('offline'); },
-  deleteDraft: async () => { throw new Error('offline'); },
-} as unknown as Parameters<typeof undoTxn>[1]['erp'];

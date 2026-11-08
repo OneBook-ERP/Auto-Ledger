@@ -10,7 +10,7 @@ export { ChoiceRow } from './ChoiceRow';
 export { EmptyState } from './EmptyState';
 export { Money } from './Money';
 export { Card } from './Card';
-export { formatInr } from './format';
+export { formatInr, formatMoney } from './format';
 export { StatusChip } from './StatusChip';
 export type { StatusTone } from './StatusChip';
 export { SectionHeader } from './SectionHeader';

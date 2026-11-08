@@ -1,4 +1,4 @@
-import { canPutBack, canUndo, docUrl, statusOf } from './activityModel';
+import { canPutBack, canUndo, confirmText, docUrl, removalPlan, statusOf, KEEP_ADOPTED_MESSAGE, UNDO_CONFIRM_MESSAGE } from './activityModel';
 import type { PendingTxn } from '../core/types';
 
 const t = (docstatuses: number[], state: PendingTxn['state'] = 'created') =>
@@ -21,4 +21,21 @@ it('Undo only for all-draft; put back only for cancelled/missing without a submi
   expect(canPutBack(t([-1, 0]))).toBe(true);
   expect(canPutBack(t([2, 1]))).toBe(false);
   expect(canPutBack(t([0]))).toBe(false);
+});
+
+it('a mix of submitted and cancelled is "Partly submitted" with no put-back', () => {
+  expect(statusOf(t([1, 2])).label).toBe('Partly submitted');
+  expect(statusOf(t([1, -1])).label).toBe('Partly submitted');
+  expect(canPutBack(t([1, 2]))).toBe(false);
+});
+it('removalPlan separates deletable drafts from adopted and shared ones, and the dialog says so', () => {
+  const mine = { ...t([0, 0]), id: 'a', createdDocs: [{ doctype: 'Payment Entry', name: 'P1', docstatus: 0 }, { doctype: 'Payment Entry', name: 'P2', docstatus: 0, adopted: true }, { doctype: 'Payment Entry', name: 'P3', docstatus: 0 }] } as PendingTxn;
+  const other = { ...t([0]), id: 'b', createdDocs: [{ doctype: 'Payment Entry', name: 'P3', docstatus: 0 }] } as PendingTxn;
+  const plan = removalPlan(mine, [mine, other]);
+  expect(plan.remove.map((d) => d.name)).toEqual(['P1']);
+  expect(plan.keep.map((d) => d.name)).toEqual(['P2', 'P3']);
+  expect(confirmText(plan)!.message).toContain(KEEP_ADOPTED_MESSAGE);
+  expect(confirmText({ remove: plan.remove, keep: [] })!.message).toBe(UNDO_CONFIRM_MESSAGE);
+  expect(confirmText({ remove: [], keep: [plan.keep[0]] })!.message).toBe(KEEP_ADOPTED_MESSAGE);
+  expect(confirmText({ remove: [], keep: [] })).toBeNull();
 });
