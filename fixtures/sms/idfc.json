@@ -1,0 +1,1198 @@
+[
+  {
+    "id": "idfc-001",
+    "sender": "JM-IDFCFB-S",
+    "body": "Your A/C XXXXX996507 is credited with INR 12,932.00 on 02/09/26 09:13. Your new balance is INR 5,12,932.76. Team IDFC FIRST Bank",
+    "receivedAt": 1788320590821,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_credit",
+        "direction": "in",
+        "amountMinor": 1293200,
+        "currency": "INR",
+        "occurredOn": "2026-09-02",
+        "occurredTime": "09:13",
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": null,
+        "utr": null,
+        "merchant": null,
+        "balanceMinor": 51293276
+      }
+    }
+  },
+  {
+    "id": "idfc-002",
+    "sender": "VD-IDFCFB-S",
+    "body": "Your A/C XXXXX996507 is credited with INR 2,742.00 on 26/08/26 11:41. Your new balance is INR 5,90,258.76. Team IDFC FIRST Bank",
+    "receivedAt": 1787724699507,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_credit",
+        "direction": "in",
+        "amountMinor": 274200,
+        "currency": "INR",
+        "occurredOn": "2026-08-26",
+        "occurredTime": "11:41",
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": null,
+        "utr": null,
+        "merchant": null,
+        "balanceMinor": 59025876
+      }
+    }
+  },
+  {
+    "id": "idfc-003",
+    "sender": "AX-IDFCFB-S",
+    "body": "Your A/C XXXXX996507 is debited by INR 1,30,000.00 on 04/11/26 12:35. New Bal :INR 38,222.72. Call us on 1800 10 888 for dispute. Team IDFC FIRST Bank",
+    "receivedAt": 1793776305678,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_debit",
+        "direction": "out",
+        "amountMinor": 13000000,
+        "currency": "INR",
+        "occurredOn": "2026-11-04",
+        "occurredTime": "12:35",
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": null,
+        "utr": null,
+        "merchant": null,
+        "balanceMinor": 3822272
+      }
+    }
+  },
+  {
+    "id": "idfc-004",
+    "sender": "JM-IDFCFB-S",
+    "body": "Your A/C XXXXX996507 is debited by INR 94,226.57 on 07/10/26 11:10. New Bal :INR 24,105.72. Call us on 1800 10 888 for dispute. Team IDFC FIRST Bank",
+    "receivedAt": 1791351621320,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_debit",
+        "direction": "out",
+        "amountMinor": 9422657,
+        "currency": "INR",
+        "occurredOn": "2026-10-07",
+        "occurredTime": "11:10",
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": null,
+        "utr": null,
+        "merchant": null,
+        "balanceMinor": 2410572
+      }
+    }
+  },
+  {
+    "id": "idfc-005",
+    "sender": "CP-IDFCFB-S",
+    "body": "Your A/C XXXXX996507 is debited by INR 2,903.00 on 11/02/26 16:39. New Bal :INR 2,89,876.00. Call us on 1800 10 888 for dispute. Team IDFC FIRST Bank",
+    "receivedAt": 1770808166326,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_debit",
+        "direction": "out",
+        "amountMinor": 290300,
+        "currency": "INR",
+        "occurredOn": "2026-02-11",
+        "occurredTime": "16:39",
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": null,
+        "utr": null,
+        "merchant": null,
+        "balanceMinor": 28987600
+      }
+    }
+  },
+  {
+    "id": "idfc-006",
+    "sender": "CP-IDFCFB-S",
+    "body": "Your A/c XXXXXXX6507 has been credited with Rs. 30,000.00 on 05-11-2026. Info: NEFT/SBIN32974781/COMPANY_11.\nNew bal: Rs. 68,222.72. Team IDFC FIRST Bank",
+    "receivedAt": 1793869554977,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_credit",
+        "direction": "in",
+        "amountMinor": 3000000,
+        "currency": "INR",
+        "occurredOn": "2026-11-05",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": "COMPANY_11",
+        "utr": "SBIN32974781",
+        "merchant": null,
+        "balanceMinor": 6822272
+      }
+    }
+  },
+  {
+    "id": "idfc-007",
+    "sender": "JD-IDFCFB-S",
+    "body": "Your A/c XXXXXXX6507 has been credited with Rs. 50,000.00 on 31-10-2026. Info: NEFT/HDFCH37448326/COMPANY_16.\nNew bal: Rs. 91,835.72. Team IDFC FIRST Bank",
+    "receivedAt": 1793451981362,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_credit",
+        "direction": "in",
+        "amountMinor": 5000000,
+        "currency": "INR",
+        "occurredOn": "2026-10-31",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": "COMPANY_16",
+        "utr": "HDFCH37448326",
+        "merchant": null,
+        "balanceMinor": 9183572
+      }
+    }
+  },
+  {
+    "id": "idfc-008",
+    "sender": "VD-IDFCFB-S",
+    "body": "Your A/c XXXXXXX6507 has been credited with Rs. 115,000.00 on 25-08-2026. Info: NEFT/IN69270041/COMPANY_79.\nNew bal: Rs. 590,258.76. Team IDFC FIRST Bank",
+    "receivedAt": 1787650489869,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_credit",
+        "direction": "in",
+        "amountMinor": 11500000,
+        "currency": "INR",
+        "occurredOn": "2026-08-25",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": "COMPANY_79",
+        "utr": "IN69270041",
+        "merchant": null,
+        "balanceMinor": 59025876
+      }
+    }
+  },
+  {
+    "id": "idfc-009",
+    "sender": "AD-IDFCFB-S",
+    "body": "Your A/c XXXXXXX6507 has been credited with Rs. 100,000.00 on 07-12-2025. Info: NEFT/IN46523100/COMPANY_88.\nNew bal: Rs. 156,265.00. Team IDFC FIRST Bank",
+    "receivedAt": 1765105308258,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_credit",
+        "direction": "in",
+        "amountMinor": 10000000,
+        "currency": "INR",
+        "occurredOn": "2025-12-07",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": "COMPANY_88",
+        "utr": "IN46523100",
+        "merchant": null,
+        "balanceMinor": 15626500
+      }
+    }
+  },
+  {
+    "id": "idfc-010",
+    "sender": "AD-IDFCFB-S",
+    "body": "Your A/c XXXXXXX6507 has been debited by Rs. 30,000.00 on 19-10-2026. Info: NEFT/ IDFB6292M4509651/PERSON_13.\nNew bal: Rs. 41,835.72. Team IDFC FIRST Bank",
+    "receivedAt": 1792419640401,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_debit",
+        "direction": "out",
+        "amountMinor": 3000000,
+        "currency": "INR",
+        "occurredOn": "2026-10-19",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": "PERSON_13",
+        "utr": "IDFB6292M4509651",
+        "merchant": null,
+        "balanceMinor": 4183572
+      }
+    }
+  },
+  {
+    "id": "idfc-011",
+    "sender": "AD-IDFCFB-S",
+    "body": "Your A/c XXXXXXX6507 has been debited by Rs. 6,000.00 on 14-09-2026. Info: NEFT/ IDFB6257M1936427/PERSON_13.\nNew bal: Rs. 248,558.29. Team IDFC FIRST Bank",
+    "receivedAt": 1789386089991,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_debit",
+        "direction": "out",
+        "amountMinor": 600000,
+        "currency": "INR",
+        "occurredOn": "2026-09-14",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": "PERSON_13",
+        "utr": "IDFB6257M1936427",
+        "merchant": null,
+        "balanceMinor": 24855829
+      }
+    }
+  },
+  {
+    "id": "idfc-012",
+    "sender": "JD-IDFCFB-S",
+    "body": "Your A/c XXXXXXX6507 has been debited by Rs. 75,000.00 on 06-10-2026. Info: NEFT/ IDFB6279M9812109/PERSON_13.\nNew bal: Rs. 48,332.29. Team IDFC FIRST Bank",
+    "receivedAt": 1791255498889,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_debit",
+        "direction": "out",
+        "amountMinor": 7500000,
+        "currency": "INR",
+        "occurredOn": "2026-10-06",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": "PERSON_13",
+        "utr": "IDFB6279M9812109",
+        "merchant": null,
+        "balanceMinor": 4833229
+      }
+    }
+  },
+  {
+    "id": "idfc-013",
+    "sender": "VA-IDFCFB-S",
+    "body": "Your A/c XXXXXXX6507 has been debited by Rs. 590.00 on 20-07-2026. Info: NEFT/ IDFB6201M7795115/PERSON_22.\nNew bal: Rs. 82,143.48. Team IDFC FIRST Bank",
+    "receivedAt": 1784533331553,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_debit",
+        "direction": "out",
+        "amountMinor": 59000,
+        "currency": "INR",
+        "occurredOn": "2026-07-20",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": "PERSON_22",
+        "utr": "IDFB6201M7795115",
+        "merchant": null,
+        "balanceMinor": 8214348
+      }
+    }
+  },
+  {
+    "id": "idfc-014",
+    "sender": "AD-IDFCFB-S",
+    "body": "IDFC FIRST Bank A/c XX6507 debited with Rs 24,042.00 on 05/12/25 via NEFT/IDFBH77712798. New bal Rs.1,68,765.00. To raise Dispute, call 1800 10 888",
+    "receivedAt": 1764928459987,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_debit",
+        "direction": "out",
+        "amountMinor": 2404200,
+        "currency": "INR",
+        "occurredOn": "2025-12-05",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": null,
+        "utr": "IDFBH77712798",
+        "merchant": null,
+        "balanceMinor": 16876500
+      }
+    }
+  },
+  {
+    "id": "idfc-015",
+    "sender": "AD-IDFCFB-S",
+    "body": "IDFC FIRST Bank A/c XX6507 debited with Rs 75,000.00 on 05/12/25 via NEFT/IDFBH40650306. New bal Rs.73,765.00. To raise Dispute, call 1800 10 888",
+    "receivedAt": 1764928463100,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_debit",
+        "direction": "out",
+        "amountMinor": 7500000,
+        "currency": "INR",
+        "occurredOn": "2025-12-05",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": "6507",
+        "counterparty": null,
+        "utr": "IDFBH40650306",
+        "merchant": null,
+        "balanceMinor": 7376500
+      }
+    }
+  },
+  {
+    "id": "idfc-016",
+    "sender": "JX-IDFCFB-S",
+    "body": "Your a/c ending XXXXXXXX507 is debited by Rs. 10000.00 on 07-Nov-26 and a/c ending XXXXXXXXX958 credited (IMPS Ref no 12466466 ). Team IDFC FIRST Bank",
+    "receivedAt": 1794036534646,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_debit",
+        "direction": "out",
+        "amountMinor": 1000000,
+        "currency": "INR",
+        "occurredOn": "2026-11-07",
+        "occurredTime": null,
+        "accountType": "bank",
+        "counterparty": null,
+        "utr": "12466466",
+        "merchant": null,
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-017",
+    "sender": "JD-IDFCFB-S",
+    "body": "Your a/c no. XXXXXXXX507 is credited by Rs. 300000.00 on 01-Nov-26 by a/c linked to mobile XXXXXXXXX612 (IMPS Ref no 40273725 ). Team IDFC FIRST Bank",
+    "receivedAt": 1793536733926,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "ca_credit",
+        "direction": "in",
+        "amountMinor": 30000000,
+        "currency": "INR",
+        "occurredOn": "2026-11-01",
+        "occurredTime": null,
+        "accountType": "bank",
+        "counterparty": null,
+        "utr": "40273725",
+        "merchant": null,
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-018",
+    "sender": "JD-IDFCFB-S",
+    "body": "Your beneficiary PERSON_13 has received Rs. 30,000.00 transferred via NEFT UTR IDFB6292M4509651.\nTeam IDFC First Bank.",
+    "receivedAt": 1792420491114,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "neft_confirm",
+        "direction": "out",
+        "amountMinor": 3000000,
+        "currency": "INR",
+        "occurredOn": "2026-10-19",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": null,
+        "counterparty": "PERSON_13",
+        "utr": "IDFB6292M4509651",
+        "merchant": null,
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-019",
+    "sender": "JM-IDFCFB-S",
+    "body": "Your beneficiary PERSON_13 has received Rs. 75,000.00 transferred via NEFT UTR IDFB6279M9812109.\nTeam IDFC First Bank.",
+    "receivedAt": 1791256030343,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "neft_confirm",
+        "direction": "out",
+        "amountMinor": 7500000,
+        "currency": "INR",
+        "occurredOn": "2026-10-06",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": null,
+        "counterparty": "PERSON_13",
+        "utr": "IDFB6279M9812109",
+        "merchant": null,
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-020",
+    "sender": "AX-IDFCFB-S",
+    "body": "Your beneficiary PERSON_22 has received Rs. 590.00 transferred via NEFT UTR IDFB6201M7795115.\nTeam IDFC First Bank.",
+    "receivedAt": 1784534865522,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "neft_confirm",
+        "direction": "out",
+        "amountMinor": 59000,
+        "currency": "INR",
+        "occurredOn": "2026-07-20",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": null,
+        "counterparty": "PERSON_22",
+        "utr": "IDFB6201M7795115",
+        "merchant": null,
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-021",
+    "sender": "AX-IDFCFB-S",
+    "body": "Your beneficiary PERSON_12 has received Rs. 18,000.00 transferred via NEFT UTR IDFB80172137.\nTeam IDFC First Bank.",
+    "receivedAt": 1772524724280,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "neft_confirm",
+        "direction": "out",
+        "amountMinor": 1800000,
+        "currency": "INR",
+        "occurredOn": "2026-03-03",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": null,
+        "counterparty": "PERSON_12",
+        "utr": "IDFB80172137",
+        "merchant": null,
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-022",
+    "sender": "VA-IDFCFB-S",
+    "body": "Your beneficiary PERSON_8 has received Rs. 2,194.00 transferred via NEFT UTR IDFB6310M1780042.\nTeam IDFC First Bank.",
+    "receivedAt": 1793937837969,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "neft_confirm",
+        "direction": "out",
+        "amountMinor": 219400,
+        "currency": "INR",
+        "occurredOn": "2026-11-06",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": null,
+        "counterparty": "PERSON_8",
+        "utr": "IDFB6310M1780042",
+        "merchant": null,
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-023",
+    "sender": "AD-IDFCFB-S",
+    "body": "Dear Customer, Your beneficiary has received Rs 24,042.00 transferred via NEFT IDFBH77712798. Team IDFC First Bank.",
+    "receivedAt": 1764930364748,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "neft_confirm",
+        "direction": "out",
+        "amountMinor": 2404200,
+        "currency": "INR",
+        "occurredOn": "2025-12-05",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": null,
+        "counterparty": null,
+        "utr": "IDFBH77712798",
+        "merchant": null,
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-024",
+    "sender": "AD-IDFCFB-S",
+    "body": "Dear Customer, Your beneficiary has received Rs 75,000.00 transferred via NEFT IDFBH40650306. Team IDFC First Bank.",
+    "receivedAt": 1764929935879,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "neft_confirm",
+        "direction": "out",
+        "amountMinor": 7500000,
+        "currency": "INR",
+        "occurredOn": "2025-12-05",
+        "occurredTime": null,
+        "accountType": "bank",
+        "accountLast4": null,
+        "counterparty": null,
+        "utr": "IDFBH40650306",
+        "merchant": null,
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-025",
+    "sender": "JM-IDFCFB-S",
+    "body": "Delicious Purchase! INR 195.00 spent on your IDFC FIRST Bank Credit Card ending XX8129 at COMPANY_2 on 08 NOV 2026 at 10:09 AM Avbl Limit: INR 89184.86 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 8129 to 5676732",
+    "receivedAt": 1794112757985,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 19500,
+        "currency": "INR",
+        "occurredOn": "2026-11-08",
+        "occurredTime": "10:09",
+        "accountType": "card",
+        "accountLast4": "8129",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "COMPANY_2",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-026",
+    "sender": "JM-IDFCFB-S",
+    "body": "Fueled Up! INR 836.58 spent on your IDFC FIRST Bank Credit Card ending XX8129 at COMPANY_1 on 08 NOV 2026 at 02:13 PM Avbl Limit: INR 88348.28 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 8129 to 5676732",
+    "receivedAt": 1794127397092,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 83658,
+        "currency": "INR",
+        "occurredOn": "2026-11-08",
+        "occurredTime": "14:13",
+        "accountType": "card",
+        "accountLast4": "8129",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "COMPANY_1",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-027",
+    "sender": "JM-IDFCFB-S",
+    "body": "Fueled Up! INR 741.94 spent on your IDFC FIRST Bank Credit Card ending XX8129 at COMPANY_18 on 28 OCT 2026 at 04:09 PM Avbl Limit: INR -22129.3 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 8129 to 5676732",
+    "receivedAt": 1793184005890,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 74194,
+        "currency": "INR",
+        "occurredOn": "2026-10-28",
+        "occurredTime": "16:09",
+        "accountType": "card",
+        "accountLast4": "8129",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "COMPANY_18",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-028",
+    "sender": "JM-IDFCFB-S",
+    "body": "All Stocked Up! INR 60.00 spent on your IDFC FIRST Bank Credit Card ending XX8129 at COMPANY_33 on 04 OCT 2026 at 07:48 PM Avbl Limit: INR 75539.33 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 8129 to 5676732",
+    "receivedAt": 1791123533530,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 6000,
+        "currency": "INR",
+        "occurredOn": "2026-10-04",
+        "occurredTime": "19:48",
+        "accountType": "card",
+        "accountLast4": "8129",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "COMPANY_33",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-029",
+    "sender": "VM-IDFCFB-S",
+    "body": "Time to Plug in! INR 2500.00 spent on your IDFC FIRST Bank Credit Card ending XX8129 at COMPANY_27 on 16 APR 2026 at 10:51 AM Avbl Limit: INR 207391.85 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 8129 to 5676732",
+    "receivedAt": 1776316908588,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 250000,
+        "currency": "INR",
+        "occurredOn": "2026-04-16",
+        "occurredTime": "10:51",
+        "accountType": "card",
+        "accountLast4": "8129",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "COMPANY_27",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-030",
+    "sender": "VA-IDFCFB-S",
+    "body": "Happy Shopping! INR 175.00 spent on your IDFC FIRST Bank Credit Card ending XX8129 at COMPANY_56 on 12 SEP 2026 at 06:28 PM Avbl Limit: INR 180436.66 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 8129 to 5676732",
+    "receivedAt": 1789217956635,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 17500,
+        "currency": "INR",
+        "occurredOn": "2026-09-12",
+        "occurredTime": "18:28",
+        "accountType": "card",
+        "accountLast4": "8129",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "COMPANY_56",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-031",
+    "sender": "CP-IDFCFB-S",
+    "body": "Hope you had a pleasant stay! INR 111.00 spent on your IDFC FIRST Bank Credit Card ending XX8129 at COMPANY_7 on 06 NOV 2026 at 09:37 AM Avbl Limit: INR 93359.47 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 8129 to 5676732",
+    "receivedAt": 1793938083417,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 11100,
+        "currency": "INR",
+        "occurredOn": "2026-11-06",
+        "occurredTime": "09:37",
+        "accountType": "card",
+        "accountLast4": "8129",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "COMPANY_7",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-032",
+    "sender": "VM-IDFCFB-S",
+    "body": "Transaction Successful! INR 230.00 spent on your IDFC FIRST Bank Credit Card ending XX8129 at COMPANY_10 on 25 AUG 2026 at 06:57 PM Avbl Limit: INR 195994.12 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 8129 to 5676732",
+    "receivedAt": 1787664460636,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 23000,
+        "currency": "INR",
+        "occurredOn": "2026-08-25",
+        "occurredTime": "18:57",
+        "accountType": "card",
+        "accountLast4": "8129",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "COMPANY_10",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-033",
+    "sender": "JM-IDFCFB-S",
+    "body": "Transaction Successful! INR 3.00 spent on your IDFC FIRST Bank Credit Card ending XX3455 at Facebook India Online on 03 SEP 2026 at 12:44 AM Avbl Limit: INR 214080.05 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 3455 to 5676732",
+    "receivedAt": 1788376482521,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 300,
+        "currency": "INR",
+        "occurredOn": "2026-09-03",
+        "occurredTime": "00:44",
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "Facebook India Online",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-034",
+    "sender": "CP-IDFCFB-S",
+    "body": "Transaction Successful! INR 10333.79 spent on your IDFC FIRST Bank Credit Card ending XX3455 at GOOGLESERVIS on 04 NOV 2026 at 10:57 PM Avbl Limit: INR 94552.78 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 3455 to 5676732",
+    "receivedAt": 1793813285414,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 1033379,
+        "currency": "INR",
+        "occurredOn": "2026-11-04",
+        "occurredTime": "22:57",
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "GOOGLESERVIS",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-035",
+    "sender": "JX-IDFCFB-S",
+    "body": "Transaction Successful! INR 2240.71 spent on your IDFC FIRST Bank Credit Card ending XX3455 at FACEBOOK SI on 06 NOV 2026 at 10:43 PM Avbl Limit: INR 89891.66 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 3455 to 5676732",
+    "receivedAt": 1793985292268,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 224071,
+        "currency": "INR",
+        "occurredOn": "2026-11-06",
+        "occurredTime": "22:43",
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "FACEBOOK SI",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-036",
+    "sender": "VA-IDFCFB-S",
+    "body": "Transaction Successful! INR 2258.53 spent on your IDFC FIRST Bank Credit Card ending XX3455 at AMAZON WEBSERVICES C on 04 NOV 2026 at 02:57 PM Avbl Limit: INR 105025.49 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 3455 to 5676732",
+    "receivedAt": 1793784496632,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 225853,
+        "currency": "INR",
+        "occurredOn": "2026-11-04",
+        "occurredTime": "14:57",
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "AMAZON WEBSERVICES C",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-037",
+    "sender": "CP-IDFCFB-S",
+    "body": "Transaction Successful! INR 14987.99 spent on your IDFC FIRST Bank Credit Card ending XX3455 at IND*LinkedIn (PGSI) on 28 OCT 2026 at 02:47 PM Avbl Limit: INR -21027.36 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 3455 to 5676732",
+    "receivedAt": 1793179140117,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 1498799,
+        "currency": "INR",
+        "occurredOn": "2026-10-28",
+        "occurredTime": "14:47",
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "IND*LinkedIn (PGSI)",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-038",
+    "sender": "JD-IDFCFB-S",
+    "body": "Transaction Successful! INR 650.00 spent on your IDFC FIRST Bank Credit Card ending XX3455 at CANVA* I04847-57642093 on 11 APR 2026 at 05:26 PM Avbl Limit: INR 209903.28 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 3455 to 5676732",
+    "receivedAt": 1775908608054,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 65000,
+        "currency": "INR",
+        "occurredOn": "2026-04-11",
+        "occurredTime": "17:26",
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "CANVA* I04847-57642093",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-039",
+    "sender": "BP-IDFCFB-S",
+    "body": "Transaction Successful! USD 94.36 spent on your IDFC FIRST Bank Credit Card ending XX3455 at ANTHROPIC* CLAUDE SUB on 08 OCT 2026 at 10:15 AM Avbl Limit: INR 144723.13 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 3455 to 5676732",
+    "receivedAt": 1791434734747,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 9436,
+        "currency": "USD",
+        "occurredOn": "2026-10-08",
+        "occurredTime": "10:15",
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "ANTHROPIC* CLAUDE SUB",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-040",
+    "sender": "JM-IDFCFB-S",
+    "body": "Transaction Successful! USD 100.00 spent on your IDFC FIRST Bank Credit Card ending XX3455 at ANTHROPIC* CLAUDE SUB on 08 NOV 2026 at 05:41 PM Avbl Limit: INR 78948.53 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 3455 to 5676732",
+    "receivedAt": 1794139886054,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 10000,
+        "currency": "USD",
+        "occurredOn": "2026-11-08",
+        "occurredTime": "17:41",
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "ANTHROPIC* CLAUDE SUB",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-041",
+    "sender": "JM-IDFCFB-S",
+    "body": "INR 2240.71 for Facebook paid from your IDFC FIRST Bank Credit Card XX3455 on 06/11/2026 basis standing instruction (SI).\nManage SI on your card: https://idfcfr.in/IDFCFB/9ld3nx using the SiHub ID: h5C3Wa3Uj6",
+    "receivedAt": 1793985241158,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_si_paid",
+        "direction": "out",
+        "amountMinor": 224071,
+        "currency": "INR",
+        "occurredOn": "2026-11-06",
+        "occurredTime": null,
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "Facebook",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-042",
+    "sender": "AX-IDFCFB-S",
+    "body": "INR 2240.71 for Facebook will be deducted from IDFC FIRST Bank Credit Card XX3455 on 06/11/2026 basis standing instruction (SI).\nManage SI on your card: https://idfcfr.in/IDFCFB/X7UwwA using the SiHub ID: h5C3Wa3Uj6",
+    "receivedAt": 1793855630241,
+    "expected": {
+      "ok": false,
+      "reason": "si_notice"
+    }
+  },
+  {
+    "id": "idfc-043",
+    "sender": "AD-IDFCFB-S",
+    "body": "INR 10333.79 for Google Ads paid from your IDFC FIRST Bank Credit Card XX3455 on 03/11/2026 basis standing instruction (SI).\nManage SI on your card: https://idfcfr.in/IDFCFB/Mcvcja using the SiHub ID: eiNsyVBP83",
+    "receivedAt": 1793814536162,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_si_paid",
+        "direction": "out",
+        "amountMinor": 1033379,
+        "currency": "INR",
+        "occurredOn": "2026-11-03",
+        "occurredTime": null,
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "Google Ads",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-044",
+    "sender": "AX-IDFCFB-S",
+    "body": "INR 10333.79 for Google Ads will be deducted from IDFC FIRST Bank Credit Card XX3455 on 03/11/2026 basis standing instruction (SI).\nManage SI on your card: https://idfcfr.in/IDFCFB/EcF9rZ using the SiHub ID: eiNsyVBP83",
+    "receivedAt": 1793549356738,
+    "expected": {
+      "ok": false,
+      "reason": "si_notice"
+    }
+  },
+  {
+    "id": "idfc-045",
+    "sender": "VD-IDFCFB-S",
+    "body": "Transaction Successful! USD 20.00 spent on your IDFC FIRST Bank Credit Card ending XX3455 at ANTHROPIC* CLAUDE SUB on 18 AUG 2026 at 12:16 AM Avbl Limit: INR 202245.04 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 3455 to 5676732",
+    "receivedAt": 1786992405417,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_spend",
+        "direction": "out",
+        "amountMinor": 2000,
+        "currency": "USD",
+        "occurredOn": "2026-08-18",
+        "occurredTime": "00:16",
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "ANTHROPIC* CLAUDE SUB",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-046",
+    "sender": "AX-IDFCFB-S",
+    "body": "USD 20.00 for Anthropic paid from your IDFC FIRST Bank Credit Card XX3455 on 18/08/2026 basis standing instruction (SI).\nManage SI on your card: https://idfcfr.in/IDFCFB/68XTC2 using the SiHub ID: JYVGwBgNWC",
+    "receivedAt": 1786992541137,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_si_paid",
+        "direction": "out",
+        "amountMinor": 2000,
+        "currency": "USD",
+        "occurredOn": "2026-08-18",
+        "occurredTime": null,
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "Anthropic",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-047",
+    "sender": "JD-IDFCFB-S",
+    "body": "USD 20.00 for Anthropic will be deducted from IDFC FIRST Bank Credit Card XX3455 on 18/08/2026 basis standing instruction (SI).\nManage SI on your card: https://idfcfr.in/IDFCFB/CEIKLB using the SiHub ID: JYVGwBgNWC",
+    "receivedAt": 1786898517251,
+    "expected": {
+      "ok": false,
+      "reason": "si_notice"
+    }
+  },
+  {
+    "id": "idfc-048",
+    "sender": "JK-IDFCFB-S",
+    "body": "INR 1285.00 for Adobe Systems Software Ireland Ltd paid from your IDFC FIRST Bank Credit Card XX3455 on 22/08/2026 basis standing instruction (SI).\nManage SI on your card: https://idfcfr.in/IDFCFB/wUHbFY using the SiHub ID: WIpcCN15KA",
+    "receivedAt": 1787385833397,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_si_paid",
+        "direction": "out",
+        "amountMinor": 128500,
+        "currency": "INR",
+        "occurredOn": "2026-08-22",
+        "occurredTime": null,
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "Adobe Systems Software Ireland Ltd",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-049",
+    "sender": "AD-IDFCFB-S",
+    "body": "INR 908.99 for MetaPlatformsIrelandLimited paid from your IDFC FIRST Bank Credit Card XX3455 on 02/11/2026 basis standing instruction (SI).\nManage SI on your card: https://idfcfr.in/IDFCFB/QEzFMF using the SiHub ID: u3QHeadqKk",
+    "receivedAt": 1793590388093,
+    "expected": {
+      "ok": true,
+      "txn": {
+        "kind": "card_si_paid",
+        "direction": "out",
+        "amountMinor": 90899,
+        "currency": "INR",
+        "occurredOn": "2026-11-02",
+        "occurredTime": null,
+        "accountType": "card",
+        "accountLast4": "3455",
+        "counterparty": null,
+        "utr": null,
+        "merchant": "MetaPlatformsIrelandLimited",
+        "balanceMinor": null
+      }
+    }
+  },
+  {
+    "id": "idfc-050",
+    "sender": "JK-IDFCFB-S",
+    "body": "Dear Cardmember, the Standing Instruction (SI) mandate on your IDFC FIRST Bank Credit Card 3455 is now active.\nMerchant: OpenAILLC,\nMax Amt: INR 1999.00,\nFrequency: monthly,\nStart: 10/04/2026,\nEnd: 10/04/2046,\nClick here to manage your SI using Mandate ID V4GG4XisP4 https://idfcfr.in/IDFCFB/CSwbqD",
+    "receivedAt": 1775813366500,
+    "expected": {
+      "ok": false,
+      "reason": "si_notice"
+    }
+  },
+  {
+    "id": "idfc-051",
+    "sender": "JM-IDFCFB-S",
+    "body": "Dear Cardmember, you've used 80% of the limit on your IDFC FIRST Bank Credit Card XX3455. Enable overlimit here: https://idfcfr.in/IDFCFB/EnFXTt ignore if done. TCA",
+    "receivedAt": 1792481765856,
+    "expected": {
+      "ok": false,
+      "reason": "not_money"
+    }
+  },
+  {
+    "id": "idfc-052",
+    "sender": "CP-IDFCFB-S",
+    "body": "The eStatement for your IndiGo IDFC FIRST Dual credit cards-Mastercard XX3455 and RuPay XX8129 is here https://idfcfr.in/IDFCFB/z05eGa\nTo access eStatement use your date of birth in DDMM format\nPayment Due by 07-05-2026\nMin Due: INR 384.00\nTotal Due: INR 17,608.15\nClick to pay: https://idfcfr.in/IDFCFB/PkrwjC\nIDFC FIRST Bank",
+    "receivedAt": 1777021492472,
+    "expected": {
+      "ok": false,
+      "reason": "not_money"
+    }
+  },
+  {
+    "id": "idfc-053",
+    "sender": "JM-IDFCFB-S",
+    "body": "This Cyber Security Awareness Month, protect your device & finances. Install updates & download apps only from official app stores. Stay Alert! IDFC FIRST Bank",
+    "receivedAt": 1793349350995,
+    "expected": {
+      "ok": false,
+      "reason": "not_money"
+    }
+  },
+  {
+    "id": "idfc-054",
+    "sender": "AX-IDFCFB-S",
+    "body": "Dear Customer, your IDFC FIRST Bank Credit Card application is pending and will expire soon, complete it today https://idfcfr.in/IDFCFB/5ax5oS",
+    "receivedAt": 1772685958384,
+    "expected": {
+      "ok": false,
+      "reason": "not_money"
+    }
+  },
+  {
+    "id": "idfc-055",
+    "sender": "VA-IDFCFB-S",
+    "body": "Dear Sir/Ma'am, you have provided Deemed Address proof - Bank Statement for your Used Car Loan a/c 28463073 as Address Proof. As per regulatory guidelines, we request you to share updated self-attested KYC document containing the current address (i.e. either one of the following - the passport, the driving licence, proof of possession of Aadhaar number, the Voter's Identity Card issued by the Election Commission of India, job card issued by NREGA duly signed by an officer of the State Government or letter issued by the National Population Register containing details of name and address) immediately. Kindly visit the nearest branch https://idfcfr.in/IDFCFB/8fi1p7. Please ignore if KYC Document has been updated. IDFC FIRST Bank",
+    "receivedAt": 1782585538882,
+    "expected": {
+      "ok": false,
+      "reason": "not_money"
+    }
+  },
+  {
+    "id": "idfc-056",
+    "sender": "VA-IDFCFB-S",
+    "body": "Dear Cardmember, effective today, your IDFC FIRST Bank Credit Card comes with Zero Forex Markup. Effective 26 October 2026, certain features and Terms & Conditions will be revised. Click here to know more: https://idfcfr.in/IDFCFB/Q1sNCu",
+    "receivedAt": 1788960573430,
+    "expected": {
+      "ok": false,
+      "reason": "not_money"
+    }
+  },
+  {
+    "id": "idfc-057",
+    "sender": "VA-IDFCFB-S",
+    "body": "Thank you for payment of INR 1,30,000.00 towards your IndiGo MasterCard Credit Card XX3455 on 04 Nov 2026. IDFC FIRST Bank",
+    "receivedAt": 1793775953039,
+    "expected": {
+      "ok": false,
+      "reason": "not_money"
+    }
+  },
+  {
+    "id": "synthetic-otp",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793880000000,
+    "body": "123456 is your OTP for IDFC FIRST Bank transaction of INR 500.00. Do not share it with anyone. Valid for 10 minutes.",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
+  },
+  {
+    "id": "synthetic-other-bank-1",
+    "sender": "AX-HDFCBK-S",
+    "receivedAt": 1793880600000,
+    "body": "Rs 1,250.00 debited from HDFC Bank A/c XX1234 on 08-11-26 to VPA shop@okhdfcbank. Ref 4821. Not you? Call 1800 202 6161",
+    "expected": {
+      "ok": false,
+      "reason": "unknown_template"
+    }
+  },
+  {
+    "id": "synthetic-other-bank-2",
+    "sender": "AX-HDFCBK-S",
+    "receivedAt": 1793881200000,
+    "body": "Rs.2,500.00 credited to HDFC Bank A/c XX1234 on 08-11-26 by NEFT. Avl bal Rs.10,000.00",
+    "expected": {
+      "ok": false,
+      "reason": "unknown_template"
+    }
+  }
+]
