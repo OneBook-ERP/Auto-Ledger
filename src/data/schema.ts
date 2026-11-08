@@ -7,7 +7,7 @@ export interface SqlDriver {
 }
 
 const V1: string[] = [
-  `CREATE TABLE pending_txn (
+  `CREATE TABLE IF NOT EXISTS pending_txn (
     id TEXT PRIMARY KEY NOT NULL,
     raw_hash TEXT NOT NULL UNIQUE,
     state TEXT NOT NULL,
@@ -29,7 +29,7 @@ const V1: string[] = [
     sender TEXT NOT NULL,
     received_at INTEGER NOT NULL
   )`,
-  `CREATE TABLE account_mapping (
+  `CREATE TABLE IF NOT EXISTS account_mapping (
     bank_account TEXT PRIMARY KEY NOT NULL,
     gl_account TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -37,7 +37,7 @@ const V1: string[] = [
     last4 TEXT NOT NULL DEFAULT '[]',
     mode_of_payment TEXT NOT NULL
   )`,
-  `CREATE TABLE rule (
+  `CREATE TABLE IF NOT EXISTS rule (
     match_key TEXT PRIMARY KEY NOT NULL,
     action TEXT NOT NULL,
     party TEXT,
@@ -45,7 +45,7 @@ const V1: string[] = [
     hits INTEGER NOT NULL DEFAULT 0,
     last_used INTEGER NOT NULL DEFAULT 0
   )`,
-  `CREATE TABLE outbox (
+  `CREATE TABLE IF NOT EXISTS outbox (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     id TEXT NOT NULL UNIQUE,
     txn_id TEXT NOT NULL,
@@ -54,11 +54,11 @@ const V1: string[] = [
     attempts INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL
   )`,
-  `CREATE TABLE settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)`,
 ];
 
 const V2: string[] = [
-  `CREATE INDEX idx_pending_state ON pending_txn (state)`,
+  `CREATE INDEX IF NOT EXISTS idx_pending_state ON pending_txn (state)`,
 ];
 
 // MIGRATIONS[i] upgrades schema version i to i+1.
@@ -72,8 +72,16 @@ export async function migrate(d: SqlDriver, target: number = SCHEMA_VERSION): Pr
   let current = rows.length ? rows[0].version : 0;
   if (!rows.length) await d.exec('INSERT INTO schema_version (version) VALUES (0)');
   while (current < target) {
-    for (const stmt of MIGRATIONS[current]) await d.exec(stmt);
+    // Each step (its DDL and the version bump) is atomic; SQLite DDL is transactional.
+    await d.exec('BEGIN');
+    try {
+      for (const stmt of MIGRATIONS[current]) await d.exec(stmt);
+      await d.exec('UPDATE schema_version SET version = ?', [current + 1]);
+      await d.exec('COMMIT');
+    } catch (e) {
+      try { await d.exec('ROLLBACK'); } catch { /* already rolled back */ }
+      throw e;
+    }
     current += 1;
-    await d.exec('UPDATE schema_version SET version = ?', [current]);
   }
 }

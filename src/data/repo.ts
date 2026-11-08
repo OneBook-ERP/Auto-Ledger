@@ -5,9 +5,10 @@ export type { SqlDriver } from './schema';
 
 export interface Repo {
   listPending(state?: PendingTxn['state']): Promise<PendingTxn[]>;
-  /** Idempotent on rawHash: if a row with the same rawHash exists (even under a
-   *  different id) that row is UPDATED in place and keeps its original id; no
-   *  second row is created. Otherwise upserts by id. */
+  /** Same id: the row is replaced (normal update). Different id but an existing
+   *  rawHash: the existing row is left completely untouched (re-delivery of an
+   *  SMS must not reset state/createdDocs). Single statement, so concurrent
+   *  callers cannot hit a UNIQUE violation. */
   upsertPending(t: PendingTxn): Promise<void>;
   getPending(id: string): Promise<PendingTxn | null>;
   saveMapping(m: AccountMapping): Promise<void>;
@@ -31,7 +32,7 @@ type PendingRow = {
 };
 
 const toPending = (r: PendingRow): PendingTxn => ({
-  id: r.id, mergedCount: r.merged_count, state: r.state, createdDocs: JSON.parse(r.created_docs),
+  id: r.id, mergedCount: r.merged_count, state: r.state, createdDocs: safeParse(r.created_docs, []),
   error: r.error, kind: r.kind, direction: r.direction, amountMinor: r.amount_minor,
   currency: r.currency, occurredOn: r.occurred_on, occurredTime: r.occurred_time,
   accountType: r.account_type, accountLast4: r.account_last4, counterparty: r.counterparty,
@@ -42,6 +43,11 @@ const toPending = (r: PendingRow): PendingTxn => ({
 const PENDING_COLS = `id, raw_hash, state, merged_count, created_docs, error, kind, direction,
   amount_minor, currency, occurred_on, occurred_time, account_type, account_last4, counterparty,
   utr, merchant, balance_minor, sender, received_at`;
+
+const FAIL = Symbol('parse-fail');
+function safeParse<T>(s: string, fallback: T): T {
+  try { return JSON.parse(s) as T; } catch { return fallback; }
+}
 
 export async function createRepo(d: SqlDriver): Promise<Repo> {
   await migrate(d);
@@ -54,8 +60,6 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
       return rows.map(toPending);
     },
     async upsertPending(t) {
-      const existing = await d.all<{ id: string }>('SELECT id FROM pending_txn WHERE raw_hash = ?', [t.rawHash]);
-      const id = existing.length ? existing[0].id : t.id;
       await d.exec(
         `INSERT INTO pending_txn (${PENDING_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(id) DO UPDATE SET raw_hash=excluded.raw_hash, state=excluded.state,
@@ -64,8 +68,9 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
            currency=excluded.currency, occurred_on=excluded.occurred_on, occurred_time=excluded.occurred_time,
            account_type=excluded.account_type, account_last4=excluded.account_last4,
            counterparty=excluded.counterparty, utr=excluded.utr, merchant=excluded.merchant,
-           balance_minor=excluded.balance_minor, sender=excluded.sender, received_at=excluded.received_at`,
-        [id, t.rawHash, t.state, t.mergedCount, JSON.stringify(t.createdDocs), t.error, t.kind, t.direction,
+           balance_minor=excluded.balance_minor, sender=excluded.sender, received_at=excluded.received_at
+         ON CONFLICT(raw_hash) DO NOTHING`,
+        [t.id, t.rawHash, t.state, t.mergedCount, JSON.stringify(t.createdDocs), t.error, t.kind, t.direction,
           t.amountMinor, t.currency, t.occurredOn, t.occurredTime, t.accountType, t.accountLast4,
           t.counterparty, t.utr, t.merchant, t.balanceMinor, t.sender, t.receivedAt],
       );
@@ -88,7 +93,7 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
         'SELECT * FROM account_mapping ORDER BY bank_account');
       return rows.map((r) => ({
         bankAccount: r.bank_account, glAccount: r.gl_account, kind: r.kind,
-        senderIds: JSON.parse(r.sender_ids), last4: JSON.parse(r.last4), modeOfPayment: r.mode_of_payment,
+        senderIds: safeParse(r.sender_ids, []), last4: safeParse(r.last4, []), modeOfPayment: r.mode_of_payment,
       }));
     },
     async saveRule(r) {
@@ -104,7 +109,8 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
         'SELECT * FROM rule ORDER BY match_key');
       return rows.map((r) => {
         const rule: Rule = { matchKey: r.match_key, action: r.action, hits: r.hits, lastUsed: r.last_used };
-        if (r.party) rule.party = JSON.parse(r.party);
+        const party = r.party ? safeParse<Rule['party'] | null>(r.party, null) : null;
+        if (party) rule.party = party;
         if (r.account !== null) rule.account = r.account;
         return rule;
       });
@@ -116,11 +122,19 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
       );
     },
     async nextOutbox() {
-      const rows = await d.all<{ id: string; txn_id: string; plan: string; progress: string; attempts: number; status: OutboxOp['status'] }>(
-        `SELECT id, txn_id, plan, progress, attempts, status FROM outbox WHERE status = 'pending' ORDER BY seq LIMIT 1`);
-      if (!rows.length) return null;
-      const r = rows[0];
-      return { id: r.id, txnId: r.txn_id, plan: JSON.parse(r.plan), progress: JSON.parse(r.progress), attempts: r.attempts, status: r.status };
+      for (;;) {
+        const rows = await d.all<{ id: string; txn_id: string; plan: string; progress: string; attempts: number; status: OutboxOp['status'] }>(
+          `SELECT id, txn_id, plan, progress, attempts, status FROM outbox WHERE status = 'pending' ORDER BY seq LIMIT 1`);
+        if (!rows.length) return null;
+        const r = rows[0];
+        const plan = safeParse<OutboxOp['plan'] | typeof FAIL>(r.plan, FAIL);
+        const progress = safeParse<OutboxOp['progress'] | typeof FAIL>(r.progress, FAIL);
+        if (plan === FAIL || progress === FAIL || plan === null || progress === null) {
+          await d.exec(`UPDATE outbox SET status = 'failed' WHERE id = ?`, [r.id]);
+          continue;
+        }
+        return { id: r.id, txnId: r.txn_id, plan, progress, attempts: r.attempts, status: r.status };
+      }
     },
     async markOutbox(id, patch) {
       const sets: string[] = []; const params: unknown[] = [];
