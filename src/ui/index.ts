@@ -11,3 +11,8 @@ export { EmptyState } from './EmptyState';
 export { Money } from './Money';
 export { Card } from './Card';
 export { formatInr } from './format';
+export { StatusChip } from './StatusChip';
+export type { StatusTone } from './StatusChip';
+export { SectionHeader } from './SectionHeader';
+export { ActivityRow } from './ActivityRow';
+export type { ActivityAction, ActivityRowProps } from './ActivityRow';

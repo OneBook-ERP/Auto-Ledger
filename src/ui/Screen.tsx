@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { KeyboardAvoidingView, ScrollView, Text, View } from 'react-native';
+import { KeyboardAvoidingView, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export interface ScreenProps {
@@ -11,10 +11,13 @@ export interface ScreenProps {
   /** Pinned bottom area: one primary action per screen. */
   footer?: ReactNode;
   scroll?: boolean;
+  /** Pull-to-refresh (scrolling screens only). */
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
 /** Page frame: safe area, calm paper background, 20 dp gutters, optional pinned footer action. */
-export function Screen({ title, subtitle, top, children, footer, scroll = true }: ScreenProps) {
+export function Screen({ title, subtitle, top, children, footer, scroll = true, onRefresh, refreshing = false }: ScreenProps) {
   const body = (
     <>
       {top}
@@ -32,7 +35,11 @@ export function Screen({ title, subtitle, top, children, footer, scroll = true }
       {/* SDK 58 Android is edge-to-edge: the window no longer resizes for the keyboard, so pad it here. */}
       <KeyboardAvoidingView testID="screen-keyboard-avoiding" behavior="padding" className="flex-1">
         {scroll ? (
-          <ScrollView className="flex-1" contentContainerClassName="px-5 pb-8 pt-4" keyboardShouldPersistTaps="handled">
+          <ScrollView
+            className="flex-1"
+            contentContainerClassName="px-5 pb-8 pt-4"
+            keyboardShouldPersistTaps="handled"
+            refreshControl={onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} /> : undefined}>
             {body}
           </ScrollView>
         ) : (

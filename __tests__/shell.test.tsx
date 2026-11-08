@@ -1,6 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Alert } from 'react-native';
-import Activity from '../app/(tabs)/activity';
 import Home from '../app/(tabs)/home';
 import Inbox from '../app/(tabs)/inbox';
 import Settings from '../app/(tabs)/settings';
@@ -54,8 +53,7 @@ describe('tabs shell', () => {
     expect(screen.getByText('Your balances will appear here')).toBeTruthy();
     await render(<Inbox />);
     expect(screen.getByText('No transactions to classify')).toBeTruthy();
-    await render(<Activity />);
-    expect(screen.getByText('Nothing processed yet')).toBeTruthy();
+    // Activity is no longer a placeholder: see src/state/activityScreen.test.tsx.
   });
 });
 
