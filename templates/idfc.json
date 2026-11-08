@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "banks": [
+    {
+      "id": "idfc",
+      "senderPattern": "IDFCFB",
+      "templates": [
+        {
+          "id": "si_notice_will_be_deducted",
+          "kind": "ignore",
+          "ignoreReason": "si_notice",
+          "accountType": "card",
+          "regex": "will be deducted from IDFC FIRST Bank Credit Card"
+        },
+        {
+          "id": "si_mandate_active",
+          "kind": "ignore",
+          "ignoreReason": "si_notice",
+          "accountType": "card",
+          "regex": "Standing Instruction \\(SI\\) mandate on your IDFC FIRST Bank Credit Card"
+        },
+        {
+          "id": "card_payment_thanks",
+          "kind": "ignore",
+          "ignoreReason": "not_money",
+          "accountType": "card",
+          "regex": "Thank you for payment of .* towards your .*Credit Card"
+        },
+        {
+          "id": "ca_credit_short",
+          "kind": "ca_credit",
+          "direction": "in",
+          "accountType": "bank",
+          "regex": "A/C X+\\d*(?<last4>\\d{4}) is credited with (?<currency>INR|USD|Rs\\.?)\\s?(?<amount>[\\d,]+(?:\\.\\d+)?) on (?<day>\\d{2})[/ -](?<month>\\d{2}|[A-Za-z]{3})[/ -](?<year>\\d{4}|\\d{2}) (?<time>\\d{2}:\\d{2})\\. Your new balance is (?:INR|Rs\\.?)\\s?(?<balance>[\\d,]+(?:\\.\\d+)?)"
+        },
+        {
+          "id": "ca_debit_short",
+          "kind": "ca_debit",
+          "direction": "out",
+          "accountType": "bank",
+          "regex": "A/C X+\\d*(?<last4>\\d{4}) is debited by (?<currency>INR|USD|Rs\\.?)\\s?(?<amount>[\\d,]+(?:\\.\\d+)?) on (?<day>\\d{2})[/ -](?<month>\\d{2}|[A-Za-z]{3})[/ -](?<year>\\d{4}|\\d{2}) (?<time>\\d{2}:\\d{2})\\. New bal\\s*:?\\s*(?:INR|Rs\\.?)\\s?(?<balance>[\\d,]+(?:\\.\\d+)?)"
+        },
+        {
+          "id": "ca_credit_long",
+          "kind": "ca_credit",
+          "direction": "in",
+          "accountType": "bank",
+          "regex": "A/c X+\\d*(?<last4>\\d{4}) has been credited with (?<currency>INR|USD|Rs\\.?)\\s?(?<amount>[\\d,]+(?:\\.\\d+)?) on (?<day>\\d{2})[/ -](?<month>\\d{2}|[A-Za-z]{3})[/ -](?<year>\\d{4}|\\d{2})\\. Info: [A-Za-z]+/\\s?(?<utr>[A-Za-z0-9]+)/(?<counterparty>[^\\n]+?)\\.\\s*New bal\\s*:?\\s*(?:INR|Rs\\.?)\\s?(?<balance>[\\d,]+(?:\\.\\d+)?)"
+        },
+        {
+          "id": "ca_debit_long",
+          "kind": "ca_debit",
+          "direction": "out",
+          "accountType": "bank",
+          "regex": "A/c X+\\d*(?<last4>\\d{4}) has been debited by (?<currency>INR|USD|Rs\\.?)\\s?(?<amount>[\\d,]+(?:\\.\\d+)?) on (?<day>\\d{2})[/ -](?<month>\\d{2}|[A-Za-z]{3})[/ -](?<year>\\d{4}|\\d{2})\\. Info: [A-Za-z]+/\\s?(?<utr>[A-Za-z0-9]+)/(?<counterparty>[^\\n]+?)\\.\\s*New bal\\s*:?\\s*(?:INR|Rs\\.?)\\s?(?<balance>[\\d,]+(?:\\.\\d+)?)"
+        },
+        {
+          "id": "ca_debit_neft",
+          "kind": "ca_debit",
+          "direction": "out",
+          "accountType": "bank",
+          "regex": "A/c X+\\d*(?<last4>\\d{4}) debited with (?<currency>INR|USD|Rs\\.?)\\s?(?<amount>[\\d,]+(?:\\.\\d+)?) on (?<day>\\d{2})[/ -](?<month>\\d{2}|[A-Za-z]{3})[/ -](?<year>\\d{4}|\\d{2}) via NEFT/(?<utr>[A-Za-z0-9]+)\\. New bal\\s*:?\\s*(?:INR|Rs\\.?)\\s?(?<balance>[\\d,]+(?:\\.\\d+)?)"
+        },
+        {
+          "id": "ca_debit_imps",
+          "kind": "ca_debit",
+          "direction": "out",
+          "accountType": "bank",
+          "regex": "is debited by (?<currency>INR|USD|Rs\\.?)\\s?(?<amount>[\\d,]+(?:\\.\\d+)?) on (?<day>\\d{2})[/ -](?<month>\\d{2}|[A-Za-z]{3})[/ -](?<year>\\d{4}|\\d{2}) and a/c ending X+\\d+ credited \\(IMPS Ref no (?<utr>\\d+)"
+        },
+        {
+          "id": "ca_credit_imps",
+          "kind": "ca_credit",
+          "direction": "in",
+          "accountType": "bank",
+          "regex": "is credited by (?<currency>INR|USD|Rs\\.?)\\s?(?<amount>[\\d,]+(?:\\.\\d+)?) on (?<day>\\d{2})[/ -](?<month>\\d{2}|[A-Za-z]{3})[/ -](?<year>\\d{4}|\\d{2}) by a/c linked to mobile X+\\d+ \\(IMPS Ref no (?<utr>\\d+)"
+        },
+        {
+          "id": "neft_confirm_named",
+          "kind": "neft_confirm",
+          "direction": "out",
+          "accountType": "bank",
+          "regex": "beneficiary (?<counterparty>.+?) has received (?<currency>INR|USD|Rs\\.?)\\s?(?<amount>[\\d,]+(?:\\.\\d+)?) transferred via NEFT UTR (?<utr>[A-Za-z0-9]+)"
+        },
+        {
+          "id": "neft_confirm_anon",
+          "kind": "neft_confirm",
+          "direction": "out",
+          "accountType": "bank",
+          "regex": "beneficiary has received (?<currency>INR|USD|Rs\\.?)\\s?(?<amount>[\\d,]+(?:\\.\\d+)?) transferred via NEFT (?<utr>[A-Za-z0-9]+)"
+        },
+        {
+          "id": "card_spend",
+          "kind": "card_spend",
+          "direction": "out",
+          "accountType": "card",
+          "regex": "(?<currency>INR|USD|Rs\\.?)\\s?(?<amount>[\\d,]+(?:\\.\\d+)?) spent on your IDFC FIRST Bank Credit Card ending X+(?<last4>\\d{4}) at (?<merchant>.+?) on (?<day>\\d{2})[/ -](?<month>\\d{2}|[A-Za-z]{3})[/ -](?<year>\\d{4}|\\d{2})(?: at (?<time>\\d{1,2}:\\d{2}\\s?[AP]M))?\\s+Avbl Limit"
+        },
+        {
+          "id": "card_si_paid",
+          "kind": "card_si_paid",
+          "direction": "out",
+          "accountType": "card",
+          "regex": "(?<currency>INR|USD|Rs\\.?)\\s?(?<amount>[\\d,]+(?:\\.\\d+)?) for (?<merchant>.+?) paid from your IDFC FIRST Bank Credit Card X+(?<last4>\\d{4}) on (?<day>\\d{2})/(?<month>\\d{2})/(?<year>\\d{4}) basis standing instruction"
+        }
+      ]
+    }
+  ]
+}
