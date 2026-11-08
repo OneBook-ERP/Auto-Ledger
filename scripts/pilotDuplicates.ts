@@ -45,3 +45,8 @@ export function staleDrafts(rows: readonly DocRow[], now: Date, days: number): D
     })
     .sort((a, b) => a.creation.localeCompare(b.creation));
 }
+
+/** The only request shape this tooling uses: GET, never following redirects (a redirect could carry the token elsewhere). */
+export function readOnlyInit(auth: string): { method: 'GET'; redirect: 'error'; headers: Record<string, string> } {
+  return { method: 'GET', redirect: 'error', headers: { Authorization: auth, Accept: 'application/json' } };
+}

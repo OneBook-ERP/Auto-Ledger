@@ -1,4 +1,4 @@
-import { STAGE_URL, assertStageUrl, groupDuplicates, staleDrafts, type DocRow } from './pilotDuplicates';
+import { STAGE_URL, assertStageUrl, readOnlyInit, groupDuplicates, staleDrafts, type DocRow } from './pilotDuplicates';
 
 const row = (o: Partial<DocRow> & { name: string }): DocRow => ({
   doctype: 'Payment Entry', reference: null, docstatus: 0, creation: '2026-11-09 10:00:00.000000', ...o,
@@ -47,5 +47,14 @@ describe('staleDrafts', () => {
   });
   it('ignores unparseable timestamps', () => {
     expect(staleDrafts([row({ name: 'x', creation: 'garbage' })], now, 1)).toEqual([]);
+  });
+});
+
+describe('readOnlyInit', () => {
+  it('is a GET that errors on redirects', () => {
+    const i = readOnlyInit('token k:s');
+    expect(i.method).toBe('GET');
+    expect(i.redirect).toBe('error');
+    expect(i.headers.Authorization).toBe('token k:s');
   });
 });

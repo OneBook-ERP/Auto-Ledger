@@ -9,7 +9,7 @@
  * Credentials are read from the environment (for example `set -a; source .env.local; set +a`) and are never printed.
  * Exit code 1 when duplicates exist.
  */
-import { assertStageUrl, groupDuplicates, staleDrafts, type DocRow } from './pilotDuplicates';
+import { assertStageUrl, groupDuplicates, readOnlyInit, staleDrafts, type DocRow } from './pilotDuplicates';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -23,7 +23,7 @@ async function fetchRows(base: string, auth: string, doctype: DocRow['doctype'],
     limit_page_length: '0',
     order_by: 'creation asc',
   });
-  const res = await fetch(`${base}/api/resource/${encodeURIComponent(doctype)}?${q}`, { method: 'GET', headers: { Authorization: auth, Accept: 'application/json' } });
+  const res = await fetch(`${base}/api/resource/${encodeURIComponent(doctype)}?${q}`, readOnlyInit(auth));
   if (!res.ok) throw new Error(`${doctype}: HTTP ${res.status}`);
   const body = (await res.json()) as { data?: Record<string, unknown>[] };
   return (body.data ?? []).map((r) => ({

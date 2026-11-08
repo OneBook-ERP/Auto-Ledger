@@ -22,6 +22,8 @@ npx tsx scripts/pilot-parse-rate.ts
 
 Loads `fixtures/sms/idfc.json` and the bundled `templates/idfc.json` through `parseSms` and prints the count per expected kind, then the percentage of money-kind fixtures (`ca_credit`, `ca_debit`, `neft_confirm`, `card_spend`, `card_si_paid`) whose parse equals every field the fixture lists, and how many non-money fixtures (OTP, SI notices, not-money, unknown) were dropped for the expected reason. Exit code 0 when >= 95%. Last run on 2026-11-09: 46/46 money fixtures (100%), 14/14 ignore fixtures. `npm test` also asserts the target (`scripts/pilotParseRate.test.ts`). [FILL IN: re-run date and result at pilot time]
 
+Denominators: the headline figure counts only the fixtures that are money transactions (expected `ok: true` with kind `ca_credit`, `ca_debit`, `neft_confirm`, `card_spend` or `card_si_paid`). Fixtures expected to be ignored (`ok: false`: OTP, SI notice, not-money, unknown template) are excluded; they are reported separately as "dropped for the expected reason". This biases the rate upward, because a money SMS in an unknown format never enters the fixtures unless someone adds it. The script also prints a second figure, the parse rate over ALL fixtures whose expected is `ok: true` (any kind). The target is compared against the unrounded ratio: 94.96% fails even though it displays as 95.0%.
+
 Limit: the fixtures are the messages the templates were written against, so 100% there says the templates are not regressing, not that unseen messages parse. That is what 1b is for.
 
 ### 1b. Real messages on the phone (sample)
