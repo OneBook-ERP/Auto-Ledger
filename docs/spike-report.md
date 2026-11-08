@@ -397,5 +397,5 @@ Run on 2026-11-08 with the Oppo CPH2487 (ColorOS), a second handset sending plai
 | C.3 backfill 7 days | PASS | 55 returned; 81 messages from IDFCFB senders existed in the window before OTP/marketing filtering; queue unchanged |
 | C.3 ack all | PASS | acked 3; queue.json items empty |
 | C.3 deep link | PASS | `am start -W -a VIEW -d autoledger://inbox` delivered to the running app; 0 fatal errors in logcat (Unmatched Route screen until Task 17) |
-| C.4 cleanup | DONE | templates reset to bundled, extra pattern cleared |
+| C.4 cleanup | PARTIAL | templates reset to bundled; the extra test sender pattern was still configured afterwards (clear it with Set sender patterns; Task 16 re-asserts the production patterns on every launch) |
 
