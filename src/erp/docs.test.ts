@@ -1,0 +1,399 @@
+import { ErpClient, ErpValidationError } from './client';
+import {
+  NotDraftError,
+  createDraft,
+  createParty,
+  deleteDraft,
+  findDraftByUtr,
+  getBankBalance,
+  getDocStatuses,
+  getReceivablesPayables,
+  getRequiredFields,
+  listBankAccounts,
+  listCompanies,
+  listLedgerAccounts,
+  listOpenInvoices,
+  searchParties,
+  toMinor,
+} from './docs';
+
+type Reply = { status?: number; body?: unknown };
+const BASE = 'https://x.example';
+
+function setup(...replies: Reply[]) {
+  const calls: { url: string; method: string; body?: unknown }[] = [];
+  let i = 0;
+  const impl = (async (url: string, init: RequestInit) => {
+    calls.push({ url, method: init.method as string, body: init.body ? JSON.parse(init.body as string) : undefined });
+    const r = replies[Math.min(i++, replies.length - 1)];
+    return new Response(r.body === undefined ? '' : JSON.stringify(r.body), { status: r.status ?? 200 });
+  }) as unknown as typeof fetch;
+  return { c: new ErpClient({ siteUrl: BASE, apiKey: 'k', apiSecret: 's', fetchImpl: impl }), calls };
+}
+const q = (o: Record<string, unknown>) =>
+  Object.entries(o).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(typeof v === 'string' ? v : JSON.stringify(v))}`).join('&');
+
+describe('toMinor', () => {
+  it.each([
+    [1131.5, 113150],
+    [19999.99, 1999999],
+    [0.07, 7],
+    [0.1 + 0.2, 30],
+    [1.005, 101],
+    [-2484917.58, -248491758],
+    [5.8e-11, 0],
+    ['1234.56', 123456],
+    [0, 0],
+    [null, 0],
+    [undefined, 0],
+  ])('%p -> %p', (x, want) => {
+    expect(toMinor(x as number)).toBe(want);
+  });
+});
+
+describe('toMinor invalid input', () => {
+  it.each([[NaN], ['1,234.56'], ['abc'], [Infinity]])('throws for %p', (x) => {
+    expect(() => toMinor(x as number)).toThrow();
+  });
+});
+
+describe('simple lists', () => {
+  it('listCompanies', async () => {
+    const { c, calls } = setup({ body: { data: [{ name: 'ZP Co', default_currency: 'INR' }] } });
+    expect(await listCompanies(c)).toEqual([{ name: 'ZP Co', currency: 'INR' }]);
+    expect(calls[0].url).toBe(`${BASE}/api/resource/Company?${q({ fields: ['name', 'default_currency'], limit_page_length: 0 })}`);
+  });
+
+  it('listBankAccounts maps fields', async () => {
+    const { c, calls } = setup({
+      body: { data: [{ name: 'IDFC - Zen', account: 'IDFC First - ZP', bank_account_no: '123', is_company_account: 1 }, { name: 'B', account: 'X - ZP', bank_account_no: null, is_company_account: 0 }] },
+    });
+    expect(await listBankAccounts(c, 'ZP Co')).toEqual([
+      { name: 'IDFC - Zen', glAccount: 'IDFC First - ZP', bankAccountNo: '123', isCompanyAccount: true },
+      { name: 'B', glAccount: 'X - ZP', bankAccountNo: null, isCompanyAccount: false },
+    ]);
+    expect(calls[0].url).toBe(
+      `${BASE}/api/resource/Bank%20Account?${q({ fields: ['name', 'account', 'bank_account_no', 'is_company_account'], filters: [['company', '=', 'ZP Co']], limit_page_length: 0 })}`,
+    );
+  });
+
+  it('listLedgerAccounts: non-group, with root type', async () => {
+    const { c, calls } = setup({ body: { data: [{ name: 'Rent - ZP', account_type: null }] } });
+    expect(await listLedgerAccounts(c, 'ZP Co', { rootType: 'Expense' })).toEqual([{ name: 'Rent - ZP', accountType: null }]);
+    expect(calls[0].url).toBe(
+      `${BASE}/api/resource/Account?${q({ fields: ['name', 'account_type'], filters: [['company', '=', 'ZP Co'], ['is_group', '=', 0], ['root_type', '=', 'Expense']], limit_page_length: 0 })}`,
+    );
+  });
+
+  it('listLedgerAccounts without root type omits that filter', async () => {
+    const { c, calls } = setup({ body: { data: [] } });
+    await listLedgerAccounts(c, 'ZP Co', {});
+    expect(calls[0].url).toContain(encodeURIComponent(JSON.stringify([['company', '=', 'ZP Co'], ['is_group', '=', 0]])));
+  });
+
+  it('searchParties queries name and display name', async () => {
+    const { c, calls } = setup({ body: { data: [{ name: 'CUST-1' }, { name: 'Acme #1/2' }] } });
+    expect(await searchParties(c, 'Customer', 'ac')).toEqual([
+      { doctype: 'Customer', name: 'CUST-1' },
+      { doctype: 'Customer', name: 'Acme #1/2' },
+    ]);
+    expect(calls[0].url).toBe(
+      `${BASE}/api/resource/Customer?${q({ fields: ['name'], or_filters: [['name', 'like', '%ac%'], ['customer_name', 'like', '%ac%']], limit_page_length: 20 })}`,
+    );
+  });
+
+  it('searchParties uses supplier_name / employee_name', async () => {
+    const s = setup({ body: { data: [] } });
+    await searchParties(s.c, 'Supplier', 'x');
+    expect(s.calls[0].url).toContain(encodeURIComponent('"supplier_name"'));
+    const e = setup({ body: { data: [] } });
+    await searchParties(e.c, 'Employee', 'x');
+    expect(e.calls[0].url).toContain(encodeURIComponent('"employee_name"'));
+  });
+});
+
+describe('createParty', () => {
+  it('posts caller fields and returns the server name', async () => {
+    const { c, calls } = setup({ body: { data: { name: 'Acme Ltd', docstatus: 0 } } });
+    const r = await createParty(c, 'Customer', { customer_name: 'Acme Ltd', customer_type: 'Company' });
+    expect(r).toEqual({ doctype: 'Customer', name: 'Acme Ltd' });
+    expect(calls[0].method).toBe('POST');
+    expect(calls[0].url).toBe(`${BASE}/api/resource/Customer`);
+    expect(calls[0].body).toEqual({ customer_name: 'Acme Ltd', customer_type: 'Company' });
+  });
+
+  it.each([
+    ['Customer', {}, 'customer_name'],
+    ['Customer', { customer_name: '   ' }, 'customer_name'],
+    ['Customer', { customer_name: 5 }, 'customer_name'],
+    ['Supplier', { supplier_name: '' }, 'supplier_name'],
+  ] as const)('validates client-side before any request: %s %j', async (dt, fields, missing) => {
+    const { c, calls } = setup({ body: {} });
+    const err = await createParty(c, dt, fields as Record<string, unknown>).catch((e) => e);
+    expect(err).toBeInstanceOf(ErpValidationError);
+    expect(err.missingFields).toEqual([missing]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('employee needs first_name (or employee_name)', async () => {
+    const { c, calls } = setup({ body: {} });
+    const err = await createParty(c, 'Employee', { gender: 'Male' }).catch((e) => e);
+    expect(err).toBeInstanceOf(ErpValidationError);
+    expect(err.missingFields).toEqual(['first_name']);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('maps a server MandatoryError to missingFields', async () => {
+    const { c } = setup({
+      status: 417,
+      body: {
+        exc_type: 'MandatoryError',
+        exception: 'frappe.exceptions.MandatoryError: [Employee, HR-EMP-00015]: gender, date_of_birth',
+        _server_messages: JSON.stringify([
+          JSON.stringify({ message: 'Error: Value missing for Employee: Gender', title: 'Message' }),
+          JSON.stringify({ message: 'Error: Value missing for Employee: Date of Birth', title: 'Message' }),
+        ]),
+      },
+    });
+    const err = await createParty(c, 'Employee', { first_name: 'Asha' }).catch((e) => e);
+    expect(err).toBeInstanceOf(ErpValidationError);
+    expect(err.missingFields).toEqual(['Gender', 'Date of Birth']);
+  });
+});
+
+describe('getRequiredFields', () => {
+  it('returns reqd fields without a default from the main doc', async () => {
+    const { c, calls } = setup({
+      body: {
+        docs: [
+          {
+            name: 'Customer',
+            fields: [
+              { fieldname: 'customer_name', label: 'Full Name', fieldtype: 'Data', reqd: 1, default: null },
+              { fieldname: 'customer_type', label: 'Type', fieldtype: 'Select', reqd: 1, default: 'Company' },
+              { fieldname: 'gstin', label: 'GSTIN', fieldtype: 'Autocomplete', reqd: 0 },
+              { fieldname: 'territory', label: 'Territory', fieldtype: 'Link', reqd: 1 },
+            ],
+          },
+          { name: 'Child', fields: [{ fieldname: 'zzz', label: 'Z', fieldtype: 'Data', reqd: 1 }] },
+        ],
+      },
+    });
+    expect(await getRequiredFields(c, 'Customer')).toEqual([
+      { fieldname: 'customer_name', label: 'Full Name', fieldtype: 'Data' },
+      { fieldname: 'territory', label: 'Territory', fieldtype: 'Link' },
+    ]);
+    expect(calls[0].url).toBe(`${BASE}/api/method/frappe.desk.form.load.getdoctype?doctype=Customer&with_parent=1`);
+    expect(calls[0].method).toBe('GET');
+  });
+});
+
+describe('listOpenInvoices', () => {
+  it('Customer -> Sales Invoice, minor units without drift', async () => {
+    const { c, calls } = setup({
+      body: { data: [{ name: 'ZP-SI-26-00012', outstanding_amount: 1131.5, due_date: '2026-11-30' }, { name: 'SI-2', outstanding_amount: 19999.99, due_date: '2026-12-01' }, { name: 'SI-3', outstanding_amount: 0.07, due_date: '2026-12-02' }] },
+    });
+    expect(await listOpenInvoices(c, 'Customer', 'Acme #1')).toEqual([
+      { doctype: 'Sales Invoice', name: 'ZP-SI-26-00012', outstandingMinor: 113150, dueDate: '2026-11-30' },
+      { doctype: 'Sales Invoice', name: 'SI-2', outstandingMinor: 1999999, dueDate: '2026-12-01' },
+      { doctype: 'Sales Invoice', name: 'SI-3', outstandingMinor: 7, dueDate: '2026-12-02' },
+    ]);
+    expect(calls[0].url).toBe(
+      `${BASE}/api/resource/Sales%20Invoice?${q({ fields: ['name', 'outstanding_amount', 'due_date'], filters: [['docstatus', '=', 1], ['outstanding_amount', '>', 0], ['customer', '=', 'Acme #1']], order_by: 'due_date asc', limit_page_length: 0 })}`,
+    );
+  });
+
+  it('Supplier -> Purchase Invoice', async () => {
+    const { c, calls } = setup({ body: { data: [{ name: 'PINV-1', outstanding_amount: 10, due_date: null }] } });
+    const r = await listOpenInvoices(c, 'Supplier', 'Bharti');
+    expect(r).toEqual([{ doctype: 'Purchase Invoice', name: 'PINV-1', outstandingMinor: 1000, dueDate: '' }]);
+    expect(calls[0].url).toContain('/api/resource/Purchase%20Invoice?');
+    expect(calls[0].url).toContain(encodeURIComponent('["supplier","=","Bharti"]'));
+  });
+});
+
+describe('createDraft', () => {
+  it('posts to the encoded doctype path and returns the name (no submit)', async () => {
+    const { c, calls } = setup({ body: { data: { name: 'ACC-PAY-2026-00039', docstatus: 0 } } });
+    const body = { company: 'ZP', reference_no: 'U1' };
+    expect(await createDraft(c, 'Payment Entry', body)).toEqual({ name: 'ACC-PAY-2026-00039' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(`${BASE}/api/resource/Payment%20Entry`);
+    expect(calls[0].body).toEqual({ ...body, docstatus: 0 });
+  });
+
+  it('forces docstatus 0 even if the caller passes 1', async () => {
+    const { c, calls } = setup({ body: { data: { name: 'X' } } });
+    await createDraft(c, 'Journal Entry', { company: 'ZP', docstatus: 1 });
+    expect((calls[0].body as { docstatus: number }).docstatus).toBe(0);
+  });
+});
+
+describe('findDraftByUtr', () => {
+  it('queries Payment Entry by reference_no, returns first hit', async () => {
+    const { c, calls } = setup({ body: { data: [{ name: 'ACC-PAY-1', docstatus: 0 }] } });
+    expect(await findDraftByUtr(c, 'U/1 #')).toEqual({ doctype: 'Payment Entry', name: 'ACC-PAY-1', docstatus: 0 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(
+      `${BASE}/api/resource/Payment%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['reference_no', '=', 'U/1 #'], ['docstatus', '!=', 2]], order_by: 'creation asc', limit_page_length: 1 })}`,
+    );
+  });
+
+  it('falls through to Journal Entry by cheque_no', async () => {
+    const { c, calls } = setup({ body: { data: [] } }, { body: { data: [{ name: 'ACC-JV-9', docstatus: 1 }] } });
+    expect(await findDraftByUtr(c, 'U2')).toEqual({ doctype: 'Journal Entry', name: 'ACC-JV-9', docstatus: 1 });
+    expect(calls[1].url).toBe(
+      `${BASE}/api/resource/Journal%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['cheque_no', '=', 'U2'], ['docstatus', '!=', 2]], order_by: 'creation asc', limit_page_length: 1 })}`,
+    );
+  });
+
+  it('sends quotes and brackets inside the JSON filter, encoded', async () => {
+    const utr = 'A"B]["C\\';
+    const { c, calls } = setup({ body: { data: [{ name: 'P1', docstatus: 1 }] } });
+    expect(await findDraftByUtr(c, utr)).toEqual({ doctype: 'Payment Entry', name: 'P1', docstatus: 1 });
+    expect(calls[0].url).toContain(`filters=${encodeURIComponent(JSON.stringify([['reference_no', '=', utr], ['docstatus', '!=', 2]]))}`);
+  });
+
+  it('only-cancelled documents (server returns none) give null; the live draft is the hit', async () => {
+    const { c } = setup({ body: { data: [] } }, { body: { data: [] } });
+    expect(await findDraftByUtr(c, 'U9')).toBeNull();
+    const live = setup({ body: { data: [{ name: 'LIVE', docstatus: 0 }] } });
+    expect(await findDraftByUtr(live.c, 'U9')).toEqual({ doctype: 'Payment Entry', name: 'LIVE', docstatus: 0 });
+  });
+
+  it('null when neither has it', async () => {
+    const { c } = setup({ body: { data: [] } });
+    expect(await findDraftByUtr(c, 'U3')).toBeNull();
+  });
+});
+
+describe('deleteDraft', () => {
+  it('reads docstatus then deletes', async () => {
+    const { c, calls } = setup({ body: { data: { name: 'ACC JV/1', docstatus: 0 } } }, { status: 202, body: { data: 'ok' } });
+    await deleteDraft(c, 'Journal Entry', 'ACC JV/1');
+    expect(calls[0].method).toBe('GET');
+    expect(calls[0].url).toBe(`${BASE}/api/resource/Journal%20Entry/ACC%20JV%2F1`);
+    expect(calls[1].method).toBe('DELETE');
+    expect(calls[1].url).toBe(`${BASE}/api/resource/Journal%20Entry/ACC%20JV%2F1`);
+  });
+
+  it.each([1, 2])('throws NotDraftError for docstatus %i and never deletes', async (ds) => {
+    const { c, calls } = setup({ body: { data: { name: 'X', docstatus: ds } } });
+    await expect(deleteDraft(c, 'Payment Entry', 'X')).rejects.toBeInstanceOf(NotDraftError);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe('getDocStatuses', () => {
+  it('one request per doctype using the in filter', async () => {
+    const { c, calls } = setup(
+      { body: { data: [{ name: 'A', docstatus: 0 }, { name: 'B', docstatus: 1 }] } },
+      { body: { data: [{ name: 'J', docstatus: 2 }] } },
+    );
+    const r = await getDocStatuses(c, [
+      { doctype: 'Payment Entry', name: 'A' },
+      { doctype: 'Payment Entry', name: 'B' },
+      { doctype: 'Journal Entry', name: 'J' },
+      { doctype: 'Journal Entry', name: 'GONE' },
+    ]);
+    expect(r).toEqual({ 'Payment Entry:A': 0, 'Payment Entry:B': 1, 'Journal Entry:J': 2 });
+    expect(calls).toHaveLength(2);
+    expect(calls[0].url).toBe(
+      `${BASE}/api/resource/Payment%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['name', 'in', ['A', 'B']]], limit_page_length: 0 })}`,
+    );
+    expect(calls[1].url).toContain('/api/resource/Journal%20Entry?');
+  });
+
+  it('empty input makes no request', async () => {
+    const { c, calls } = setup({ body: {} });
+    expect(await getDocStatuses(c, [])).toEqual({});
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('getDocStatuses chunking', () => {
+  it('dedupes, chunks 50 per request per doctype, merges', async () => {
+    const names = Array.from({ length: 120 }, (_, i) => `N${i}`);
+    const refs = [...names, ...names.slice(0, 10)].map((name) => ({ doctype: 'Payment Entry', name }));
+    const { c, calls } = setup(
+      { body: { data: names.slice(0, 50).map((name) => ({ name, docstatus: 0 })) } },
+      { body: { data: names.slice(50, 99).map((name) => ({ name, docstatus: 1 })) } }, // N99 absent
+      { body: { data: names.slice(100).map((name) => ({ name, docstatus: 2 })) } },
+    );
+    const r = await getDocStatuses(c, refs);
+    expect(calls).toHaveLength(3);
+    const sent = calls.map((x) => (JSON.parse(decodeURIComponent(/filters=([^&]*)/.exec(x.url)![1])) as unknown[][])[0][2] as string[]);
+    expect(sent.map((a) => a.length)).toEqual([50, 50, 20]);
+    expect(new Set(sent.flat()).size).toBe(120);
+    expect(Object.keys(r)).toHaveLength(119);
+    expect(r['Payment Entry:N0']).toBe(0);
+    expect(r['Payment Entry:N60']).toBe(1);
+    expect(r['Payment Entry:N119']).toBe(2);
+    expect('Payment Entry:N99' in r).toBe(false);
+  });
+});
+
+describe('getBankBalance', () => {
+  beforeEach(() => jest.useFakeTimers({ now: new Date(2026, 10, 8, 12, 0, 0) }));
+  afterEach(() => jest.useRealTimers());
+
+  it('GL Entry SUM in dict form, debit - credit in minor units', async () => {
+    const { c, calls } = setup({ body: { message: [{ debit: 2682914.0, credit: 197996.42 }] } });
+    expect(await getBankBalance(c, 'IDFC First - ZP', 'ZP Co')).toBe(248491758);
+    expect(calls[0].method).toBe('GET');
+    expect(calls[0].url).toBe(
+      `${BASE}/api/method/frappe.client.get_list?${q({
+        doctype: 'GL Entry',
+        fields: [{ SUM: 'debit', as: 'debit' }, { SUM: 'credit', as: 'credit' }],
+        filters: [['account', '=', 'IDFC First - ZP'], ['company', '=', 'ZP Co'], ['is_cancelled', '=', 0], ['posting_date', '<=', '2026-11-08']],
+      })}`,
+    );
+  });
+
+  it('negative (card owing) and null sums', async () => {
+    expect(await getBankBalance(setup({ body: { message: [{ debit: 100.1, credit: 4588.84 }] } }).c, 'Card', 'ZP')).toBe(-448874);
+    expect(await getBankBalance(setup({ body: { message: [{ debit: null, credit: null }] } }).c, 'Card', 'ZP')).toBe(0);
+  });
+});
+
+describe('getReceivablesPayables', () => {
+  beforeEach(() => jest.useFakeTimers({ now: new Date(2026, 10, 8, 12, 0, 0) }));
+  afterEach(() => jest.useRealTimers());
+
+  // Shape per docs/spike-report.md B.8: object rows per party, then ONE positional array total row; AR and AP column orders differ.
+  const arColumns = ['party', 'party_type', 'territory', 'customer_group', 'advance', 'invoiced', 'paid', 'credit_note', 'outstanding', 'currency'].map((fieldname) => ({ fieldname, label: fieldname }));
+  const apColumns = ['party', 'party_type', 'supplier_group', 'advance', 'invoiced', 'paid', 'debit_note', 'outstanding', 'currency'].map((fieldname) => ({ fieldname, label: fieldname }));
+  const ar = {
+    columns: arColumns,
+    result: [
+      { party: 'Acme', party_type: 'Customer', advance: 510000, invoiced: 1631725, outstanding: 1121725 - 0, currency: 'INR' },
+      { party: 'Zed', party_type: 'Customer', advance: 0, invoiced: 100.5, outstanding: 100.5, currency: 'INR' },
+      ['Total', '', '', '', 510000, 1731725.5, 0, 0, 1121825.5, ''],
+    ],
+  };
+  const ap = {
+    columns: apColumns,
+    result: [{ party: 'Bharti', outstanding: 250526 }, ['Total', '', '', 0, 250526, 0, 0, 250526, '']],
+  };
+
+  it('reads the positional total row at the outstanding column; runs both reports', async () => {
+    const { c, calls } = setup({ body: { message: ar } }, { body: { message: ap } });
+    expect(await getReceivablesPayables(c, 'ZP Co')).toEqual({ receivableMinor: 112182550, payableMinor: 25052600 });
+    expect(calls).toHaveLength(2);
+    expect(calls[0].url).toBe(`${BASE}/api/method/frappe.desk.query_report.run`);
+    expect(calls[0].method).toBe('POST');
+    expect(calls[0].body).toEqual({
+      report_name: 'Accounts Receivable Summary',
+      filters: { company: 'ZP Co', report_date: '2026-11-08', ageing_based_on: 'Due Date', range: '30, 60, 90, 120' },
+      ignore_prepared_report: true,
+    });
+    expect((calls[1].body as { report_name: string }).report_name).toBe('Accounts Payable Summary');
+  });
+
+  it('an empty report is zero; rows without a total row is an error (never summed)', async () => {
+    const empty = setup({ body: { message: { columns: arColumns, result: [] } } }, { body: { message: { columns: apColumns, result: [] } } });
+    expect(await getReceivablesPayables(empty.c, 'ZP')).toEqual({ receivableMinor: 0, payableMinor: 0 });
+    const bad = setup({ body: { message: { columns: arColumns, result: [ar.result[0]] } } });
+    await expect(getReceivablesPayables(bad.c, 'ZP')).rejects.toThrow();
+  });
+});
