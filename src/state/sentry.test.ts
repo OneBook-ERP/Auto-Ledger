@@ -23,10 +23,12 @@ describe('initCrashReporting', () => {
     expect(init).toHaveBeenCalledTimes(1);
     expect(init.mock.calls[0][0]).toMatchObject({
       dsn: 'https://k@o1.ingest.sentry.io/1', sendDefaultPii: false, enableNative: false, enableNativeCrashHandling: false,
-      attachScreenshot: false, attachViewHierarchy: false, replaysSessionSampleRate: 0, replaysOnErrorSampleRate: 0, tracesSampleRate: 0,
+      attachScreenshot: false, attachViewHierarchy: false, replaysSessionSampleRate: 0, replaysOnErrorSampleRate: 0, tracePropagationTargets: [],
       enableCaptureFailedRequests: false,
     });
     expect(init.mock.calls[0][0]).not.toHaveProperty('integrations');
+    expect(init.mock.calls[0][0]).not.toHaveProperty('tracesSampleRate'); // tracing off by omission
+    expect(init.mock.calls[0][0]).not.toHaveProperty('tracesSampler');
   });
 
   it('never throws when the SDK fails to load or init', () => {
@@ -49,6 +51,11 @@ describe('options', () => {
     expect(beforeSend({ message: 'cannot reach erp.zp-internal:8000 for IDFB6292M4509651 ₹ 1,200.00' })).toEqual({ message: 'cannot reach <site> for <ref> <amount>' });
     setCrashReportSite(null);
     expect(beforeSend({ message: 'erp.zp-internal' })).toEqual({ message: 'erp.zp-internal' });
+    // host and hostname, any letter case
+    setCrashReportSite('http://ERP.Zp-Internal:8000');
+    expect(beforeSend({ message: 'erp.zp-internal refused; ERP.ZP-INTERNAL:8000 down' })).toEqual({ message: '<site> refused; <site> down' });
+    setCrashReportSite('https://Atom.Example.App');
+    expect(beforeSend({ message: 'atom.example.app and ATOM.EXAMPLE.APP' })).toEqual({ message: '<site> and <site>' });
     setCrashReportSite('not a url');
     expect(beforeSend({ message: 'ok' })).toEqual({ message: 'ok' });
   });

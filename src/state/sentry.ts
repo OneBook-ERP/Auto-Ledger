@@ -5,7 +5,7 @@
 // When ON, every event leaves the phone only through scrubEvent (amounts, UTRs, account numbers, SMS text,
 // emails, credentials and the ERPNext site are removed). JS only: the native SDK (and so native/NDK crash
 // capture, which would bypass the JS scrubber) is disabled, as are session replay, screenshots, the view
-// hierarchy, tracing/profiling, failed-request capture and console/fetch/xhr breadcrumbs.
+// hierarchy, tracing/profiling (and trace-header propagation), failed-request capture and console/fetch/xhr breadcrumbs.
 import { scrubEvent } from './scrub';
 
 /** The part of @sentry/react-native this module uses. */
@@ -23,7 +23,10 @@ export function setCrashReportSite(siteUrl: string | null): void {
     return;
   }
   try {
-    siteHosts = [new URL(siteUrl).host];
+    // host keeps a non-default port (erp.example:8000), hostname does not; both are hidden, any letter case
+    // (the scrubber matches case-insensitively, longest first).
+    const u = new URL(siteUrl);
+    siteHosts = [...new Set([u.host, u.hostname].map((h) => h.toLowerCase()).filter(Boolean))];
   } catch {
     siteHosts = [];
   }
@@ -48,7 +51,9 @@ export function sentryOptions(dsn: string): Record<string, unknown> {
     enableCaptureFailedRequests: false,
     enableAutoPerformanceTracing: false,
     enableAutoSessionTracking: false,
-    tracesSampleRate: 0,
+    // Tracing stays off: no tracesSampleRate and no tracing integration, so no transactions are created;
+    // no trace headers are attached to any outgoing request (in particular never to the ERPNext site).
+    tracePropagationTargets: [],
     profilesSampleRate: 0,
     replaysSessionSampleRate: 0,
     replaysOnErrorSampleRate: 0,
