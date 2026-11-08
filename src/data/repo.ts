@@ -15,9 +15,20 @@ export interface Repo {
   listMappings(): Promise<AccountMapping[]>;
   saveRule(r: Rule): Promise<void>;
   listRules(): Promise<Rule[]>;
+  /** Inserts `op` and, in the same transaction, marks every OTHER pending item of op.txnId 'superseded'. */
   enqueue(op: OutboxOp): Promise<void>;
   nextOutbox(): Promise<OutboxOp | null>;
+  /** The outbox item with this id, or null (also null when its stored JSON is unreadable). */
+  getOutbox(id: string): Promise<OutboxOp | null>;
+  /** Marks every OTHER pending item of `txnId` 'superseded' (the user made a newer decision). */
+  supersedePending(txnId: string, exceptId: string): Promise<void>;
+  /** Sets item `id` back to 'pending' and supersedes the other pending items of its txn, in one transaction. */
+  reopenOutbox(id: string): Promise<void>;
+  /** Every readable outbox item of `txnId`, oldest first. */
+  listOutbox(txnId: string): Promise<OutboxOp[]>;
   markOutbox(id: string, patch: Partial<Pick<OutboxOp, 'progress' | 'attempts' | 'status'>>): Promise<void>;
+  /** One statement: writes `progress` and sets status 'done' unless the item is already 'superseded'. */
+  finishOutbox(id: string, progress: OutboxOp['progress']): Promise<void>;
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;
 }
@@ -45,14 +56,47 @@ const PENDING_COLS = `id, raw_hash, state, merged_count, created_docs, error, ki
   utr, merchant, balance_minor, sender, received_at`;
 
 const FAIL = Symbol('parse-fail');
+
+type OutboxRow = { id: string; txn_id: string; plan: string; progress: string; attempts: number; status: OutboxOp['status'] };
+function toOutbox(r: OutboxRow): OutboxOp | null {
+  const plan = safeParse<OutboxOp['plan'] | typeof FAIL>(r.plan, FAIL);
+  const progress = safeParse<OutboxOp['progress'] | typeof FAIL>(r.progress, FAIL);
+  if (plan === FAIL || progress === FAIL || plan === null || progress === null) return null;
+  return { id: r.id, txnId: r.txn_id, plan, progress, attempts: r.attempts, status: r.status };
+}
 function safeParse<T>(s: string, fallback: T): T {
   try { return JSON.parse(s) as T; } catch { return fallback; }
 }
 
+/** Async mutex: runs tasks one at a time, in call order; a failing task never blocks the next. */
+function createMutex() {
+  let tail: Promise<void> = Promise.resolve();
+  return <T>(task: () => Promise<T>): Promise<T> => {
+    const run = tail.then(task);
+    tail = run.then(() => undefined, () => undefined);
+    return run;
+  };
+}
+
 export async function createRepo(d: SqlDriver): Promise<Repo> {
   await migrate(d);
+  // The app has ONE SQLite connection. Every Repo method runs under this mutex so that statements of
+  // different callers never interleave, in particular never inside another caller's BEGIN..COMMIT.
+  // Methods only use the raw driver `d` (never other Repo methods), so holding the lock cannot deadlock.
+  const exclusive = createMutex();
 
-  return {
+  async function inTransaction(fn: () => Promise<void>): Promise<void> {
+    await d.exec('BEGIN');
+    try {
+      await fn();
+      await d.exec('COMMIT');
+    } catch (e) {
+      try { await d.exec('ROLLBACK'); } catch { /* already rolled back */ }
+      throw e;
+    }
+  }
+
+  const impl: Repo = {
     async listPending(state) {
       const rows = state
         ? await d.all<PendingRow>(`SELECT ${PENDING_COLS} FROM pending_txn WHERE state = ? ORDER BY received_at, id`, [state])
@@ -116,25 +160,53 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
       });
     },
     async enqueue(op) {
-      await d.exec(
-        'INSERT INTO outbox (id, txn_id, plan, progress, attempts, status) VALUES (?,?,?,?,?,?)',
-        [op.id, op.txnId, JSON.stringify(op.plan), JSON.stringify(op.progress), op.attempts, op.status],
-      );
+      await inTransaction(async () => {
+        await d.exec(
+          'INSERT INTO outbox (id, txn_id, plan, progress, attempts, status) VALUES (?,?,?,?,?,?)',
+          [op.id, op.txnId, JSON.stringify(op.plan), JSON.stringify(op.progress), op.attempts, op.status],
+        );
+        await d.exec(`UPDATE outbox SET status = 'superseded' WHERE txn_id = ? AND id != ? AND status = 'pending'`, [op.txnId, op.id]);
+      });
+    },
+    async reopenOutbox(id) {
+      await inTransaction(async () => {
+        await d.exec(
+          `UPDATE outbox SET status = 'superseded'
+           WHERE txn_id = (SELECT txn_id FROM outbox WHERE id = ?) AND id != ? AND status = 'pending'`,
+          [id, id],
+        );
+        await d.exec(`UPDATE outbox SET status = 'pending' WHERE id = ?`, [id]);
+      });
+    },
+    async listOutbox(txnId) {
+      const rows = await d.all<OutboxRow>('SELECT id, txn_id, plan, progress, attempts, status FROM outbox WHERE txn_id = ? ORDER BY seq', [txnId]);
+      return rows.map(toOutbox).filter((o): o is OutboxOp => o !== null);
+    },
+    async getOutbox(id) {
+      const rows = await d.all<OutboxRow>('SELECT id, txn_id, plan, progress, attempts, status FROM outbox WHERE id = ?', [id]);
+      return rows.length ? toOutbox(rows[0]) : null;
+    },
+    async supersedePending(txnId, exceptId) {
+      await d.exec(`UPDATE outbox SET status = 'superseded' WHERE txn_id = ? AND id != ? AND status = 'pending'`, [txnId, exceptId]);
     },
     async nextOutbox() {
       for (;;) {
-        const rows = await d.all<{ id: string; txn_id: string; plan: string; progress: string; attempts: number; status: OutboxOp['status'] }>(
+        const rows = await d.all<OutboxRow>(
           `SELECT id, txn_id, plan, progress, attempts, status FROM outbox WHERE status = 'pending' ORDER BY seq LIMIT 1`);
         if (!rows.length) return null;
-        const r = rows[0];
-        const plan = safeParse<OutboxOp['plan'] | typeof FAIL>(r.plan, FAIL);
-        const progress = safeParse<OutboxOp['progress'] | typeof FAIL>(r.progress, FAIL);
-        if (plan === FAIL || progress === FAIL || plan === null || progress === null) {
-          await d.exec(`UPDATE outbox SET status = 'failed' WHERE id = ?`, [r.id]);
+        const op = toOutbox(rows[0]);
+        if (!op) {
+          await d.exec(`UPDATE outbox SET status = 'failed' WHERE id = ?`, [rows[0].id]);
           continue;
         }
-        return { id: r.id, txnId: r.txn_id, plan, progress, attempts: r.attempts, status: r.status };
+        return op;
       }
+    },
+    async finishOutbox(id, progress) {
+      await d.exec(
+        `UPDATE outbox SET progress = ?, status = CASE WHEN status = 'superseded' THEN status ELSE 'done' END WHERE id = ?`,
+        [JSON.stringify(progress), id],
+      );
     },
     async markOutbox(id, patch) {
       const sets: string[] = []; const params: unknown[] = [];
@@ -152,4 +224,10 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
       await d.exec('INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [key, value]);
     },
   };
+
+  const locked = {} as Record<string, unknown>;
+  for (const [k, fn] of Object.entries(impl) as [string, (...a: unknown[]) => Promise<unknown>][]) {
+    locked[k] = (...args: unknown[]) => exclusive(() => fn(...args));
+  }
+  return locked as unknown as Repo;
 }
