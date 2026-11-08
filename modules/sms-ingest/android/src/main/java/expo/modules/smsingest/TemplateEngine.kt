@@ -20,7 +20,7 @@ data class NativeParse(
  *  1. otpPattern on the whole body -> null
  *  2. first bank whose senderPattern is a substring of the sender (none -> null)
  *  3. first template whose regex matches wins; kind "ignore" -> null
- *  4. nothing matched -> null (TS distinguishes unknown_template/not_money; native does not need to)
+ *  4. nothing matched -> null; [looksLikeMoney] gives the TS unknown_template/not_money split
  *
  * Port notes:
  *  - All patterns compile with CASE_INSENSITIVE and no inline flags (R1). Named groups are read
@@ -34,7 +34,11 @@ data class NativeParse(
  */
 class TemplateEngine private constructor(
   private val otp: Pattern,
+  private val moneyVerb: Pattern,
+  private val amountRx: Pattern,
   private val banks: List<Bank>,
+  /** The template set's top-level "version", or null when absent. */
+  val version: Int?,
 ) {
   private class Template(
     val kind: String,
@@ -50,6 +54,36 @@ class TemplateEngine private constructor(
     } catch (e: Throwable) {
       null
     }
+  }
+
+  /** True when the body is an OTP (the template set's otpPattern, after space normalisation). */
+  fun isOtp(body: String): Boolean = try {
+    otp.matcher(normalise(body)).find()
+  } catch (e: Throwable) {
+    false
+  }
+
+  /**
+   * True iff the body is not an OTP, is not matched (first match wins) by an ignore template of
+   * the sender's bank, and matches both moneyVerbPattern and amountPattern: the rule the TS engine
+   * uses to choose unknown_template over not_money. Every SMS that parses is also money-like.
+   * Used to keep an unparsed money SMS (stored as "unrecognised") instead of dropping it.
+   */
+  fun looksLikeMoney(sender: String, body: String): Boolean = try {
+    val b = normalise(body)
+    when {
+      otp.matcher(b).find() -> false
+      firstMatchIsIgnore(sender, b) -> false
+      else -> moneyVerb.matcher(b).find() && amountRx.matcher(b).find()
+    }
+  } catch (e: Throwable) {
+    false
+  }
+
+  private fun firstMatchIsIgnore(sender: String, body: String): Boolean {
+    val bank = banks.firstOrNull { sender.contains(it.senderPattern) } ?: return false
+    val tpl = bank.templates.firstOrNull { it.regex.matcher(body).find() } ?: return false
+    return tpl.kind == "ignore"
   }
 
   private fun parseUnsafe(sender: String, body: String): NativeParse? {
@@ -104,8 +138,8 @@ class TemplateEngine private constructor(
       return try {
         val root = JSONObject(json)
         val otp = compileRequired(root, "otpPattern")
-        compileRequired(root, "moneyVerbPattern")
-        compileRequired(root, "amountPattern")
+        val moneyVerb = compileRequired(root, "moneyVerbPattern")
+        val amountRx = compileRequired(root, "amountPattern")
         val banksJson = root.optJSONArray("banks") ?: return null
         if (banksJson.length() == 0) return null
         val banks = ArrayList<Bank>()
@@ -125,7 +159,8 @@ class TemplateEngine private constructor(
           }
           banks.add(Bank(sp, tpls))
         }
-        TemplateEngine(otp, banks)
+        val version = if (root.has("version") && !root.isNull("version")) root.getInt("version") else null
+        TemplateEngine(otp, moneyVerb, amountRx, banks, version)
       } catch (e: Throwable) {
         null
       }
