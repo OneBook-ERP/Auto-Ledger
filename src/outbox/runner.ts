@@ -267,6 +267,28 @@ export function runPlan(txnId: string, plan: ActionPlan, deps: { repo: Repo; erp
   return withLock(txnId, () => run(txnId, plan, deps, opts.userAction === true));
 }
 
+export const PERMISSION_DENIED_MESSAGE =
+  'Your ERPNext user is not allowed to create this document; ask your administrator for access, then try again';
+
+/**
+ * Drainer only: takes outbox item `itemId` of `txnId` out of the queue after repeated permission refusals.
+ * Runs under the same per-txn lock as runPlan and re-reads both rows, so it parks ONLY if the item is still
+ * 'pending' and the txn is still 'new' (status 'failed', txn error = PERMISSION_DENIED_MESSAGE, nothing else
+ * changed). Otherwise, e.g. the user made a newer decision meanwhile, it changes nothing: 'skipped'.
+ */
+export function parkForPermission(txnId: string, itemId: string, deps: { repo: Repo }): Promise<'parked' | 'skipped'> {
+  return withLock(txnId, async () => {
+    const { repo } = deps;
+    const item = await repo.getOutbox(itemId);
+    if (!item || item.txnId !== txnId || item.status !== 'pending') return 'skipped';
+    const txn = await repo.getPending(txnId);
+    if (!txn || txn.state !== 'new') return 'skipped';
+    await repo.markOutbox(itemId, { status: 'failed' });
+    await repo.upsertPending({ ...txn, error: PERMISSION_DENIED_MESSAGE });
+    return 'parked';
+  });
+}
+
 async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo; erp: ErpOps }, user: boolean): Promise<RunResult> {
   const found = await repo.getPending(txnId);
   if (!found) throw new Error(`Transaction ${txnId} not found`);

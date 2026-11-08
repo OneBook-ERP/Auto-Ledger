@@ -4,7 +4,7 @@ import { planAction, type PlanContext } from '../core/plan';
 import type { ActionPlan, PendingTxn } from '../core/types';
 import { ErpAuthError, ErpNetworkError, ErpValidationError } from '../erp/client';
 import * as runner from '../outbox/runner';
-import { outboxIdFor } from '../outbox/runner';
+import { outboxIdFor, parkForPermission, runPlan } from '../outbox/runner';
 import { PERMISSION_DENIED_MESSAGE, drainOutbox, type DrainErp } from './drain';
 
 const NOW = 1794200000000;
@@ -22,14 +22,14 @@ const ctx: PlanContext = {
   account: { bankAccount: 'IDFC CA', glAccount: 'IDFC CA - AL', kind: 'bank', senderIds: ['IDFCFB'], last4: ['6507'], modeOfPayment: 'Bank Transfer' },
   drawingsAccount: 'Drawings - AL', today: '2026-11-08',
 };
-const income = (t: PendingTxn): ActionPlan => planAction(t, { type: 'other_income', incomeAccount: 'Interest - AL' }, ctx);
+const income = (t: PendingTxn, incomeAccount = 'Interest - AL'): ActionPlan => planAction(t, { type: 'other_income', incomeAccount }, ctx);
 
 type Doc = { doctype: string; name: string; docstatus: number; ref: string };
 
-/** Fake ERP: `failFor[ref]` makes createDraft for that reference throw (every time, or `times` times). */
+/** Fake ERP: `failFor[ref]` makes createDraft for that reference throw (every time, or `times` times; only for bodies `when` accepts). */
 class FakeErp implements DrainErp {
   docs: Doc[] = [];
-  failFor: Record<string, { error: Error; times?: number }> = {};
+  failFor: Record<string, { error: Error; times?: number; when?: (body: Record<string, unknown>) => boolean }> = {};
   session = true;
   checkSession = jest.fn(async () => this.session);
   private seq = 0;
@@ -41,7 +41,7 @@ class FakeErp implements DrainErp {
   async createDraft(doctype: string, body: Record<string, unknown>) {
     const ref = String(body.cheque_no ?? body.reference_no);
     const f = this.failFor[ref];
-    if (f && (f.times === undefined || f.times > 0)) {
+    if (f && (f.times === undefined || f.times > 0) && (!f.when || f.when(body))) {
       if (f.times !== undefined) f.times--;
       throw f.error;
     }
@@ -121,6 +121,7 @@ describe('drainOutbox', () => {
   it('needs_login stops, persists needs_login_since (first time) and keeps the item queued', async () => {
     const { repo, erp, items, deps, tick } = await setup(2);
     erp.failFor.UTR1 = { error: new ErpAuthError('bad key', 401) };
+    erp.session = false;
     expect(await drainOutbox(deps)).toEqual({ ran: 1, stoppedBecause: 'needs_login' });
     expect(await repo.getSetting('needs_login_since')).toBe(String(NOW));
     expect(await status(repo, items[0].id)).toBe('pending');
@@ -128,12 +129,13 @@ describe('drainOutbox', () => {
     tick(60_000);
     expect(await drainOutbox(deps)).toEqual({ ran: 1, stoppedBecause: 'needs_login' });
     expect(await repo.getSetting('needs_login_since')).toBe(String(NOW));
-    expect(await repo.getSetting(`needs_login_count:${items[0].id}`)).toBe('2');
+    expect(await repo.getSetting(`needs_login_count:${items[0].id}`)).toBe('0'); // invalid session: not counted
   });
 
   it('a later created result clears needs_login_since', async () => {
     const { repo, erp, deps } = await setup(1);
     erp.failFor.UTR1 = { error: new ErpAuthError('bad key', 401), times: 1 };
+    erp.session = false;
     await drainOutbox(deps);
     expect(await repo.getSetting('needs_login_since')).toBe(String(NOW));
     expect(await drainOutbox(deps)).toEqual({ ran: 1, stoppedBecause: 'empty' });
@@ -145,9 +147,9 @@ describe('drainOutbox', () => {
     erp.failFor.UTR1 = { error: forbidden() };
     expect(await drainOutbox(deps)).toEqual({ ran: 1, stoppedBecause: 'needs_login' });
     expect(await drainOutbox(deps)).toEqual({ ran: 1, stoppedBecause: 'needs_login' });
-    expect(erp.checkSession).not.toHaveBeenCalled();
+    expect(erp.checkSession).toHaveBeenCalledTimes(2); // asked on every needs_login result
     expect(await drainOutbox(deps)).toEqual({ ran: 2, stoppedBecause: 'empty' });
-    expect(erp.checkSession).toHaveBeenCalledTimes(1);
+    expect(erp.checkSession).toHaveBeenCalledTimes(3);
     expect(await status(repo, items[0].id)).toBe('failed');
     expect(await repo.getPending('t1')).toMatchObject({ state: 'new', error: PERMISSION_DENIED_MESSAGE });
     expect(await status(repo, items[1].id)).toBe('done');
@@ -161,8 +163,9 @@ describe('drainOutbox', () => {
     erp.failFor.UTR1 = { error: forbidden() };
     erp.session = false;
     for (let i = 0; i < 4; i++) expect(await drainOutbox(deps)).toEqual({ ran: 1, stoppedBecause: 'needs_login' });
-    expect(erp.checkSession).toHaveBeenCalledTimes(2);
+    expect(erp.checkSession).toHaveBeenCalledTimes(4);
     expect(await status(repo, items[0].id)).toBe('pending');
+    expect(await repo.getSetting(`needs_login_count:${items[0].id}`)).toBe('0');
     expect((await repo.getPending('t1'))!.error).toBeNull();
   });
 
@@ -187,8 +190,121 @@ describe('drainOutbox', () => {
     erp.failFor.UTR1 = { error: forbidden(), times: 2 };
     await drainOutbox(deps);
     await drainOutbox(deps);
-    expect(erp.checkSession).not.toHaveBeenCalled();
+    expect(await repo.getSetting(key)).toBe('2');
     expect(await status(repo, items[0].id)).toBe('pending');
+  });
+
+  it('long logged out, then re-login, then the first 403 does not park immediately', async () => {
+    const { repo, erp, items, deps, tick } = await setup(1);
+    const key = `needs_login_count:${items[0].id}`;
+    erp.failFor.UTR1 = { error: new ErpAuthError('bad key', 401) };
+    erp.session = false;
+    for (let i = 0; i < 5; i++) {
+      expect(await drainOutbox(deps)).toEqual({ ran: 1, stoppedBecause: 'needs_login' });
+      tick(3600_000);
+    }
+    expect(await repo.getSetting(key)).toBe('0');
+    expect(await repo.getSetting('needs_login_since')).toBe(String(NOW));
+    // The user logs in again; the item now hits a permission 403.
+    erp.session = true;
+    erp.failFor.UTR1 = { error: forbidden() };
+    expect(await drainOutbox(deps)).toEqual({ ran: 1, stoppedBecause: 'needs_login' });
+    expect(await status(repo, items[0].id)).toBe('pending');
+    expect(await repo.getSetting(key)).toBe('1');
+    expect(await repo.getSetting('needs_login_since')).toBe(''); // the session works
+    expect(await drainOutbox(deps)).toEqual({ ran: 1, stoppedBecause: 'needs_login' });
+    expect(await status(repo, items[0].id)).toBe('pending');
+    expect(await drainOutbox(deps)).toEqual({ ran: 1, stoppedBecause: 'empty' });
+    expect(await status(repo, items[0].id)).toBe('failed');
+  });
+
+  it('parking a single item clears needs_login_since', async () => {
+    const { repo, erp, items, deps } = await setup(1);
+    erp.failFor.UTR1 = { error: forbidden() };
+    erp.session = false;
+    await drainOutbox(deps);
+    expect(await repo.getSetting('needs_login_since')).toBe(String(NOW));
+    erp.session = true;
+    await drainOutbox(deps);
+    await drainOutbox(deps);
+    expect(await drainOutbox(deps)).toEqual({ ran: 1, stoppedBecause: 'empty' });
+    expect(await status(repo, items[0].id)).toBe('failed');
+    expect(await repo.getPending('t1')).toMatchObject({ state: 'new', error: PERMISSION_DENIED_MESSAGE });
+    expect(await repo.getSetting('needs_login_since')).toBe('');
+  });
+
+  it('a non-needs_login result clears needs_login_since (retryable failure too)', async () => {
+    const { repo, erp, deps } = await setup(1);
+    erp.session = false;
+    erp.failFor.UTR1 = { error: new ErpAuthError('bad key', 401), times: 1 };
+    await drainOutbox(deps);
+    expect(await repo.getSetting('needs_login_since')).toBe(String(NOW));
+    erp.failFor.UTR1 = { error: new ErpNetworkError('timeout'), times: 1 };
+    expect(await drainOutbox(deps)).toEqual({ ran: 1, stoppedBecause: 'retry_later' });
+    expect(await repo.getSetting('needs_login_since')).toBe('');
+  });
+
+  it('a user decision made during the session check is never overwritten by parking', async () => {
+    const { repo, erp, items, deps } = await setup(2);
+    // Plan A (Interest) is refused with 403; the user's plan B (another income account) is allowed.
+    erp.failFor.UTR1 = { error: forbidden(), when: (b) => JSON.stringify(b).includes('Interest - AL') };
+    await drainOutbox(deps);
+    await drainOutbox(deps);
+    let reached!: () => void;
+    const atGate = new Promise<void>((r) => { reached = r; });
+    let release!: (v: boolean) => void;
+    erp.checkSession.mockImplementationOnce(() => {
+      reached();
+      return new Promise<boolean>((r) => { release = r; });
+    });
+    const drained = drainOutbox(deps);
+    await atGate;
+    const t1 = (await repo.getPending('t1'))!;
+    const planB = income(t1, 'Misc Income - AL');
+    const b = await runPlan('t1', planB, { repo, erp }, { userAction: true });
+    expect(b.status).toBe('created');
+    release(true);
+    expect(await drained).toEqual({ ran: 2, stoppedBecause: 'empty' });
+    expect(await status(repo, items[0].id)).toBe('superseded');
+    expect(await status(repo, outboxIdFor('t1', planB))).toBe('done');
+    const after = (await repo.getPending('t1'))!;
+    expect(after.state).toBe('created');
+    expect(after.error).toBeNull();
+    expect(after.createdDocs).toEqual([{ doctype: 'Journal Entry', name: erp.docs.find((d) => d.ref === 'UTR1')!.name, docstatus: 0 }]);
+    expect(await status(repo, items[1].id)).toBe('done');
+  });
+
+  describe('parkForPermission', () => {
+    it('parks a pending item of a new txn', async () => {
+      const { repo, items } = await setup(1);
+      expect(await parkForPermission('t1', items[0].id, { repo })).toBe('parked');
+      expect(await status(repo, items[0].id)).toBe('failed');
+      expect(await repo.getPending('t1')).toMatchObject({ state: 'new', error: PERMISSION_DENIED_MESSAGE, createdDocs: [] });
+    });
+    it('skips (changing nothing) when the item is no longer pending', async () => {
+      const { repo, items } = await setup(1);
+      await repo.markOutbox(items[0].id, { status: 'superseded' });
+      const before = await repo.getPending('t1');
+      expect(await parkForPermission('t1', items[0].id, { repo })).toBe('skipped');
+      expect(await status(repo, items[0].id)).toBe('superseded');
+      expect(await repo.getPending('t1')).toEqual(before);
+    });
+    it('skips (changing nothing) when the txn is no longer new', async () => {
+      for (const state of ['created', 'submitted', 'ignored', 'failed'] as const) {
+        const { repo, items } = await setup(1);
+        const handled = { ...(await repo.getPending('t1'))!, state, createdDocs: [{ doctype: 'Journal Entry', name: 'JV-1', docstatus: 0 }] };
+        await repo.upsertPending(handled);
+        expect(await parkForPermission('t1', items[0].id, { repo })).toBe('skipped');
+        expect(await status(repo, items[0].id)).toBe('pending');
+        expect(await repo.getPending('t1')).toEqual(handled);
+      }
+    });
+    it('skips a missing item or one of another txn', async () => {
+      const { repo, items } = await setup(2);
+      expect(await parkForPermission('t1', 'nope', { repo })).toBe('skipped');
+      expect(await parkForPermission('t1', items[1].id, { repo })).toBe('skipped');
+      expect(await status(repo, items[1].id)).toBe('pending');
+    });
   });
 
   it('never passes userAction to runPlan', async () => {
