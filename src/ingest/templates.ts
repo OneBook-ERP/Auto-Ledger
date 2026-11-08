@@ -27,35 +27,89 @@ const INLINE_FLAGS = /\(\?(?:[a-zA-Z]+(?:-[a-zA-Z]*)?|-[a-zA-Z]+)[):]/;
 const NAMED_GROUP = /\(\?<([^>=!][^>]*)>/g;
 
 /**
- * Real fixture SMS (fixtures/sms/idfc.json, redacted) a candidate set must parse exactly like this before it
- * is accepted. They cover a bank credit, a card spend and the OTP filter.
+ * SYNTHETIC SMS in the real IDFC wording (no real account digits, balances or limits). A candidate set must
+ * parse every one exactly like this before it is accepted: a bank credit and debit, an NEFT confirmation, a
+ * card spend, a card SI payment and the OTP filter.
  */
 export const SMOKE_SAMPLES: readonly {
-  fixtureId: string; sender: string; body: string; receivedAt: number;
+  id: string; sender: string; body: string; receivedAt: number;
   expect: { ok: true; kind: TxnKind; amountMinor: number; accountLast4: string | null; occurredOn: string } | { ok: false; reason: 'otp' };
 }[] = [
   {
-    fixtureId: 'idfc-001',
+    id: 'ca_credit',
     sender: 'JM-IDFCFB-S',
-    body: 'Your A/C XXXXX996507 is credited with INR 12,932.00 on 02/09/26 09:13. Your new balance is INR 5,12,932.76. Team IDFC FIRST Bank',
-    receivedAt: 1788320590821,
-    expect: { ok: true, kind: 'ca_credit', amountMinor: 1293200, accountLast4: '6507', occurredOn: '2026-09-02' },
+    body: 'Your A/C XXXXX991234 is credited with INR 1,500.00 on 03/11/26 09:15. Your new balance is INR 10,000.00. Team IDFC FIRST Bank',
+    receivedAt: 1793880000000,
+    expect: { ok: true, kind: 'ca_credit', amountMinor: 150000, accountLast4: '1234', occurredOn: '2026-11-03' },
   },
   {
-    fixtureId: 'idfc-033',
-    sender: 'JM-IDFCFB-S',
-    body: 'Transaction Successful! INR 3.00 spent on your IDFC FIRST Bank Credit Card ending XX3455 at Facebook India Online on 03 SEP 2026 at 12:44 AM Avbl Limit: INR 214080.05 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 3455 to 5676732',
-    receivedAt: 1788376482521,
-    expect: { ok: true, kind: 'card_spend', amountMinor: 300, accountLast4: '3455', occurredOn: '2026-09-03' },
+    id: 'ca_debit',
+    sender: 'AX-IDFCFB-S',
+    body: 'Your A/C XXXXX991234 is debited by INR 2,500.00 on 04/11/26 12:35. New Bal :INR 7,500.00. Call us on 1800 10 888 for dispute. Team IDFC FIRST Bank',
+    receivedAt: 1793880000000,
+    expect: { ok: true, kind: 'ca_debit', amountMinor: 250000, accountLast4: '1234', occurredOn: '2026-11-04' },
   },
   {
-    fixtureId: 'synthetic-otp',
+    id: 'neft_confirm',
+    sender: 'JD-IDFCFB-S',
+    body: 'Your beneficiary PERSON_A has received Rs. 2,500.00 transferred via NEFT UTR IDFB0000A0000001.\nTeam IDFC First Bank.',
+    receivedAt: 1793880000000, // 2026-11-05 in Asia/Kolkata; the body has no date
+    expect: { ok: true, kind: 'neft_confirm', amountMinor: 250000, accountLast4: null, occurredOn: '2026-11-05' },
+  },
+  {
+    id: 'card_spend',
+    sender: 'JM-IDFCFB-S',
+    body: 'Transaction Successful! INR 99.00 spent on your IDFC FIRST Bank Credit Card ending XX9876 at EXAMPLE STORE on 02 NOV 2026 at 10:05 AM Avbl Limit: INR 50000.00 If not done by you, call 1800 10 888 for dispute or to block your card SMS CCBLOCK 9876 to 5676732',
+    receivedAt: 1793880000000,
+    expect: { ok: true, kind: 'card_spend', amountMinor: 9900, accountLast4: '9876', occurredOn: '2026-11-02' },
+  },
+  {
+    id: 'card_si_paid',
+    sender: 'AD-IDFCFB-S',
+    body: 'INR 499.00 for Example Media paid from your IDFC FIRST Bank Credit Card XX9876 on 01/11/2026 basis standing instruction (SI).\nManage SI on your card: https://example.invalid/si using the SiHub ID: AAAAAAAAAA',
+    receivedAt: 1793880000000,
+    expect: { ok: true, kind: 'card_si_paid', amountMinor: 49900, accountLast4: '9876', occurredOn: '2026-11-01' },
+  },
+  {
+    id: 'otp',
     sender: 'VM-IDFCFB-S',
-    body: '123456 is your OTP for IDFC FIRST Bank transaction of INR 500.00. Do not share it with anyone. Valid for 10 minutes.',
+    body: '123456 is your OTP for IDFC FIRST Bank transaction of INR 100.00. Do not share it with anyone.',
     receivedAt: 1793880000000,
     expect: { ok: false, reason: 'otp' },
   },
 ];
+
+/**
+ * Constructs that compile in both JS and Java but mean different things (or nothing) in one of them:
+ * \A \Z \z \h \p{ \P{ (JS without the u flag reads them as letters), [^] (JS: any char) and && inside a
+ * character class (Java: intersection). Returns the first one found, or null.
+ */
+function nonPortable(p: string): string | null {
+  let inClass = false;
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i];
+    if (c === '\\') {
+      const n = p[i + 1];
+      if (n === 'A' || n === 'Z' || n === 'z' || n === 'h') return `\\${n}`;
+      if ((n === 'p' || n === 'P') && p[i + 2] === '{') return `\\${n}{`;
+      i++;
+      continue;
+    }
+    if (!inClass) {
+      if (c === '[') {
+        if (p[i + 1] === '^' && p[i + 2] === ']') return '[^]';
+        inClass = true;
+        // A leading ] (or ^]) is a literal in Java; skip it so the class is not ended early.
+        if (p[i + 1] === '^') i++;
+        if (p[i + 1] === ']') i++;
+      }
+      continue;
+    }
+    if (c === '&' && p[i + 1] === '&') return '&& in a character class';
+    if (c === ']') inClass = false;
+  }
+  return null;
+}
 
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const nonEmpty = (x: unknown): x is string => typeof x === 'string' && x.trim().length > 0;
@@ -63,6 +117,8 @@ const nonEmpty = (x: unknown): x is string => typeof x === 'string' && x.trim().
 function checkRegex(where: string, p: unknown): string | null {
   if (!nonEmpty(p)) return `${where} is missing or empty`;
   if (INLINE_FLAGS.test(p)) return `${where} uses inline flags`;
+  const bad = nonPortable(p);
+  if (bad) return `${where} uses ${bad}, which is not portable between the JS and Java engines`;
   let re: RegExp;
   try {
     re = new RegExp(p, 'i');
@@ -124,7 +180,7 @@ function smokeCheck(set: TemplateSet): string | null {
       ? r.ok && r.txn.kind === e.kind && r.txn.amountMinor === e.amountMinor
         && r.txn.accountLast4 === e.accountLast4 && r.txn.occurredOn === e.occurredOn
       : !r.ok && r.reason === e.reason;
-    if (!good) return `smoke check failed on sample ${s.fixtureId}`;
+    if (!good) return `smoke check failed on sample ${s.id}`;
   }
   return null;
 }

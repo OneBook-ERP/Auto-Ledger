@@ -93,19 +93,63 @@ describe('validateTemplateSet', () => {
     if (!r.ok) expect(r.reason).toMatch(/smoke/i);
   });
 
-  it('smoke samples are real fixtures and the bundled set parses them as the fixtures expect', () => {
-    expect(SMOKE_SAMPLES.length).toBeGreaterThanOrEqual(3);
+  it('smoke samples are synthetic (no real last-4 digits) and the bundled set parses them as expected', () => {
+    expect(SMOKE_SAMPLES.length).toBeGreaterThanOrEqual(6);
+    const kinds = SMOKE_SAMPLES.map((s) => (s.expect.ok ? s.expect.kind : s.expect.reason));
+    expect(new Set(kinds)).toEqual(new Set(['ca_credit', 'ca_debit', 'neft_confirm', 'card_spend', 'card_si_paid', 'otp']));
+    const realBodies = new Set((fixtures as Fixture[]).map((f) => f.body));
     for (const s of SMOKE_SAMPLES) {
-      const f = byId(s.fixtureId);
-      expect(s.sender).toBe(f.sender);
-      expect(s.body).toBe(f.body);
-      const r = parseSms(f.sender, f.body, f.receivedAt, bundled);
-      if (f.expected.ok) {
-        expect(r.ok && r.txn).toMatchObject(f.expected.txn);
+      expect(s.body).not.toMatch(/6507|3455|8129/);
+      expect(realBodies.has(s.body)).toBe(false);
+      const r = parseSms(s.sender, s.body, s.receivedAt, bundled);
+      if (s.expect.ok) {
+        expect(r.ok && r.txn).toMatchObject({
+          kind: s.expect.kind, amountMinor: s.expect.amountMinor, accountLast4: s.expect.accountLast4, occurredOn: s.expect.occurredOn,
+        });
       } else {
-        expect(r).toEqual({ ok: false, reason: f.expected.reason });
+        expect(r).toEqual({ ok: false, reason: s.expect.reason });
       }
     }
+  });
+
+  const tplIndex = (id: string) => bundled.banks[0].templates.findIndex((t) => t.id === id);
+  for (const id of ['ca_debit_short', 'neft_confirm_named', 'card_si_paid']) {
+    it(`rejects a set that breaks only the ${id} template (smoke check)`, () => {
+      const s = clone();
+      s.banks[0].templates[tplIndex(id)].regex = 'never matches this (?<amount>\\d+) zzqx';
+      const r = validateTemplateSet(s);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toMatch(/smoke/i);
+    });
+  }
+
+  // Constructs that compile in both JS and Java but mean different things there.
+  const denied: [string, string][] = [
+    ['\\A', '\\AYour A/C (?<amount>\\d+)'],
+    ['\\Z', 'credited (?<amount>\\d+)\\Z'],
+    ['\\z', 'credited (?<amount>\\d+)\\z'],
+    ['\\h', 'credited\\h(?<amount>\\d+)'],
+    ['\\p{', 'credited (?<amount>\\p{N}+)'],
+    ['\\P{', 'credited (?<amount>\\d+)\\P{L}'],
+    ['[^]', 'credited[^](?<amount>\\d+)'],
+    ['&& in a class', 'credited (?<amount>[0-9&&[^5]]+)'],
+  ];
+  for (const [name, regex] of denied) {
+    it(`rejects the construct ${name} in a template regex`, () => {
+      const s = clone();
+      s.banks[0].templates[tplIndex('ca_credit_short')].regex = regex;
+      const r = validateTemplateSet(s);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toMatch(/not portable/i);
+    });
+  }
+  it('rejects a denied construct in a top-level pattern too', () => {
+    const r = validateTemplateSet({ ...clone(), moneyVerbPattern: '\\b(?:debited|credited)\\z' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/moneyVerbPattern.*not portable/i);
+  });
+  it('allows escaped backslashes and && outside a class', () => {
+    expect(validateTemplateSet({ ...clone(), moneyVerbPattern: '\\b(?:debited|credited)\\b(?:&&)?\\\\A' }).ok).toBe(true);
   });
 });
 
