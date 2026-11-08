@@ -437,7 +437,11 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
               0,
             );
           }
-          doc = { doctype: hit.doctype, name: hit.name, docstatus: hit.docstatus };
+          // Found by reference, not created in this run. It is this app's own draft only when an earlier attempt
+          // of this step was started (write-ahead marker) or recorded it; otherwise it was already in ERPNext
+          // (another leg of the same UTR, or entered by hand) and Undo must never delete it.
+          const ours = (prior.attempting !== undefined && prior.attempting >= i) || prior.created[i]?.name === hit.name;
+          doc = { doctype: hit.doctype, name: hit.name, docstatus: hit.docstatus, ...(ours ? {} : { adopted: true }) };
         } else {
           const body = applyRenames(step.body, renames);
           delete body.docstatus; // checked above; createDraft forces 0 regardless
@@ -498,4 +502,122 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
     if (docs.length) await writeTxn(repo, txnId, txn, { state: 'new', createdDocs: docs, error: txn.error });
     return { status: 'failed', error, retryable: true };
   }
+}
+
+// ---------- Activity: per-txn lock for other writers, and Undo ----------
+
+/** Runs `fn` under the same per-txn lock as runPlan, so a status poll or Undo cannot interleave with a run. */
+export function withTxnLock<T>(txnId: string, fn: () => Promise<T>): Promise<T> {
+  return withLock(txnId, fn);
+}
+
+export const SUBMITTED_UNDO_MESSAGE = 'Your accountant already submitted this entry. Cancel it in ERPNext if it is wrong.';
+export const UNDO_FORBIDDEN_MESSAGE = 'Your ERPNext user is not allowed to delete this entry. Ask your administrator.';
+
+export type UndoResult =
+  /** `kept`: documents that were NOT deleted and stay in ERPNext (adopted, or listed by another message); only the link was removed. */
+  | { status: 'undone'; kept?: { doctype: string; name: string }[] }
+  | { status: 'refused'; reason: 'submitted' | 'not_found' | 'not_created'; message: string }
+  | { status: 'failed'; error: ErpNetworkError | ErpValidationError; retryable: boolean }
+  | { status: 'needs_login' };
+
+export type UndoOptions = {
+  /** Kept for callers ("Put back in Inbox"). Undo always re-reads every document's status; documents that are
+   *  cancelled or missing are never deleted, a document that is still a draft is handled as usual. */
+  docsAlreadyGone?: boolean;
+};
+
+/** Documents of `txn` that Undo may delete: created by this app for this txn and listed by no other txn. */
+export async function splitRemovable(repo: Repo, txn: PendingTxn, docs: CreatedDoc[] = txn.createdDocs): Promise<{ remove: CreatedDoc[]; keep: CreatedDoc[] }> {
+  const elsewhere = new Set((await repo.listPending()).filter((t) => t.id !== txn.id).flatMap((t) => t.createdDocs.map(docKey)));
+  const remove: CreatedDoc[] = [];
+  const keep: CreatedDoc[] = [];
+  for (const d of docs) (d.adopted || elsewhere.has(docKey(d)) ? keep : remove).push(d);
+  return { remove, keep };
+}
+
+/**
+ * Removes the drafts this app created for a 'created' txn and returns the txn to 'new' so the user can answer
+ * again. Runs under the per-txn lock and re-reads everything: only state 'created' qualifies, and every
+ * document's current status is fetched right before deleting. Never deletes a submitted document, and never
+ * a document it did not create (adopted by reference) or that another txn also lists: those are detached
+ * (dropped from this txn's record, left in ERPNext). Never marks the txn 'new' while its own draft still exists.
+ */
+export function undoTxn(txnId: string, deps: { repo: Repo; erp: ErpOps }, _opts: UndoOptions = {}): Promise<UndoResult> {
+  return withLock(txnId, () => undo(txnId, deps));
+}
+
+async function undo(txnId: string, { repo, erp }: { repo: Repo; erp: ErpOps }): Promise<UndoResult> {
+  const txn = await repo.getPending(txnId);
+  if (!txn) return { status: 'refused', reason: 'not_found', message: 'This entry was not found on this phone.' };
+  if (txn.state !== 'created') {
+    return { status: 'refused', reason: 'not_created', message: 'This entry is not waiting for your accountant, so there is nothing to undo.' };
+  }
+  const refusedSubmitted = async (docs: CreatedDoc[]): Promise<UndoResult> => {
+    await writeTxn(repo, txnId, txn, { state: 'submitted', createdDocs: docs, error: null });
+    return { status: 'refused', reason: 'submitted', message: SUBMITTED_UNDO_MESSAGE };
+  };
+  const failure = (e: unknown): UndoResult => {
+    // 401: the saved login is no longer accepted. 403: this user may not do it; signing in again would not help.
+    if (e instanceof ErpAuthError) {
+      if (e.status === 403) return { status: 'failed', error: new ErpValidationError(UNDO_FORBIDDEN_MESSAGE, 403), retryable: false };
+      return { status: 'needs_login' };
+    }
+    if (e instanceof ErpValidationError) return { status: 'failed', error: e, retryable: false };
+    const error = e instanceof ErpNetworkError ? e : new ErpNetworkError('Something went wrong while removing the draft. Nothing was changed.');
+    return { status: 'failed', error, retryable: true };
+  };
+
+  let docs = txn.createdDocs;
+  // Always a fresh status of every document, even those recorded as cancelled/missing: that record may be stale.
+  if (docs.length) {
+    let st: Record<string, number>;
+    try {
+      st = await erp.getDocStatuses(docs.map(({ doctype, name }) => ({ doctype, name })));
+    } catch (e) {
+      return failure(e);
+    }
+    docs = docs.map((d) => ({ ...d, docstatus: st[docKey(d)] === undefined ? -1 : st[docKey(d)] }));
+  }
+  if (docs.some((d) => d.docstatus === 1)) return refusedSubmitted(docs);
+
+  // Gone documents (missing, cancelled) are simply dropped from the record. Present drafts are deleted if they
+  // are ours, otherwise detached.
+  const present = docs.filter((d) => d.docstatus === 0);
+  const { remove, keep } = await splitRemovable(repo, txn, present);
+  let remaining = remove;
+  for (const d of [...remove].reverse()) {
+    try {
+      await erp.deleteDraft(d.doctype, d.name);
+    } catch (e) {
+      if (e instanceof NotDraftError && e.docstatus === 2) {
+        // cancelled meanwhile: gone
+      } else if (e instanceof ErpValidationError && e.status === 404) {
+        // already deleted: gone
+      } else if (e instanceof NotDraftError) {
+        remaining = remaining.map((x) => (x === d ? { ...x, docstatus: e.docstatus } : x));
+        return refusedSubmitted(remaining);
+      } else {
+        // A rejected DELETE is also what the server answers when the accountant submitted in the meantime.
+        if (e instanceof ErpValidationError) {
+          try {
+            const now = (await erp.getDocStatuses([{ doctype: d.doctype, name: d.name }]))[docKey(d)];
+            if (now === 1) return refusedSubmitted(remaining.map((x) => (x === d ? { ...x, docstatus: 1 } : x)));
+          } catch {
+            // report the original error
+          }
+        }
+        await writeTxn(repo, txnId, txn, { state: 'created', createdDocs: remaining, error: txn.error });
+        return failure(e);
+      }
+    }
+    remaining = remaining.filter((x) => x !== d);
+  }
+
+  // Nothing of ours is left. Retire the outbox items first so the drainer can never re-run them, then reopen the txn.
+  for (const it of await repo.listOutbox(txnId)) {
+    if (it.status !== 'superseded') await repo.markOutbox(it.id, { status: 'superseded', progress: withoutDocs(it) });
+  }
+  await writeTxn(repo, txnId, txn, { state: 'new', createdDocs: [], error: null });
+  return keep.length ? { status: 'undone', kept: keep.map(({ doctype, name }) => ({ doctype, name })) } : { status: 'undone' };
 }

@@ -14,7 +14,7 @@ export type ParseResult = { ok: true; txn: ParsedTxn } | { ok: false; reason: Ig
 export interface PendingTxn extends ParsedTxn {
   id: string; mergedCount: number; // 1 for a fresh item; see Correlation
   state: 'new'|'created'|'submitted'|'ignored'|'failed';
-  createdDocs: { doctype: string; name: string; docstatus: number }[]; error: string | null;
+  createdDocs: { doctype: string; name: string; docstatus: number; adopted?: boolean }[]; error: string | null;
 }
 
 export type PartyRef = { doctype: 'Customer'|'Supplier'|'Employee'; name: string };

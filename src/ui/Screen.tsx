@@ -13,10 +13,14 @@ export interface ScreenProps {
   scroll?: boolean;
   /** Pull-to-refresh (scrolling screens only). */
   refresh?: { refreshing: boolean; onRefresh: () => void };
+  /** Same thing as `refresh`, as two flat props (used by Activity). `refresh` wins when both are given. */
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
 /** Page frame: safe area, calm paper background, 20 dp gutters, optional pinned footer action. */
-export function Screen({ title, subtitle, top, children, footer, scroll = true, refresh }: ScreenProps) {
+export function Screen({ title, subtitle, top, children, footer, scroll = true, refresh, onRefresh, refreshing = false }: ScreenProps) {
+  const pull = refresh ?? (onRefresh ? { refreshing, onRefresh } : undefined);
   const body = (
     <>
       {top}
@@ -35,7 +39,7 @@ export function Screen({ title, subtitle, top, children, footer, scroll = true, 
       <KeyboardAvoidingView testID="screen-keyboard-avoiding" behavior="padding" className="flex-1">
         {scroll ? (
           <ScrollView testID="screen-scroll" className="flex-1" contentContainerClassName="px-5 pb-8 pt-4" keyboardShouldPersistTaps="handled"
-            refreshControl={refresh ? <RefreshControl refreshing={refresh.refreshing} onRefresh={refresh.onRefresh} /> : undefined}>
+            refreshControl={pull ? <RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} /> : undefined}>
             {body}
           </ScrollView>
         ) : (

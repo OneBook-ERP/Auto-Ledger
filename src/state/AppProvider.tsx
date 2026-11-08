@@ -21,6 +21,11 @@ import { maybeRefreshTemplates } from './templatesSchedule';
 export const SETUP_DONE_KEY = 'setupDone';
 export const SITE_URL_KEY = 'site_url';
 
+/** Local data belongs to one site: true when the saved data is that of `siteUrl` (the signed-in site). */
+export async function siteMatches(repo: Repo, siteUrl: string): Promise<boolean> {
+  return (await repo.getSetting(SITE_URL_KEY)) === siteUrl;
+}
+
 export type AppContextValue = {
   repo: Repo;
   native: SmsNative;
@@ -129,7 +134,7 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
           const s = sessionRef.current;
           if (!r || !s) return { failedSteps: [] };
           // Defence in depth: local data belongs to one site. Never post or match it against another.
-          if ((await r.getSetting(SITE_URL_KEY)) !== s.siteUrl) return { failedSteps: [], skipped: 'site_mismatch' };
+          if (!(await siteMatches(r, s.siteUrl))) return { failedSteps: [], skipped: 'site_mismatch' };
           const { erp } = buildErp(s, { fetchImpl });
           return runForegroundCycle({ repo: r, native, erp, now, fetchImpl });
         },
