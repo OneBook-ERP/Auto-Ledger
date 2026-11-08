@@ -242,68 +242,52 @@ Throwaway Users, the temporary Accounting Period, drafts and the one throwaway C
 
 ## A. SMS receiver on the OEM phone
 
-Status: **PENDING: results to be filled in by the controller after the second-handset test.** Build and plumbing were verified; the "survives swipe-away" question needs a real SMS.
+Result: **GO** (see A.6). Build and plumbing verified over adb (A.2); live delivery verified with a second handset (A.6).
 
 ### A.1 What was built
 
 - Local Expo module `modules/sms-ingest/` (autolinked from `modules/`): `expo-module.config.json`, `android/build.gradle`, `android/src/main/AndroidManifest.xml`, Kotlin `SmsReceiver` and `SmsIngestModule`, `src/index.ts`.
 - Manifest: `RECEIVE_SMS` and `POST_NOTIFICATIONS`; `<receiver expo.modules.smsingest.SmsReceiver android:exported="true" android:permission="android.permission.BROADCAST_SMS">` with an `android.provider.Telephony.SMS_RECEIVED` filter (priority 999). Merged into the app manifest by Gradle.
-- `SmsReceiver` runs no JavaScript (works with the process dead). On each SMS it appends `{sender, body, ts}` to SharedPreferences file `sms_ingest_spike`, key `queue` (JSON array, written with `commit()`), then posts a notification on channel `sms_spike` reading "Spike: SMS from <sender> (<n> chars)" (no body). **SPIKE ONLY: it accepts ANY sender. Remove in Task 9 (IDFC filter).**
-- `SmsIngestModule` (JS name `SmsIngest`): `requestPermissions()` (fires the system dialogs for RECEIVE_SMS and, on Android 13+, POST_NOTIFICATIONS; resolves immediately), `hasPermission()`, `peekQueue(): Promise<string>`.
-- `app/index.tsx` is a throwaway screen with "Request SMS permissions" and "Show queue" buttons.
+- The spike `SmsReceiver` ran no JavaScript (works with the process dead). On each SMS it appended `{sender, body, ts}` to SharedPreferences file `sms_ingest_spike`, key `queue`, then posted a notification on channel `sms_spike` ("Spike: SMS from <sender> (<n> chars)", no body). It accepted any sender; Task 9 replaced it (section C) and deletes the spike file on first load.
+- Spike `SmsIngestModule` (JS name `SmsIngest`): `requestPermissions()`, `hasPermission()`, `peekQueue()`; `app/index.tsx` was a throwaway screen with "Request SMS permissions" and "Show queue". Both replaced in Task 9.
 
 ### A.2 Verified on the phone without a second handset (CPH2487, 2026-11-08)
 
 - Debug APK built and installed; `dumpsys package` shows `app.onebook.autoledger/expo.modules.smsingest.SmsReceiver` registered for `android.provider.Telephony.SMS_RECEIVED`, priority 999.
 - `RECEIVE_SMS` and `POST_NOTIFICATIONS` appear in the requested permissions.
-- `adb shell pm grant` is NOT allowed on this phone (`GRANT_RUNTIME_PERMISSIONS` SecurityException): permissions must be granted by tapping "Request SMS permissions" on the phone. Before that, both were `granted=false`; `RECEIVE_SMS` carries flag `RESTRICTION_INSTALLER_EXEMPT` (sideloaded-app restricted-permission handling: if the system dialog does not appear, enable it manually in App info > Permissions, possibly via the three-dot "Allow restricted settings" entry).
-- Queue file absent before the first SMS (`run-as ... cat` gives "No such file"), as expected. The `sms_spike` channel is created lazily on the first SMS, so it is not listed yet.
-- App info shows "Manage notifications: Don't allow" until the notification permission is granted.
+- `adb shell pm grant` is NOT allowed on this phone (`GRANT_RUNTIME_PERMISSIONS` SecurityException): permissions must be granted by tapping the in-app request on the phone. Before that, both were `granted=false`; `RECEIVE_SMS` carries flag `RESTRICTION_INSTALLER_EXEMPT`. **No ColorOS setting was needed beyond granting the permission via the in-app request** (no "Allow restricted settings", battery or autostart change was made for the A.6 results).
+- Queue file absent before the first SMS, as expected.
 - `npm test`: 193 passed; `npm run typecheck` clean.
 
-### A.3 How to read the results
+### A.3 How the spike results were read
 
 ```
 adb shell run-as app.onebook.autoledger cat shared_prefs/sms_ingest_spike.xml
 adb shell dumpsys notification --noredact | grep -A8 app.onebook.autoledger
 ```
-Or tap "Show queue" in the app (works only if the app is opened again; the notification and the XML file are the evidence that the receiver ran while the app was dead). The queue holds the message text: do not paste real SMS bodies into the repo.
+The notification and the private queue file are the evidence that the receiver ran while the app was dead. The queue holds message text: do not paste real SMS bodies into the repo. (Production paths are in section C.)
 
 ### A.4 ColorOS menu names seen on the phone (App info for AutoLedger)
 
 Open via `adb shell am start -a android.settings.APPLICATION_DETAILS_SETTINGS -d package:app.onebook.autoledger`, or long-press the icon > App info.
-- Manage notifications (value "Don't allow" initially); Permissions.
-- **Battery usage**, opening "Power consumption control" with three options: **Allow background activity** ("No restrictions on any background activity."), **Smart mode (Recommended)** (the default, selected on this phone), **Restrict background activity**.
-- Data usage (has a "Background data" switch, on); Storage usage; Open by default; **Manage app if unused** (switch, ON by default: turn OFF, since it can revoke permissions and hibernate the app); Display over other apps.
-- No "Autostart" entry was visible on the top of this App info page (the page below "Display over other apps" was not checked). If ColorOS has an Auto-launch / Autostart toggle, look in Settings > Apps > Auto launch, or Settings > Battery; record the exact path in the results below.
+- Manage notifications (value "Don't allow" until the notification permission is granted); Permissions.
+- **Battery usage**, opening "Power consumption control" with three options: **Allow background activity**, **Smart mode (Recommended)** (the default, selected on this phone), **Restrict background activity**.
+- Data usage ("Background data" switch, on); Storage usage; Open by default; **Manage app if unused** (switch, ON by default; it can revoke permissions and hibernate an unused app, so onboarding should suggest turning it OFF); Display over other apps.
+- No "Autostart" entry was visible on this App info page. None of these settings were changed for the results in A.6.
 
-### A.5 Test procedure (user + controller, second handset)
+### A.5 Test procedure used (user + controller, second handset)
 
-Preparation: open the app, tap "Request SMS permissions", allow SMS and notifications; confirm in App info > Permissions. Note the number of the second handset (do not commit it). Before each scenario clear the evidence: `adb shell run-as app.onebook.autoledger rm -f shared_prefs/sms_ingest_spike.xml` (only valid while the app process is not running, otherwise SharedPreferences rewrites it; if in doubt just count entries) and dismiss notifications. Send one SMS from the second handset per scenario with a unique text (e.g. "A1", "A2"...). Do NOT use force-stop from adb: the swipe-away is the real test. Battery optimisation stays at the default (Smart mode) for scenarios 1 to 4.
+Preparation: open the app, grant SMS and notifications through the in-app request. Note the second handset's number (never commit it). One SMS per scenario with a unique text. `am force-stop` is never used: the swipe-away is the real test. Battery setting stays at the default (Smart mode).
 
 | # | Scenario | Steps |
 |---|----------|-------|
 | 1 | App in foreground | App open on its screen, screen on. Send SMS. |
 | 2 | App in background | Press Home (app still in recents), screen on. Send SMS. |
 | 3 | Swiped away, screen on | Open recents, swipe AutoLedger away, screen on. Send SMS. |
-| 4 | Swiped away, screen off 10 min | Swipe away, lock the screen, wait 10 minutes, send SMS, wait 10 more minutes with the screen off, then wake the phone. Check notification and queue file. |
-| 5 | Swiped away + background activity allowed | App info > Battery usage > Allow background activity; Manage app if unused OFF; enable autostart/auto launch if present. Swipe away, screen off 10 minutes, send SMS. Repeat after a phone reboot without opening the app (optional, strongest test). |
+| 4 | Swiped away, screen off | Swipe away, lock the screen, wait (about 1 min for 4b, about 12 min for "idle"), send SMS, then wake the phone. Check notification and queue file. |
+| 5 | Swiped away + background activity allowed | Only if 3 or 4 fail: App info > Battery usage > Allow background activity; Manage app if unused OFF. Not needed (see A.6). |
 
-### A.6 RESULTS (to be filled in)
-
-| # | Scenario | Notification shown? | Entry in queue file? | Delay | Notes |
-|---|----------|---------------------|----------------------|-------|-------|
-| 1 | Foreground | | | | |
-| 2 | Background (Home) | | | | |
-| 3 | Swiped away, screen on | | | | |
-| 4 | Swiped away, screen off 10 min | | | | |
-| 5 | Swiped away + Allow background activity / autostart | | | | |
-
-Exact steps the user must take on ColorOS (feeds Task 16 onboarding copy): _to be filled in_
-
-Go / no-go for the Kotlin receiver: _to be filled in_ (if no-go, stop and escalate; the fallback is native Kotlin per spec section 6).
-
-### A. Results (2026-11-08, Oppo/OnePlus CPH2487, ColorOS, default "Smart mode" background setting, debug build, sideloaded)
+### A.6 Results (2026-11-08, Oppo/OnePlus CPH2487, ColorOS, default "Smart mode" background setting, debug build, sideloaded)
 
 Method: plain SMS from a second handset; results read over adb from the app's private queue file (`run-as`), the notification list, and the process start time versus the SMS timestamp. `am force-stop` was never used.
 
@@ -313,9 +297,11 @@ Method: plain SMS from a second handset; results read over adb from the app's pr
 | 2 | App in background (Home) | PASS | launcher was the resumed activity; message stored |
 | 3 | Swiped away, screen on | PASS (inferred) | process started 2-3 s after the SMS timestamp with the launcher in front |
 | 4b | Swiped away, screen off about 1 min | PASS | process confirmed dead before the SMS (screen Dozing); process start matched the SMS |
-| 5-idle | Swiped away, screen off about 12 min | PASS | process checked dead every minute for 10 min (21:17-21:27); message stored, process started at the SMS time |
+| 4-idle | Swiped away, screen off about 12 min | PASS | process checked dead every minute for 10 min; message stored, process started at the SMS time |
 
-Notes: a first attempt returned nothing because the message was sent as RCS/chat, not SMS (not delivered to the SMS inbox at all). A test where the app had not actually been swiped away (process still alive from the previous SMS) was discarded as inconclusive. Real bank alerts are plain SMS. `RECEIVE_SMS` had to be granted by tapping the in-app request on the phone (`adb shell pm grant` is blocked on this phone). The "Allow background activity" scenario was not needed.
+Notes: a first attempt returned nothing because the message was sent as RCS/chat, not SMS (not delivered to the SMS inbox at all); send test messages as plain SMS. A test where the app had not actually been swiped away (process still alive from the previous SMS) was discarded as inconclusive. Real bank alerts are plain SMS. Scenario 5 ("Allow background activity") was not needed.
+
+Steps the user must take on ColorOS (feeds Task 16 onboarding copy): grant SMS and notification permissions through the in-app request. Nothing else was required on this phone; suggesting "Manage app if unused: OFF" is a precaution, not a measured need.
 
 **Go/no-go: GO.** The Kotlin broadcast receiver inside the Expo module receives SMS on this phone when the app has been swiped away and has been idle for about 12 minutes. Not tested: a reboot, battery-saver mode, deep overnight idle, other OEMs (Samsung/Xiaomi), and a release (non-debug) build.
 
@@ -328,3 +314,71 @@ Run on stage (2026-11-08) with bodies produced verbatim by `planAction`; every d
 - Company default payable account is `Creditors - ZP`. Result: no planner change needed (no `payableAccount` in `PlanContext`).
 - `bill_paid_by_card` references row path: not live-tested against a real invoice (stage had no submitted Purchase Invoice with outstanding > 0, and invoices must not be submitted on stage). A reference to a nonexistent invoice is rejected: `417 LinkValidationError "Could not find Row #1: Name: PINV-NONE"`; the body shape was otherwise as in B.5.
 - Journal Entry with `party_type: Supplier` + `party` on the **expense debit row** (`Administrative Expenses - ZP`), credit the card GL: `200`, draft, party fields stored on the row as sent. Kept in the planner.
+
+## C. Production receiver verification procedure (Task 9)
+
+Run by the controller with the user, the pilot phone (over adb) and a second handset. The controller installs the debug APK (`android/app/build/outputs/apk/debug/app-debug.apk`; the phone shows an install-approval prompt). Never commit the second handset's number, real SMS bodies or screenshots containing them. Send every test message as **plain SMS**, not RCS/chat (see A.6 notes).
+
+Package `app.onebook.autoledger`. Shorthand used below: `P=app.onebook.autoledger`.
+
+Where the production receiver keeps its state (app-private; `android:allowBackup="false"`; queue in `no_backup/`):
+
+| What | Path (relative to the app data dir) |
+|---|---|
+| Queue (JSON `{v, seq, items[]}`; each item `{id, sender, body, receivedAt, kind}`) | `no_backup/sms-ingest/queue.json` |
+| Dropped-when-full counter (bound 500) | `no_backup/sms-ingest/dropped` |
+| Sender patterns | `no_backup/sms-ingest/sender_patterns.json` |
+| Quarantined corrupt files | `no_backup/sms-ingest/*.corrupt-<epoch ms>` |
+| Template override (from `setTemplates`) | `files/templates/idfc.json` |
+
+```
+adb shell run-as $P ls -la no_backup/sms-ingest files/templates shared_prefs
+adb shell run-as $P cat no_backup/sms-ingest/queue.json
+adb shell run-as $P cat no_backup/sms-ingest/sender_patterns.json
+adb shell dumpsys notification --noredact | grep -B2 -A14 "pkg=$P"
+adb shell dumpsys notification | grep -A3 "transactions"
+adb shell dumpsys package $P | grep -E "pkgFlags|privateFlags|ALLOW_BACKUP"
+adb shell dumpsys package $P | grep -E "RECEIVE_SMS|READ_SMS|POST_NOTIFICATIONS"
+adb shell dumpsys package $P | grep -B1 -A4 "SMS_RECEIVED"
+adb shell pidof $P          # empty = process dead
+```
+
+Why the test needs the "extra pattern" and "test templates": the receiver only stores SMS from configured sender patterns (`IDFCFB` in production), and the template engine only parses senders whose `senderPattern` is in the template set. A second handset's sender is a phone number, so on the debug screen the user enters a substring of that number (for example its last 6 digits) as the extra pattern, taps **Set sender patterns** (patterns become `IDFCFB` + extra), and taps **Use test templates** (stores, through the normal `setTemplates` path, the bundled IDFC templates with one more bank entry whose `senderPattern` is the extra pattern). No receiver code path treats test senders specially.
+
+### C.1 Setup and static checks
+
+1. Install the APK (controller). Open the app: the "Receiver test (debug)" screen appears.
+2. Tap **Request permissions**; allow SMS (one dialog may cover receive and read) and notifications. The output shows `{"receive":true,"read":true,"notifications":true}`.
+3. Enter the extra pattern; tap **Set sender patterns** (expect `patterns: ["IDFCFB","<extra>"]`), then **Use test templates** (expect `setTemplates: true; {"source":"override","version":1}`).
+4. Tap **Engine health and templates**: expect `health.usable: true`, `reason: "ok"`, `templates.source: "override"`, `dropped: 0`. If `usable` is false, stop: SMS would be stored unparsed and no notifications posted.
+5. `dumpsys package`: `pkgFlags` must NOT contain `ALLOW_BACKUP`; `RECEIVE_SMS`, `READ_SMS`, `POST_NOTIFICATIONS` requested and `granted=true`; the receiver registered for `SMS_RECEIVED`.
+6. `run-as $P ls shared_prefs`: no `sms_ingest_spike.xml` (the Task 2 spike queue is deleted on first load).
+
+### C.2 Message scenarios (app in foreground unless stated; clear notifications between scenarios)
+
+| # | From | Body | Expect |
+|---|---|---|---|
+| 1 | second handset | `Your A/c XXXXXXX1234 has been credited with Rs. 100.00 on 08-11-2026. Info: NEFT/TEST/ACME TEST TRADERS. New bal: Rs. 1,000.00. Team IDFC FIRST Bank` | Notification on channel `transactions`: title `₹100.00 credited to IDFC First …1234`, text `Tap to classify` (no body text). Queue item `kind: "ca_credit"`. |
+| 2 | second handset | `Rs 50.00 debited from your account via a new channel. Team IDFC FIRST Bank` | Queue item `kind: "unrecognised"`; **no** notification. |
+| 3 | second handset | `482913 is your OTP for login. Do not share it with anyone.` | Not stored (queue unchanged), no notification. |
+| 4 | second handset | `Hello, this is a test message with no money in it` | Not stored, no notification. |
+| 5 | second handset, after **Set sender patterns** with the extra field EMPTY (patterns `["IDFCFB"]`) | the body of #1 with `Rs. 105.00` | Not stored, no notification (sender not configured). Afterwards re-enter the extra pattern and tap **Set sender patterns** again. |
+| 6 | second handset, app swiped away, screen on | body of #1 with `Rs. 101.00` | Notification `₹101.00 credited to IDFC First …1234`; queue item `ca_credit`; `pidof` shows the process started at the SMS time. |
+| 7 | second handset, app swiped away, screen off about 12 min (check `pidof` empty every minute first) | body of #1 with `Rs. 102.00` | As #6, after waking the phone. |
+
+After each, read the queue with `run-as ... cat no_backup/sms-ingest/queue.json` and the notification with `dumpsys notification --noredact`. Each notification has its own id (derived from the queue item id), so #1, #6 and #7 appear as separate notifications. On the lock screen the notification is PRIVATE: with "hide sensitive content" on, it shows only "AutoLedger / New bank transaction".
+
+### C.3 Tap, queue and backfill
+
+1. Tap a notification: the app opens via the immutable deep link `autoledger://inbox`. Until the Inbox screen exists (Task 17), expo-router shows its "Unmatched Route" screen; the app must not crash. Equivalent adb check: `adb shell am start -W -a android.intent.action.VIEW -d autoledger://inbox $P`.
+2. Debug screen **Peek queue**: lists id, sender, kind, receivedAt and body of each stored message (#1, #2, #6, #7; not #3, #4, #5). Peek twice: the list is unchanged (peek never removes).
+3. **Backfill 7 days**: shows a count only. Expect the money-like test SMS from the second handset still in the phone's SMS inbox (#1, #2, #5, #6, #7 = 5, plus any real IDFC alerts of the last 7 days), never #3 (OTP) or #4. The queue is not changed by backfill.
+4. **Ack all**: `acked N`; **Peek queue** then shows `queue empty`; `queue.json` has `"items":[]`.
+
+### C.4 Cleanup
+
+Tap **Reset templates** (expect `{"source":"bundled","version":1}`), clear the extra field and tap **Set sender patterns** (`["IDFCFB"]`), **Ack all**. Optionally delete the test SMS from the phone's inbox. Record results below with dates, but no numbers or bodies.
+
+### C.5 Results
+
+_Recorded by the controller after the run._
