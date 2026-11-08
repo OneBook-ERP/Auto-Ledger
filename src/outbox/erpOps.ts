@@ -2,7 +2,7 @@
 // runner can be tested against a fake. makeErpOps binds it to a real client (used by the pipeline).
 import type { PartyRef } from '../core/types';
 import { ErpValidationError, type ErpClient } from '../erp/client';
-import { createDraft, createParty, deleteDraft, findDraftByUtr, searchParties } from '../erp/docs';
+import { createDraft, createParty, deleteDraft, findDraftByUtr, getDocStatuses, searchParties } from '../erp/docs';
 
 export interface ErpOps {
   /** Non-cancelled Payment Entry (reference_no) or Journal Entry (cheque_no) carrying `reference`; docstatus 0 or 1. */
@@ -12,7 +12,9 @@ export interface ErpOps {
   /** Throws NotDraftError when the document is no longer a draft. */
   deleteDraft(doctype: string, name: string): Promise<void>;
   /** `name` is the document id (may be a naming series); `displayName` is customer/supplier/employee name. */
-  searchParties(doctype: PartyRef['doctype'], q: string): Promise<(PartyRef & { displayName: string })[]>;
+  searchParties(doctype: PartyRef['doctype'], q: string, exact?: boolean): Promise<(PartyRef & { displayName: string })[]>;
+  /** Keyed `${doctype}:${name}`; a missing key means the document is gone (or not visible). */
+  getDocStatuses(refs: { doctype: string; name: string }[]): Promise<Record<string, number>>;
   createParty(doctype: PartyRef['doctype'], fields: Record<string, unknown>): Promise<PartyRef>;
 }
 
@@ -26,7 +28,8 @@ export function makeErpOps(client: ErpClient): ErpOps {
       return createDraft(client, doctype, body);
     },
     deleteDraft: (doctype, name) => deleteDraft(client, doctype, name),
-    searchParties: (doctype, q) => searchParties(client, doctype, q),
+    searchParties: (doctype, q, exact) => searchParties(client, doctype, q, exact),
+    getDocStatuses: (refs) => getDocStatuses(client, refs),
     createParty: (doctype, fields) => createParty(client, doctype, fields),
   };
 }

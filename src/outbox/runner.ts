@@ -10,6 +10,7 @@
 import type { ActionPlan, OutboxOp, PartyRef, PendingTxn, PlanStep } from '../core/types';
 import type { Repo } from '../data/repo';
 import { ErpAuthError, ErpNetworkError, ErpValidationError } from '../erp/client';
+import { NotDraftError } from '../erp/docs';
 import type { ErpOps } from './erpOps';
 
 export type { ErpOps } from './erpOps';
@@ -123,13 +124,21 @@ function referencedPartyName(plan: ActionPlan, i: number): string | null {
   return null;
 }
 
-/** The display name in the new party's fields (customer_name / supplier_name / employee_name or first + last). */
+/**
+ * The display name ERPNext will store for the new party: customer_name / supplier_name, or for an Employee
+ * first + middle + last (ERPNext overwrites employee_name with that, so a caller-supplied one is ignored).
+ */
 function displayNameOf(step: PlanStep): string | null {
   const f = step.body;
+  if (step.doctype === 'Employee') {
+    const full = [f.first_name, f.middle_name, f.last_name]
+      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      .map((x) => x.trim())
+      .join(' ');
+    return full || null;
+  }
   const direct = f[NAME_FIELD[step.doctype]];
-  if (typeof direct === 'string' && direct.trim()) return direct.trim();
-  const full = [f.first_name, f.last_name].filter((x) => typeof x === 'string' && x.trim()).map((x) => (x as string).trim()).join(' ');
-  return full || null;
+  return typeof direct === 'string' && direct.trim() ? direct.trim() : null;
 }
 
 const norm = (s: string) => s.trim().toLowerCase();
@@ -164,17 +173,99 @@ function describeFailure(e: ErpValidationError, step: PlanStep): string {
 const ERP_ERROR = (e: unknown): e is Error =>
   e instanceof ErpAuthError || e instanceof ErpValidationError || e instanceof ErpNetworkError || (e instanceof Error && e.name === 'NotDraftError');
 
-// ---------- runner ----------
+// ---------- replaced decisions: orphan drafts ----------
 
-export function runPlan(txnId: string, plan: ActionPlan, deps: { repo: Repo; erp: ErpOps }): Promise<RunResult> {
-  return withLock(txnId, () => run(txnId, plan, deps));
+const docKey = (d: DocRef) => `${d.doctype}:${d.name}`;
+const submittedError = (name: string) => new ErpValidationError(`${name} was already submitted in ERPNext; cancel it there first.`, 0);
+const replacedError = () => new ErpValidationError('This action was replaced by a newer decision.', 0);
+
+/** Document steps of `op` whose create may have reached the server (done, or started per the write-ahead marker). */
+function attemptedDocSteps(op: OutboxOp): PlanStep[] {
+  return op.plan.steps.filter((s, j) => s.kind === 'create_doc' && (j < op.progress.stepIndex || j === op.progress.attempting));
 }
 
-async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo; erp: ErpOps }): Promise<RunResult> {
+/** Progress of a cleaned-up item: party steps are kept (master data is never deleted), document steps forgotten. */
+function withoutDocs(op: OutboxOp): Progress {
+  const k = op.plan.steps.findIndex((s) => s.kind === 'create_doc');
+  const upto = k < 0 ? op.progress.stepIndex : Math.min(op.progress.stepIndex, k);
+  const att = op.progress.attempting;
+  return { stepIndex: upto, created: op.progress.created.slice(0, upto), ...(att !== undefined && (k < 0 || att < k) ? { attempting: att } : {}) };
+}
+
+type Orphans = { items: OutboxOp[]; docs: DocRef[] };
+
+/**
+ * Read-only. Drafts left on the server by this txn's replaced decisions (other unfinished outbox items whose
+ * document create was attempted, and documents recorded on the txn that the current item did not make).
+ * Throws the "already submitted" ErpValidationError when one of them is no longer a draft.
+ */
+async function findOrphans(erp: ErpOps, others: OutboxOp[], txn: PendingTxn, keep: Set<string>): Promise<Orphans> {
+  const docs: DocRef[] = [];
+  const seen = new Set<string>(keep);
+  const items: OutboxOp[] = [];
+  for (const o of others) {
+    const steps = attemptedDocSteps(o);
+    if (!steps.length) continue;
+    items.push(o);
+    for (const s of steps) {
+      const hit = await erp.findDraftByUtr(referenceOf(s) as string);
+      // Only a document of that item's own doctype is its orphan; anything else is not ours to touch.
+      if (!hit || hit.doctype !== s.doctype || seen.has(docKey(hit))) continue;
+      if (hit.docstatus !== 0) throw submittedError(hit.name);
+      seen.add(docKey(hit));
+      docs.push({ doctype: hit.doctype, name: hit.name });
+    }
+  }
+  const recorded = txn.createdDocs.filter((d) => !seen.has(docKey(d)));
+  if (recorded.length) {
+    const st = await erp.getDocStatuses(recorded.map(({ doctype, name }) => ({ doctype, name })));
+    for (const d of recorded) {
+      const ds = st[docKey(d)];
+      if (ds === undefined || ds === 2) continue; // gone or cancelled
+      if (ds !== 0) throw submittedError(d.name);
+      seen.add(docKey(d));
+      docs.push({ doctype: d.doctype, name: d.name });
+    }
+  }
+  return { items, docs };
+}
+
+async function removeOrphans(repo: Repo, erp: ErpOps, o: Orphans): Promise<void> {
+  for (const d of o.docs) {
+    try {
+      await erp.deleteDraft(d.doctype, d.name);
+    } catch (e) {
+      if (e instanceof NotDraftError) {
+        if (e.docstatus === 2) continue;
+        throw submittedError(d.name);
+      }
+      if (e instanceof ErpValidationError && e.status === 404) continue; // already gone
+      throw e;
+    }
+  }
+  for (const it of o.items) await repo.markOutbox(it.id, { progress: withoutDocs(it) });
+}
+
+// ---------- runner ----------
+
+export type RunOptions = {
+  /** true only on the UI path (the user's decision): may enqueue or re-open the item. The drainer omits it. */
+  userAction?: boolean;
+};
+
+export function runPlan(txnId: string, plan: ActionPlan, deps: { repo: Repo; erp: ErpOps }, opts: RunOptions = {}): Promise<RunResult> {
+  return withLock(txnId, () => run(txnId, plan, deps, opts.userAction === true));
+}
+
+async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo; erp: ErpOps }, user: boolean): Promise<RunResult> {
   const found = await repo.getPending(txnId);
   if (!found) throw new Error(`Transaction ${txnId} not found`);
-  const txn: PendingTxn = found;
+  let txn: PendingTxn = found;
   const id = outboxIdFor(txnId, plan);
+  const stored = await repo.getOutbox(id);
+
+  // A non-user run (the drainer) only works on an item that is still current; otherwise it changes nothing.
+  if (!user && (!stored || stored.status !== 'pending')) return { status: 'failed', error: replacedError(), retryable: false };
 
   // Only a txn still waiting for a decision is acted on. 'created'/'submitted': the work is done (also the
   // recovery path when the txn write landed but the outbox 'done' write did not). 'ignored' (or anything
@@ -193,21 +284,13 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
     return { status: 'failed', error: new ErpValidationError(msg, 0), retryable: false };
   }
 
-  // Open (or re-open) the outbox item; progress and attempts are read back from the database only.
-  let op: Known;
-  const stored = await repo.getOutbox(id);
-  if (!stored) {
+  // Open the item (user decisions only). enqueue/reopenOutbox supersede the txn's other pending items atomically.
+  if (user && !stored) {
     await repo.enqueue({ id, txnId, plan, progress: { stepIndex: 0, created: [] }, attempts: 0, status: 'pending' });
-    await repo.supersedePending(txnId, id);
-    op = { progress: { stepIndex: 0, created: [] }, attempts: 0 };
-  } else {
-    if (stored.status !== 'pending') {
-      // A user re-run of an earlier decision: it becomes the current one.
-      await repo.markOutbox(id, { status: 'pending' });
-      await repo.supersedePending(txnId, id);
-    }
-    op = { progress: stored.progress, attempts: stored.attempts };
+  } else if (user && stored && stored.status !== 'pending') {
+    await repo.reopenOutbox(id);
   }
+  const op: Known = stored ? { progress: stored.progress, attempts: stored.attempts } : { progress: { stepIndex: 0, created: [] }, attempts: 0 };
 
   const bad = checkPlan(plan);
   if (bad) {
@@ -217,19 +300,50 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
     return { status: 'failed', error, retryable: false };
   }
 
+  // Drafts left by replaced decisions are deleted BEFORE the new plan runs: otherwise the reference lookup
+  // below would adopt them (they carry the same UTR) or they would stay in ERPNext unknown to the app.
+  try {
+    const keep = new Set(op.progress.created.map(docKey));
+    const others = (await repo.listOutbox(txnId)).filter((o) => o.id !== id && o.status !== 'done');
+    const orphans = await findOrphans(erp, others, txn, keep);
+    await removeOrphans(repo, erp, orphans);
+    const kept = txn.createdDocs.filter((d) => keep.has(docKey(d)));
+    if (kept.length !== txn.createdDocs.length) {
+      await writeTxn(repo, txnId, txn, { state: txn.state, createdDocs: kept, error: txn.error });
+      txn = { ...txn, createdDocs: kept };
+    }
+  } catch (e) {
+    if (e instanceof ErpAuthError) return { status: 'needs_login' };
+    if (e instanceof ErpValidationError) {
+      // A submitted document blocks the new decision; the txn is left untouched.
+      await repo.markOutbox(id, { status: 'failed' });
+      return { status: 'failed', error: e, retryable: false };
+    }
+    const error = e instanceof ErpNetworkError ? e : new ErpNetworkError('Something went wrong while creating the entry. It will be retried.');
+    await repo.markOutbox(id, { attempts: op.attempts + 1 });
+    return { status: 'failed', error, retryable: true };
+  }
+
   if (plan.steps.length === 0) {
-    await writeTxn(repo, txnId, txn, { state: 'ignored', createdDocs: [], error: null });
+    await writeTxn(repo, txnId, txn, { state: 'ignored', createdDocs: txn.createdDocs, error: null });
     await writeOp(repo, id, { progress: { stepIndex: 0, created: [] }, attempts: op.attempts }, 'done');
     return { status: 'created', docs: [] };
   }
 
   const prior = op.progress;
+  const markerAfter = (i: number) => (prior.attempting !== undefined && prior.attempting > i ? { attempting: prior.attempting } : {});
   const created: DocRef[] = []; // created[i] is what step i produced or reused
   const docs: CreatedDoc[] = []; // documents that exist on the server, in step order
   const madeHere: CreatedDoc[] = []; // documents created by THIS run (the only ones compensation may delete)
   const renames = new Map<string, string>();
-  let progress: Progress = { stepIndex: 0, created: [] };
+  let progress: Progress = { stepIndex: 0, created: [], ...(prior.attempting !== undefined ? { attempting: prior.attempting } : {}) };
   let i = 0;
+
+  // Write-ahead marker: recorded before a server write so a retry knows the write may have happened.
+  const attempt = async (step: number) => {
+    progress = { stepIndex: progress.stepIndex, created: progress.created, attempting: step };
+    await writeOp(repo, id, { progress, attempts: op.attempts });
+  };
 
   try {
     for (i = 0; i < plan.steps.length; i++) {
@@ -237,18 +351,20 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
       if (step.kind === 'create_party') {
         const dt = step.doctype as PartyRef['doctype'];
         const refName = referencedPartyName(plan, i);
-        const display = displayNameOf(step);
         const fromProgress = i < prior.stepIndex ? prior.created[i] : undefined;
         let ref: PartyRef | undefined = fromProgress && fromProgress.doctype === dt ? { doctype: dt, name: fromProgress.name } : undefined;
-        const q = display ?? refName;
-        if (!ref && q) {
-          // A series-named party (HR-EMP-00007, CUST-00042) only matches on its display name.
-          const wanted = new Set([display, refName].filter((x): x is string => !!x).map(norm));
-          const hits = (await erp.searchParties(dt, q)).filter((h) => h.doctype === dt);
-          const hit = hits.find((h) => h.name === refName) ?? hits.find((h) => wanted.has(norm(h.displayName)));
-          if (hit) ref = { doctype: dt, name: hit.name };
+        // Recovery only: a previous attempt may have created the party (lost reply / crash before the
+        // progress write). On a first attempt the user asked for a NEW party, so a namesake is not reused.
+        const q = displayNameOf(step) ?? refName;
+        if (!ref && q && prior.attempting !== undefined && prior.attempting >= i) {
+          const hits = (await erp.searchParties(dt, q, true)).filter((h) => h.doctype === dt && norm(h.displayName) === norm(q));
+          if (hits.length > 1) throw new ErpValidationError(`More than one ${dt} is named ${q}; pick the right one in ERPNext.`, 0);
+          if (hits.length === 1) ref = { doctype: dt, name: hits[0].name };
         }
-        if (!ref) ref = await erp.createParty(dt, step.body);
+        if (!ref) {
+          await attempt(i);
+          ref = await erp.createParty(dt, step.body);
+        }
         if (refName && ref.name !== refName) renames.set(`${dt}\u0000${refName}`, ref.name);
         created[i] = { doctype: ref.doctype, name: ref.name };
       } else {
@@ -265,6 +381,7 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
         } else {
           const body = applyRenames(step.body, renames);
           delete body.docstatus; // checked above; createDraft forces 0 regardless
+          await attempt(i);
           const r = await erp.createDraft(step.doctype, body);
           doc = { doctype: step.doctype, name: r.name, docstatus: 0 };
           madeHere.push(doc);
@@ -272,7 +389,7 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
         docs.push(doc);
         created[i] = { doctype: doc.doctype, name: doc.name };
       }
-      progress = { stepIndex: i + 1, created: created.slice(0, i + 1) };
+      progress = { stepIndex: i + 1, created: created.slice(0, i + 1), ...markerAfter(i) };
       await writeOp(repo, id, { progress, attempts: op.attempts });
     }
   } catch (e) {
@@ -307,7 +424,9 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
           notes.push(`The draft ${d.doctype} ${d.name} was not removed: ${why} Delete or cancel it in ERPNext.`);
         }
       }
-      const kept = madeHere.length ? { stepIndex: keep, created: created.slice(0, keep) } : best;
+      const kept: Progress = madeHere.length
+        ? { stepIndex: keep, created: created.slice(0, keep), ...(progress.attempting !== undefined ? { attempting: progress.attempting } : {}) }
+        : best;
       await writeOp(repo, id, { progress: kept, attempts: op.attempts + 1 }, 'failed');
       await writeTxn(repo, txnId, txn, { state: 'new', createdDocs: docs, error: notes.join(' ') });
       return { status: 'failed', error: e, retryable: false };

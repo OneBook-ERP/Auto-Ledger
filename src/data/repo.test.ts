@@ -143,6 +143,46 @@ describe('mappings, rules, outbox, settings', () => {
     await r.markOutbox('o1', { status: 'failed', attempts: 2, progress: { stepIndex: 1, created: [{ doctype: 'Customer', name: 'C' }] } });
     expect(await r.getOutbox('o1')).toEqual(op({ id: 'o1', status: 'failed', attempts: 2, progress: { stepIndex: 1, created: [{ doctype: 'Customer', name: 'C' }] } }));
   });
+  it('enqueue supersedes the other pending items of the same txn', async () => {
+    const r = await mk();
+    await r.enqueue(op({ id: 'a' }));
+    await r.enqueue(op({ id: 'x', txnId: 't2' }));
+    await r.enqueue(op({ id: 'b' }));
+    expect((await r.getOutbox('a'))?.status).toBe('superseded');
+    expect((await r.getOutbox('x'))?.status).toBe('pending');
+    expect((await r.nextOutbox())?.id).toBe('x');
+    await r.markOutbox('x', { status: 'done' });
+    expect((await r.nextOutbox())?.id).toBe('b');
+  });
+  it('enqueue is atomic: a failure in the supersede statement rolls the insert back', async () => {
+    const base = createTestDriver();
+    let failOn: RegExp | null = null;
+    const d: SqlDriver = {
+      exec: async (sql, params) => { if (failOn && failOn.test(sql)) throw new Error('disk I/O error'); return base.exec(sql, params); },
+      all: (sql, params) => base.all(sql, params),
+    };
+    const r = await createRepo(d);
+    await r.enqueue(op({ id: 'a' }));
+    failOn = /status = 'superseded'/;
+    await expect(r.enqueue(op({ id: 'b' }))).rejects.toThrow('disk I/O error');
+    failOn = null;
+    expect(await r.getOutbox('b')).toBeNull();
+    expect((await r.getOutbox('a'))?.status).toBe('pending');
+    // and the connection is usable afterwards (the transaction was closed)
+    await r.enqueue(op({ id: 'c' }));
+    expect((await r.getOutbox('a'))?.status).toBe('superseded');
+  });
+  it('reopenOutbox re-pends an item and supersedes the other pending items of its txn atomically', async () => {
+    const r = await mk();
+    await r.enqueue(op({ id: 'a' }));
+    await r.markOutbox('a', { status: 'failed' });
+    await r.enqueue(op({ id: 'b' }));
+    await r.reopenOutbox('a');
+    expect((await r.getOutbox('a'))?.status).toBe('pending');
+    expect((await r.getOutbox('b'))?.status).toBe('superseded');
+    expect((await r.listOutbox('t1')).map((o) => o.id)).toEqual(['a', 'b']);
+    expect(await r.listOutbox('nope')).toEqual([]);
+  });
   it('supersedePending marks only other pending items of the txn, and nextOutbox skips them', async () => {
     const r = await mk();
     await r.enqueue(op({ id: 'a' }));

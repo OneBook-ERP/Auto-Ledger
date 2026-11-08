@@ -53,7 +53,9 @@ export type Suggestion = {
 
 export type OutboxOp = {
   id: string; txnId: string; plan: ActionPlan;
-  progress: { stepIndex: number; created: { doctype: string; name: string }[] };
+  // `attempting`: index of a step whose server write (createParty/createDraft) was started but not yet
+  // recorded as done (write-ahead marker; a lost reply leaves it set).
+  progress: { stepIndex: number; created: { doctype: string; name: string }[]; attempting?: number };
   attempts: number; status: 'pending'|'done'|'failed'|'superseded';
 };
 

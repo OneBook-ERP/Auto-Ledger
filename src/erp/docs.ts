@@ -55,14 +55,19 @@ const NAME_FIELD: Record<PartyRef['doctype'], string> = { Customer: 'customer_na
 
 /** `name` is the document id (may be a naming series such as HR-EMP-00007); `displayName` is the
  *  customer_name / supplier_name / employee_name (falls back to `name` when empty). */
-export async function searchParties(c: ErpClient, doctype: PartyRef['doctype'], q: string): Promise<(PartyRef & { displayName: string })[]> {
-  const like = `%${q}%`;
+export async function searchParties(
+  c: ErpClient,
+  doctype: PartyRef['doctype'],
+  q: string,
+  exact?: boolean,
+): Promise<(PartyRef & { displayName: string })[]> {
   const field = NAME_FIELD[doctype];
-  const rows = await list<Record<string, unknown> & { name: string }>(c, doctype, {
-    fields: ['name', field],
-    or_filters: [['name', 'like', like], [NAME_FIELD[doctype], 'like', like]],
-    limit_page_length: 20,
-  });
+  const like = `%${q}%`;
+  // exact: equality on the display-name field (no LIKE wildcards), for recovery lookups.
+  const query = exact
+    ? { fields: ['name', field], filters: [[field, '=', q]], order_by: 'creation asc', limit_page_length: 20 }
+    : { fields: ['name', field], or_filters: [['name', 'like', like], [field, 'like', like]], limit_page_length: 20 };
+  const rows = await list<Record<string, unknown> & { name: string }>(c, doctype, query);
   return rows.map((r) => {
     const dn = r[field];
     return { doctype, name: r.name, displayName: typeof dn === 'string' && dn.trim() ? dn : r.name };

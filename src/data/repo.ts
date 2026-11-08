@@ -15,12 +15,17 @@ export interface Repo {
   listMappings(): Promise<AccountMapping[]>;
   saveRule(r: Rule): Promise<void>;
   listRules(): Promise<Rule[]>;
+  /** Inserts `op` and, in the same transaction, marks every OTHER pending item of op.txnId 'superseded'. */
   enqueue(op: OutboxOp): Promise<void>;
   nextOutbox(): Promise<OutboxOp | null>;
   /** The outbox item with this id, or null (also null when its stored JSON is unreadable). */
   getOutbox(id: string): Promise<OutboxOp | null>;
   /** Marks every OTHER pending item of `txnId` 'superseded' (the user made a newer decision). */
   supersedePending(txnId: string, exceptId: string): Promise<void>;
+  /** Sets item `id` back to 'pending' and supersedes the other pending items of its txn, in one transaction. */
+  reopenOutbox(id: string): Promise<void>;
+  /** Every readable outbox item of `txnId`, oldest first. */
+  listOutbox(txnId: string): Promise<OutboxOp[]>;
   markOutbox(id: string, patch: Partial<Pick<OutboxOp, 'progress' | 'attempts' | 'status'>>): Promise<void>;
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;
@@ -63,6 +68,17 @@ function safeParse<T>(s: string, fallback: T): T {
 
 export async function createRepo(d: SqlDriver): Promise<Repo> {
   await migrate(d);
+
+  async function inTransaction(fn: () => Promise<void>): Promise<void> {
+    await d.exec('BEGIN');
+    try {
+      await fn();
+      await d.exec('COMMIT');
+    } catch (e) {
+      try { await d.exec('ROLLBACK'); } catch { /* already rolled back */ }
+      throw e;
+    }
+  }
 
   return {
     async listPending(state) {
@@ -128,10 +144,27 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
       });
     },
     async enqueue(op) {
-      await d.exec(
-        'INSERT INTO outbox (id, txn_id, plan, progress, attempts, status) VALUES (?,?,?,?,?,?)',
-        [op.id, op.txnId, JSON.stringify(op.plan), JSON.stringify(op.progress), op.attempts, op.status],
-      );
+      await inTransaction(async () => {
+        await d.exec(
+          'INSERT INTO outbox (id, txn_id, plan, progress, attempts, status) VALUES (?,?,?,?,?,?)',
+          [op.id, op.txnId, JSON.stringify(op.plan), JSON.stringify(op.progress), op.attempts, op.status],
+        );
+        await d.exec(`UPDATE outbox SET status = 'superseded' WHERE txn_id = ? AND id != ? AND status = 'pending'`, [op.txnId, op.id]);
+      });
+    },
+    async reopenOutbox(id) {
+      await inTransaction(async () => {
+        await d.exec(
+          `UPDATE outbox SET status = 'superseded'
+           WHERE txn_id = (SELECT txn_id FROM outbox WHERE id = ?) AND id != ? AND status = 'pending'`,
+          [id, id],
+        );
+        await d.exec(`UPDATE outbox SET status = 'pending' WHERE id = ?`, [id]);
+      });
+    },
+    async listOutbox(txnId) {
+      const rows = await d.all<OutboxRow>('SELECT id, txn_id, plan, progress, attempts, status FROM outbox WHERE txn_id = ? ORDER BY seq', [txnId]);
+      return rows.map(toOutbox).filter((o): o is OutboxOp => o !== null);
     },
     async getOutbox(id) {
       const rows = await d.all<OutboxRow>('SELECT id, txn_id, plan, progress, attempts, status FROM outbox WHERE id = ?', [id]);

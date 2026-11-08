@@ -102,6 +102,15 @@ describe('simple lists', () => {
     );
   });
 
+  it('searchParties exact uses an equality filter on the display-name field', async () => {
+    const { c, calls } = setup({ body: { data: [{ name: 'HR-EMP-00007', employee_name: 'Ravi 50% Kumar_' }] } });
+    expect(await searchParties(c, 'Employee', 'Ravi 50% Kumar_', true)).toEqual([{ doctype: 'Employee', name: 'HR-EMP-00007', displayName: 'Ravi 50% Kumar_' }]);
+    expect(calls[0].url).toBe(
+      `${BASE}/api/resource/Employee?${q({ fields: ['name', 'employee_name'], filters: [['employee_name', '=', 'Ravi 50% Kumar_']], order_by: 'creation asc', limit_page_length: 20 })}`,
+    );
+    expect(decodeURIComponent(calls[0].url)).not.toMatch(/like/);
+  });
+
   it('searchParties uses supplier_name / employee_name', async () => {
     const s = setup({ body: { data: [] } });
     await searchParties(s.c, 'Supplier', 'x');

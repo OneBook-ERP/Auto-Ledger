@@ -50,6 +50,13 @@ describe('makeErpOps', () => {
     expect(await ops.createParty('Customer', { customer_name: 'Acme' })).toEqual({ doctype: 'Customer', name: 'Acme' });
   });
 
+  it('searchParties exact and getDocStatuses delegate', async () => {
+    const { ops, calls } = setup({ body: { data: [{ name: 'C-1', customer_name: 'Acme' }] } }, { body: { data: [{ name: 'PE-1', docstatus: 1 }] } });
+    expect(await ops.searchParties('Customer', 'Acme', true)).toEqual([{ doctype: 'Customer', name: 'C-1', displayName: 'Acme' }]);
+    expect(decodeURIComponent(calls[0].url)).toContain('filters=[["customer_name","=","Acme"]]');
+    expect(await ops.getDocStatuses([{ doctype: 'Payment Entry', name: 'PE-1' }])).toEqual({ 'Payment Entry:PE-1': 1 });
+  });
+
   it('passes ERP error classes through unchanged', async () => {
     const { ops } = setup({ status: 401, body: { exc_type: 'AuthenticationError' } });
     await expect(ops.findDraftByUtr('U')).rejects.toBeInstanceOf(ErpAuthError);
