@@ -27,7 +27,7 @@ class SmsIngestModule : Module() {
 
     OnCreate {
       try {
-        Storage.deleteSpikeLeftovers(context)
+        Storage.housekeeping(context)
         // First load runs TemplateEngine.selfTest(); an unusable engine is logged and reported by engineHealth().
         EngineProvider.get(context)
       } catch (t: Throwable) {

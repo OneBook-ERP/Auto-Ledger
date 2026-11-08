@@ -19,16 +19,25 @@ internal object Storage {
 
   fun patterns(ctx: Context) = SenderPatterns(store(ctx))
 
-  /** Task 2's spike queue (any sender). Deleted on first load of the production module/receiver. */
-  @Volatile private var spikeCleaned = false
+  @Volatile private var housekept = false
 
-  fun deleteSpikeLeftovers(ctx: Context) {
-    if (spikeCleaned) return
-    spikeCleaned = true
+  /**
+   * Once per process (module start or a receiver-only process start): deletes Task 2's spike
+   * queue (any sender) and prunes quarantined `*.corrupt-*` files, which can hold raw SMS text
+   * (see [Quarantine.prune]). Cheap: one prefs delete and one directory listing.
+   */
+  fun housekeeping(ctx: Context, now: Long = System.currentTimeMillis()) {
+    if (housekept) return
+    housekept = true
     try {
       ctx.deleteSharedPreferences("sms_ingest_spike")
     } catch (t: Throwable) {
       Log.w(TAG, "spike cleanup failed: ${t.javaClass.simpleName}")
+    }
+    try {
+      Quarantine.prune(store(ctx), now)
+    } catch (t: Throwable) {
+      Log.w(TAG, "quarantine prune failed: ${t.javaClass.simpleName}")
     }
   }
 }

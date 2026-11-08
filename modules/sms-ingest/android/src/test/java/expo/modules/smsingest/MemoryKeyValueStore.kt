@@ -14,10 +14,15 @@ class MemoryKeyValueStore : KeyValueStore {
     data[key] = value
   }
 
-  override fun quarantine(key: String, stamp: Long): String? {
-    val v = data.remove(key) ?: return null
-    val name = "$key.corrupt-$stamp"
-    data[name] = v
-    return name
+  override fun rename(key: String, newKey: String): Boolean {
+    val v = data.remove(key) ?: return false
+    data[newKey] = v
+    return true
+  }
+
+  override fun keys(): List<String> = data.keys.toList()
+
+  override fun delete(key: String) {
+    data.remove(key)
   }
 }

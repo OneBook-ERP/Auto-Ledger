@@ -27,7 +27,7 @@ class SmsReceiver : BroadcastReceiver() {
     val pending = goAsync()
     EXECUTOR.execute {
       try {
-        Storage.deleteSpikeLeftovers(app)
+        Storage.housekeeping(app)
         Ingestor.ingest(app, parts)
       } catch (t: Throwable) {
         // Never log the body or sender.
