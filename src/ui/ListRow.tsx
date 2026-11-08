@@ -13,12 +13,12 @@ export function ListRow({ title, subtitle, right, onPress }: ListRowProps) {
     <Pressable
       onPress={onPress}
       accessibilityRole={onPress ? 'button' : undefined}
-      className="flex-row items-center border-b border-neutral-200 bg-white px-4 py-3 active:bg-neutral-100">
+      className="min-h-[56px] flex-row items-center border-b border-line bg-surface px-4 py-3 active:bg-paper dark:border-line-dark dark:bg-surface-dark dark:active:bg-paper-dark">
       <View className="flex-1">
-        <Text className="text-base font-medium text-neutral-900">{title}</Text>
-        {subtitle ? <Text className="mt-0.5 text-sm text-neutral-500">{subtitle}</Text> : null}
+        <Text className="text-base font-medium text-ink dark:text-ink-dark">{title}</Text>
+        {subtitle ? <Text className="mt-0.5 text-sm text-muted dark:text-muted-dark">{subtitle}</Text> : null}
       </View>
-      {right ? <Text className="ml-3 text-base text-neutral-900">{right}</Text> : null}
+      {right ? <Text className="ml-3 text-base text-ink dark:text-ink-dark">{right}</Text> : null}
     </Pressable>
   );
 }

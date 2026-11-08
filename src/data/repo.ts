@@ -38,6 +38,10 @@ export interface Repo {
   markOutbox(id: string, patch: Partial<Pick<OutboxOp, 'progress' | 'attempts' | 'status'>>): Promise<void>;
   /** One statement: writes `progress` and sets status 'done' unless the item is already 'superseded'. */
   finishOutbox(id: string, progress: OutboxOp['progress']): Promise<void>;
+  /** One transaction: deletes mappings, rules, pending txns, outbox rows and every setting (including the
+   *  `merged_sms:*` markers) except the template-set cache (`templates_*`, not site data). Used when the user
+   *  signs in to a different ERPNext site, so nothing of the old books can reach the new one. */
+  resetForNewSite(): Promise<void>;
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;
 }
@@ -255,6 +259,12 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
       if (patch.status !== undefined) { sets.push('status = ?'); params.push(patch.status); }
       if (!sets.length) return;
       await d.exec(`UPDATE outbox SET ${sets.join(', ')} WHERE id = ?`, [...params, id]);
+    },
+    async resetForNewSite() {
+      await inTransaction(async () => {
+        for (const t of ['pending_txn', 'account_mapping', 'rule', 'outbox']) await d.exec(`DELETE FROM ${t}`);
+        await d.exec("DELETE FROM settings WHERE key NOT LIKE 'templates\\_%' ESCAPE '\\'");
+      });
     },
     async getSetting(key) {
       const rows = await d.all<{ value: string }>('SELECT value FROM settings WHERE key = ?', [key]);

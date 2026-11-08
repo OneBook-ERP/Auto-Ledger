@@ -30,13 +30,13 @@ export async function listCompanies(c: ErpClient): Promise<{ name: string; curre
 export async function listBankAccounts(
   c: ErpClient,
   company: string,
-): Promise<{ name: string; glAccount: string; bankAccountNo: string | null; isCompanyAccount: boolean }[]> {
-  const rows = await list<{ name: string; account: string; bank_account_no: string | null; is_company_account: number | boolean }>(c, 'Bank Account', {
-    fields: ['name', 'account', 'bank_account_no', 'is_company_account'],
+): Promise<{ name: string; glAccount: string; bankAccountNo: string | null; isCompanyAccount: boolean; bank: string | null }[]> {
+  const rows = await list<{ name: string; account: string; bank_account_no: string | null; is_company_account: number | boolean; bank: string | null }>(c, 'Bank Account', {
+    fields: ['name', 'account', 'bank_account_no', 'is_company_account', 'bank'],
     filters: [['company', '=', company]],
     limit_page_length: 0,
   });
-  return rows.map((r) => ({ name: r.name, glAccount: r.account, bankAccountNo: r.bank_account_no ?? null, isCompanyAccount: !!r.is_company_account }));
+  return rows.map((r) => ({ name: r.name, glAccount: r.account, bankAccountNo: r.bank_account_no ?? null, isCompanyAccount: !!r.is_company_account, bank: r.bank ?? null }));
 }
 
 /** Non-group (postable) ledger accounts only. */
@@ -49,6 +49,17 @@ export async function listLedgerAccounts(
   if (f.rootType) filters.push(['root_type', '=', f.rootType]);
   const rows = await list<{ name: string; account_type: string | null }>(c, 'Account', { fields: ['name', 'account_type'], filters, limit_page_length: 0 });
   return rows.map((r) => ({ name: r.name, accountType: r.account_type ?? null }));
+}
+
+/** Enabled Modes of Payment (R18: the setup wizard lets the user pick a default per account). */
+export async function listModesOfPayment(c: ErpClient): Promise<{ name: string; type: string | null }[]> {
+  const rows = await list<{ name: string; type: string | null }>(c, 'Mode of Payment', {
+    fields: ['name', 'type'],
+    filters: [['enabled', '=', 1]],
+    order_by: 'name asc',
+    limit_page_length: 0,
+  });
+  return rows.map((r) => ({ name: r.name, type: r.type ?? null }));
 }
 
 const NAME_FIELD: Record<PartyRef['doctype'], string> = { Customer: 'customer_name', Supplier: 'supplier_name', Employee: 'employee_name' };

@@ -12,6 +12,7 @@ import {
   listBankAccounts,
   listCompanies,
   listLedgerAccounts,
+  listModesOfPayment,
   listOpenInvoices,
   searchParties,
   toMinor,
@@ -66,14 +67,14 @@ describe('simple lists', () => {
 
   it('listBankAccounts maps fields', async () => {
     const { c, calls } = setup({
-      body: { data: [{ name: 'IDFC - Zen', account: 'IDFC First - ZP', bank_account_no: '123', is_company_account: 1 }, { name: 'B', account: 'X - ZP', bank_account_no: null, is_company_account: 0 }] },
+      body: { data: [{ name: 'IDFC - Zen', account: 'IDFC First - ZP', bank_account_no: '123', is_company_account: 1, bank: 'IDFC First Bank' }, { name: 'B', account: 'X - ZP', bank_account_no: null, is_company_account: 0, bank: null }] },
     });
     expect(await listBankAccounts(c, 'ZP Co')).toEqual([
-      { name: 'IDFC - Zen', glAccount: 'IDFC First - ZP', bankAccountNo: '123', isCompanyAccount: true },
-      { name: 'B', glAccount: 'X - ZP', bankAccountNo: null, isCompanyAccount: false },
+      { name: 'IDFC - Zen', glAccount: 'IDFC First - ZP', bankAccountNo: '123', isCompanyAccount: true, bank: 'IDFC First Bank' },
+      { name: 'B', glAccount: 'X - ZP', bankAccountNo: null, isCompanyAccount: false, bank: null },
     ]);
     expect(calls[0].url).toBe(
-      `${BASE}/api/resource/Bank%20Account?${q({ fields: ['name', 'account', 'bank_account_no', 'is_company_account'], filters: [['company', '=', 'ZP Co']], limit_page_length: 0 })}`,
+      `${BASE}/api/resource/Bank%20Account?${q({ fields: ['name', 'account', 'bank_account_no', 'is_company_account', 'bank'], filters: [['company', '=', 'ZP Co']], limit_page_length: 0 })}`,
     );
   });
 
@@ -89,6 +90,18 @@ describe('simple lists', () => {
     const { c, calls } = setup({ body: { data: [] } });
     await listLedgerAccounts(c, 'ZP Co', {});
     expect(calls[0].url).toContain(encodeURIComponent(JSON.stringify([['company', '=', 'ZP Co'], ['is_group', '=', 0]])));
+  });
+
+  it('listModesOfPayment: enabled modes with their type, explicit page length', async () => {
+    const { c, calls } = setup({ body: { data: [{ name: 'Bank Draft', type: 'Bank' }, { name: 'Cash', type: 'Cash' }, { name: 'Other', type: null }] } });
+    expect(await listModesOfPayment(c)).toEqual([
+      { name: 'Bank Draft', type: 'Bank' },
+      { name: 'Cash', type: 'Cash' },
+      { name: 'Other', type: null },
+    ]);
+    expect(calls[0].url).toBe(
+      `${BASE}/api/resource/Mode%20of%20Payment?${q({ fields: ['name', 'type'], filters: [['enabled', '=', 1]], order_by: 'name asc', limit_page_length: 0 })}`,
+    );
   });
 
   it('searchParties queries name and display name', async () => {

@@ -367,3 +367,47 @@ describe('mergeInto (Task 15: correlation writes)', () => {
     expect((await r.getPending('t1'))!).toEqual(txn());
   });
 });
+
+describe('resetForNewSite (Task 16)', () => {
+  const MAP: AccountMapping = { bankAccount: 'B', glAccount: 'G', kind: 'bank', senderIds: ['IDFCFB'], last4: ['1234'], modeOfPayment: 'Wire Transfer' };
+  const RULE: Rule = { matchKey: 'k', action: 'expense', account: 'Rent', hits: 1, lastUsed: 1 };
+
+  it('removes mappings, rules, pending, outbox, merged markers and settings, but keeps the template cache', async () => {
+    const r = await mk();
+    await r.saveMapping(MAP);
+    await r.saveRule(RULE);
+    await r.upsertPending(txn());
+    await r.enqueue(op());
+    await r.mergeInto('t1', { merchant: 'M' }, 'srcHash');
+    await r.setSetting('company', 'A Co');
+    await r.setSetting('site_url', 'https://a.example');
+    await r.setSetting('templates_json', '{}');
+    await r.setSetting('templates_version', '3');
+    await r.resetForNewSite();
+    expect(await r.listMappings()).toEqual([]);
+    expect(await r.listRules()).toEqual([]);
+    expect(await r.listPending()).toEqual([]);
+    expect(await r.nextOutbox()).toBeNull();
+    expect(await r.isMergedSms('srcHash')).toBe(false);
+    expect(await r.getSetting('company')).toBeNull();
+    expect(await r.getSetting('site_url')).toBeNull();
+    expect(await r.getSetting('templates_json')).toBe('{}');
+    expect(await r.getSetting('templates_version')).toBe('3');
+  });
+
+  it('is atomic and serialised with concurrent repo calls', async () => {
+    const r = await mk();
+    await r.saveMapping(MAP);
+    await r.upsertPending(txn());
+    const results = await Promise.allSettled([
+      r.resetForNewSite(),
+      r.upsertPending(txn({ id: 'late', rawHash: 'hl' })),
+      r.setSetting('after', '1'),
+    ]);
+    expect(results.every((x) => x.status === 'fulfilled')).toBe(true);
+    // calls queued after the reset survive it; everything before is gone
+    expect((await r.listPending()).map((p) => p.id)).toEqual(['late']);
+    expect(await r.listMappings()).toEqual([]);
+    expect(await r.getSetting('after')).toBe('1');
+  });
+});
