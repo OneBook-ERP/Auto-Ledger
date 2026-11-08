@@ -11,3 +11,4 @@ ios/
 .env
 .env.*.local
 !.env.example
+!/modules/**/android/
