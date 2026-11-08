@@ -10,6 +10,11 @@ export interface PlanContext {
   /** YYYY-MM-DD, injected so tests are deterministic. */
   today: string;
   newParty?: { ref: PartyRef; fields: Record<string, unknown> };
+  /**
+   * Reference written instead of txnReference(txn) (R54): the second leg of an own-account transfer uses the
+   * first leg's reference, so the runner finds and adopts that leg's Payment Entry instead of booking it twice.
+   */
+  referenceOverride?: string;
 }
 
 export class PlanError extends Error {
@@ -86,7 +91,7 @@ export function planAction(txn: PendingTxn, choice: ActionChoice, ctx: PlanConte
   }
   const minor = foreign ? (ctx.inrAmountMinor as number) : txn.amountMinor;
   const amount = minorToMajor(minor);
-  const ref = txnReference(txn);
+  const ref = ctx.referenceOverride?.trim() ? ctx.referenceOverride : txnReference(txn);
   const date = txn.occurredOn;
   const who = txn.counterparty ?? txn.merchant;
   const remarkParts = ['AutoLedger'];

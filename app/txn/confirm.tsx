@@ -6,6 +6,7 @@ import { rememberDefault, rememberShown } from '../../src/inbox/actions';
 import { useInboxDeps } from '../../src/inbox/deps';
 import { describeStep, stepTitle } from '../../src/inbox/describe';
 import { FlowAnswered, FlowGone, FlowLoading } from '../../src/inbox/FlowStates';
+import { counterMappingOf, findCounterpartLeg, SEVERAL_TRANSFERS_WARNING, type CounterpartLink } from '../../src/inbox/counterpart';
 import { foreignAmountCheck, planFor } from '../../src/inbox/flow';
 import { istToday, titleOf } from '../../src/inbox/format';
 import { useTxnFlow } from '../../src/inbox/hooks';
@@ -41,14 +42,35 @@ export default function ConfirmStep() {
     };
   }, []);
 
+  // The other leg of an own-account transfer, when both accounts are read (R54): looked up before planning.
+  const [link, setLink] = useState<CounterpartLink | null>(null);
+  useEffect(() => {
+    if (!txn || !action) return;
+    let live = true;
+    const counter = counterMappingOf(f.draft, txn.direction, f.mappings);
+    if (!counter) {
+      setLink({ status: 'none' });
+      return;
+    }
+    setLink(null);
+    findCounterpartLeg(txn, counter, deps.repo, f.mappings).then(
+      (l) => live && setLink(l),
+      () => live && setLink({ status: 'none' }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [txn, action, f.draft, f.mappings, deps.repo]);
+
   const prepared = useMemo<Prepared | null>(() => {
-    if (!txn || !action) return null;
+    if (!txn || !action || !link) return null;
     try {
-      return planFor(txn, f.draft, { company: f.settings.company, drawingsAccount: f.settings.drawingsAccount, today: istToday(deps.now()) });
+      const extra = link.status === 'linked' ? { referenceOverride: link.reference } : {};
+      return planFor(txn, f.draft, { company: f.settings.company, drawingsAccount: f.settings.drawingsAccount, today: istToday(deps.now()) }, extra);
     } catch (e) {
       return { error: planErrorMessage(e) };
     }
-  }, [txn, action, f.draft, f.settings, deps]);
+  }, [txn, action, f.draft, f.settings, deps, link]);
   const ok = prepared && 'plan' in prepared ? prepared : null;
 
   // "Create draft" is enabled only after the summary has been committed to the screen.
@@ -160,6 +182,10 @@ export default function ConfirmStep() {
       ) : null}
       {ok && nothing ? <Banner tone="info" message={ok.plan.summary.join('\n')} testID="summary" /> : null}
       {sending ? <Banner tone="info" message="Sending your answer to ERPNext. Stay on this screen until it finishes." testID="sending" /> : null}
+      {ok && link?.status === 'linked' ? (
+        <DetailCard rows={[{ label: 'Linked', value: `Linked to the transfer already recorded from ${link.counterLabel}'s message (${link.docName})` }]} testID="linked" />
+      ) : null}
+      {ok && link?.status === 'several' ? <Banner tone="warn" message={SEVERAL_TRANSFERS_WARNING} testID="several" /> : null}
       {ok && !nothing && foreign ? (
         <>
           <DetailCard rows={[{ label: 'Card amount', value: foreign.text }]} testID="foreign" />

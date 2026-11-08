@@ -293,6 +293,21 @@ describe('credit transfer (R52b: fromAccount, money in only)', () => {
   });
 });
 
+describe('referenceOverride (R54)', () => {
+  it('replaces the reference on a Payment Entry and a Journal Entry; the summary names it', () => {
+    const { doc, plan } = run('idfc-001', bank, { type: 'transfer', fromAccount: { bankAccount: 'IDFC Savings', glAccount: 'Sav - ZP' } }, { referenceOverride: 'IDFB6292M4509651' });
+    expect(doc.reference_no).toBe('IDFB6292M4509651');
+    expect(plan.summary[0]).toContain('UTR/ref IDFB6292M4509651');
+    const je = run('idfc-001', bank, { type: 'personal' }, { referenceOverride: 'X-1' });
+    expect(je.doc.cheque_no).toBe('X-1');
+  });
+  it('absent or blank: txnReference as before', () => {
+    const t = parsed('idfc-001');
+    expect(run('idfc-001', bank, { type: 'personal' }, { referenceOverride: ' ' }).doc.cheque_no).toBe('AL-' + t.rawHash);
+    expect(run('idfc-001', bank, { type: 'personal' }).doc.cheque_no).toBe('AL-' + t.rawHash);
+  });
+});
+
 describe('bad_date (R35)', () => {
   const bads = ['2026-02-31', '2026-13-01', '2026-11', 'not-a-date'];
   const t = pending(parsed('idfc-006'));

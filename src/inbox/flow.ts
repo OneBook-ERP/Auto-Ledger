@@ -125,20 +125,24 @@ export function buildChoice(txn: PendingTxn, d: FlowDraft): ActionChoice {
   }
 }
 
-export function buildContext(txn: PendingTxn, d: FlowDraft, s: FlowSettings): PlanContext {
+export type PlanExtras = { referenceOverride?: string };
+
+export function buildContext(txn: PendingTxn, d: FlowDraft, s: FlowSettings, extra: PlanExtras = {}): PlanContext {
   if (!d.mapping) throw new PlanError('missing_account');
   if (!s.company) throw new PlanError('missing_company');
   const ctx: PlanContext = { company: s.company, account: d.mapping, drawingsAccount: s.drawingsAccount, today: s.today };
   if (txn.currency !== 'INR' && d.inrAmountMinor !== undefined) ctx.inrAmountMinor = d.inrAmountMinor;
   if (d.newParty) ctx.newParty = { ref: ref(d.newParty.ref), fields: { ...d.newParty.fields } };
+  // Only a transfer may borrow the other leg's reference (counterpart.ts).
+  if (extra.referenceOverride && d.action === 'transfer') ctx.referenceOverride = extra.referenceOverride;
   return ctx;
 }
 
 /** The plan the confirm screen shows and the runner executes. Throws PlanError with a code for the UI. */
-export function planFor(txn: PendingTxn, d: FlowDraft, s: FlowSettings): { plan: ActionPlan; choice: ActionChoice } {
+export function planFor(txn: PendingTxn, d: FlowDraft, s: FlowSettings, extra: PlanExtras = {}): { plan: ActionPlan; choice: ActionChoice } {
   // Ignore needs no account, company or amount: the runner sends nothing to ERPNext for it.
   if (d.action === 'ignore') return { choice: { type: 'ignore' }, plan: { steps: [], summary: [IGNORE_NOTE], needsInrAmount: false } };
-  const ctx = buildContext(txn, d, s);
+  const ctx = buildContext(txn, d, s, extra);
   const choice = buildChoice(txn, d);
   if (choice.type === 'personal' && !s.drawingsAccount) throw new PlanError('missing_drawings');
   const plan = planAction(txn, choice, ctx);
@@ -176,18 +180,23 @@ export function validateAllocations(amountMinor: number, rows: { name: string; o
 
 // ---------- foreign-currency spends ----------
 
-/** Below ₹1 or above ₹1,000 per unit of foreign currency is treated as an obvious typing slip. */
-export const RATE_MIN_PAISE = 100;
-export const RATE_MAX_PAISE = 100_000;
+/**
+ * Plausible rupees per unit for well-known currencies only (a soft check for typing slips; there is no live
+ * rate in the app). Any other currency gets no warning.
+ */
+export const PLAUSIBLE_INR_PER_UNIT: Record<string, [number, number]> = {
+  USD: [60, 120], EUR: [70, 140], GBP: [80, 160], AED: [15, 35], SGD: [50, 100], AUD: [40, 90], CAD: [45, 95],
+};
 
 /**
- * "USD 100.00, entered as ₹8,500.00 (₹85.00 per USD)" plus a soft warning for an obvious slip.
- * There is no reference exchange rate in the app, so only these wide bounds are checked.
+ * "USD 100.00, entered as ₹8,500.00 (₹85.00 per USD)" plus a soft warning (never blocking) when the implied
+ * rate is outside the currency's plausible band.
  */
 export function foreignAmountCheck(txn: Pick<PendingTxn, 'amountMinor' | 'currency'>, inrMinor: number): { text: string; warning: string | null } {
   const ratePaise = Math.round((inrMinor * 100) / txn.amountMinor);
   const text = `${plainAmount(txn)}, entered as ${formatInr(inrMinor)} (${formatInr(ratePaise)} per ${txn.currency})`;
-  const slip = ratePaise < RATE_MIN_PAISE || ratePaise > RATE_MAX_PAISE;
+  const band = PLAUSIBLE_INR_PER_UNIT[txn.currency];
+  const slip = !!band && (ratePaise < band[0] * 100 || ratePaise > band[1] * 100);
   return {
     text,
     warning: slip ? `That is ${formatInr(ratePaise)} per ${txn.currency}, which looks unusual. Check the rupee amount on your card statement before creating.` : null,
