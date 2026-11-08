@@ -22,6 +22,13 @@
 //   pick the wrong partner/document. Tracked for Task 20.
 // - The `merged_sms:<hash>` markers in settings grow by one row per merged SMS and are never pruned.
 // - unrecognised_count can over-count if the process dies between its write and the ack (display only).
+// - Two genuinely identical SMS (same sender and same normalised text) collapse into one txn by design
+//   (R3: rawHash dedupe), even in the unlikely case that they reported two real events.
+// - Result counts are per category (inserted / enriched / duplicates / ignored / unrecognised / unmapped).
+//   When the ack call itself fails, the batch's items were processed (and counted in their category) AND are
+//   counted in `errors`; they stay queued and the next run sees them as duplicates.
+// - The drainer (drain.ts) stops at a retryable failure of the head outbox item, which blocks the items
+//   behind it; there is no attempts cap in phase 1.
 import type { AccountMapping, ParsedTxn, PendingTxn, TemplateSet } from '../core/types';
 import { correlate } from '../core/correlate';
 import { parseSms } from '../core/parser';
