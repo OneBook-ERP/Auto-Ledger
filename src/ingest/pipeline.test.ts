@@ -542,6 +542,7 @@ describe('runForegroundCycle', () => {
       ingest: { ...empty, inserted: 1 },
       backfill: { ...empty, inserted: 1 },
       drain: { ran: 0, stoppedBecause: 'empty' },
+      poll: { checked: 0, submitted: 0, cancelled: 0, missing: 0 },
       failedSteps: [],
     });
   });

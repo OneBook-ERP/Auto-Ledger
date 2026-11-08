@@ -38,6 +38,7 @@ import type {
 } from '../../modules/sms-ingest/src';
 import { loadTemplates } from './templates';
 import { drainOutbox, type DrainErp, type DrainResult } from './drain';
+import { pollStatuses, type PollResult } from './statusPoller';
 
 export type { DrainErp, DrainResult } from './drain';
 
@@ -296,18 +297,19 @@ export function ensureBackfill(deps: {
   });
 }
 
-export type CycleStep = 'syncSenderPatterns' | 'ingest' | 'ensureBackfill' | 'drainOutbox';
+export type CycleStep = 'syncSenderPatterns' | 'ingest' | 'ensureBackfill' | 'drainOutbox' | 'pollStatuses';
 export type CycleSummary = {
   senderPatterns?: string[];
   ingest?: IngestResult;
   backfill?: BackfillResult;
   drain?: DrainResult;
+  poll?: PollResult;
   failedSteps: CycleStep[];
 };
 
 /**
  * What the app runs on foreground and after setup: syncSenderPatterns -> ingest -> ensureBackfill ->
- * drainOutbox. A failing step is recorded in `failedSteps` and never skips the rest. Never throws.
+ * drainOutbox -> pollStatuses. A failing step is recorded in `failedSteps` and never skips the rest. Never throws.
  */
 export async function runForegroundCycle(deps: PipelineDeps): Promise<CycleSummary> {
   const out: CycleSummary = { failedSteps: [] };
@@ -323,5 +325,6 @@ export async function runForegroundCycle(deps: PipelineDeps): Promise<CycleSumma
   out.ingest = await step('ingest', () => ingest(deps));
   out.backfill = await step('ensureBackfill', () => ensureBackfill(deps));
   out.drain = await step('drainOutbox', () => drainOutbox(deps));
+  out.poll = await step('pollStatuses', () => pollStatuses(deps));
   return out;
 }
