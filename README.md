@@ -34,7 +34,9 @@ npx expo start --dev-client
 
 Decision: **NativeWind v4** (Tailwind classes on React Native), styled in the manner of NativeWindUI.
 Screens never import the kit directly; they use wrappers in `src/ui/` (currently `ListRow`), so the kit
-can be swapped for React Native Paper without touching screens.
+can be swapped for React Native Paper without touching screens. Wrappers: `Screen`, `Button`, `TextField`,
+`Banner`, `StepHeader`, `Chip`, `ChoiceRow`, `Card`, `EmptyState`, `Money`, `ListRow`, plus `formatInr`. Colours are tokens
+in `tailwind.config.js` (paper, surface, ink, muted, line, accent; `-dark` twins used with `dark:`).
 
 Status: NativeWind v4.2 + Tailwind 3.4 builds cleanly on Expo SDK 58 (RN 0.88); the dev client was installed on
 the pilot phone and `ListRow` rendered with Tailwind classes. No fallback to React Native Paper was needed.
