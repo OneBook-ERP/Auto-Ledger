@@ -40,18 +40,35 @@ data class LoadedEngine(
 
 object EngineLoader {
   /**
-   * Prefer the override (app files dir) when it builds and [selfTestOk]; otherwise the bundled
-   * asset copy. An unusable result still carries the engine (if any) so the OTP drop can apply.
+   * The override (app files dir) is used only when it builds and its version is >= the bundled
+   * set's (the TS side applies the same rule to `templates_json`), so a stale override cannot
+   * shadow newer bundled templates after an app update; a missing version counts as 0. If the
+   * bundled asset is missing or invalid, a valid override is used whatever its version. With a
+   * failed [selfTestOk] the result is unusable but still carries an engine (bundled first) so the
+   * OTP drop can apply.
    */
   fun choose(overrideJson: String?, bundledJson: String?, selfTestOk: Boolean): LoadedEngine {
     val ov = overrideJson?.let { TemplateEngine.fromJson(it) }
-    if (ov != null && selfTestOk) return LoadedEngine(ov, true, "ok", "override", ov.version)
     val b = bundledJson?.let { TemplateEngine.fromJson(it) }
-      ?: return LoadedEngine(null, false, "no usable template set: bundled templates missing or invalid; SMS are stored unparsed", "bundled", null)
     if (!selfTestOk) {
-      return LoadedEngine(b, false, "selfTest failed: regex named groups unsupported on this device; SMS are stored unparsed", "bundled", b.version)
+      val e = b ?: ov
+        ?: return LoadedEngine(null, false, "no usable template set and selfTest failed; SMS are stored unparsed", "bundled", null)
+      return LoadedEngine(
+        e, false, "selfTest failed: regex named groups unsupported on this device; SMS are stored unparsed",
+        if (e === b) "bundled" else "override", e.version,
+      )
     }
-    val reason = if (overrideJson != null) "override templates invalid; using bundled" else "ok"
+    if (ov != null && (b == null || ov.version >= b.version)) {
+      return LoadedEngine(ov, true, if (b == null) "bundled templates invalid; using override" else "ok", "override", ov.version)
+    }
+    if (b == null) {
+      return LoadedEngine(null, false, "no usable template set: bundled templates missing or invalid; SMS are stored unparsed", "bundled", null)
+    }
+    val reason = when {
+      overrideJson == null -> "ok"
+      ov == null -> "override templates invalid; using bundled"
+      else -> "override version ${ov.version} is older than bundled ${b.version}; using bundled"
+    }
     return LoadedEngine(b, true, reason, "bundled", b.version)
   }
 }

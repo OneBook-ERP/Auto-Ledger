@@ -41,12 +41,64 @@ class EngineLoaderTest {
     assertNotNull(l.engine)
   }
 
+  private val bundledVersion = JSONObject(bundled).getInt("version")
+
   @Test
   fun validOverrideWins() {
     val l = EngineLoader.choose(withVersion(7), bundled, selfTestOk = true)
     assertTrue(l.usable)
     assertEquals("override", l.source)
     assertEquals(7, l.version)
+  }
+
+  @Test
+  fun newerOverrideWins() {
+    val l = EngineLoader.choose(withVersion(bundledVersion + 1), bundled, selfTestOk = true)
+    assertEquals("override", l.source)
+    assertEquals(bundledVersion + 1, l.version)
+    assertEquals("ok", l.reason)
+  }
+
+  @Test
+  fun equalVersionOverrideWins() {
+    // Same rule as the TS side (templates_json is used when version >= bundled): the debug
+    // screen's "Use test templates" stores the bundled set plus a test bank at the same version.
+    val ov = JSONObject(bundled)
+    ov.getJSONArray("banks").getJSONObject(0).put("senderPattern", "TESTPAT")
+    val l = EngineLoader.choose(ov.toString(), bundled, selfTestOk = true)
+    assertTrue(l.usable)
+    assertEquals("override", l.source)
+    assertEquals(bundledVersion, l.version)
+    assertNotNull(l.engine!!.parse("xxTESTPATxx", RepoFiles.fixtures.getJSONObject(0).getString("body")))
+  }
+
+  @Test
+  fun olderOverrideIsIgnored() {
+    val ov = JSONObject(bundled).put("version", bundledVersion - 1)
+    ov.getJSONArray("banks").getJSONObject(0).put("senderPattern", "TESTPAT")
+    val l = EngineLoader.choose(ov.toString(), bundled, selfTestOk = true)
+    assertTrue(l.usable)
+    assertEquals("bundled", l.source)
+    assertEquals(bundledVersion, l.version)
+    assertTrue(l.reason, l.reason.contains("older"))
+    // The stale override's sender pattern is not active.
+    assertNull(l.engine!!.parse("xxTESTPATxx", RepoFiles.fixtures.getJSONObject(0).getString("body")))
+  }
+
+  @Test
+  fun overrideWithoutVersionCountsAsZeroAndLosesToBundled() {
+    val ov = JSONObject(bundled).also { it.remove("version") }.toString()
+    val l = EngineLoader.choose(ov, bundled, selfTestOk = true)
+    assertEquals("bundled", l.source)
+    assertEquals(bundledVersion, l.version)
+  }
+
+  @Test
+  fun validOverrideIsUsedWhenTheBundledSetIsBroken() {
+    val l = EngineLoader.choose(withVersion(1), "junk", selfTestOk = true)
+    assertTrue(l.usable)
+    assertEquals("override", l.source)
+    assertEquals(1, l.version)
   }
 
   @Test

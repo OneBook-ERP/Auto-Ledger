@@ -37,8 +37,8 @@ class TemplateEngine private constructor(
   private val moneyVerb: Pattern,
   private val amountRx: Pattern,
   private val banks: List<Bank>,
-  /** The template set's top-level "version", or null when absent. */
-  val version: Int?,
+  /** The template set's top-level "version"; 0 when the key is absent. */
+  val version: Int,
 ) {
   private class Template(
     val kind: String,
@@ -130,8 +130,9 @@ class TemplateEngine private constructor(
 
     /**
      * Build an engine from a templates JSON string. Returns null when the set is unusable:
-     * not JSON, otpPattern / moneyVerbPattern / amountPattern / banks missing or empty, or any
-     * regex fails to compile. (An empty otpPattern would match every body and classify every SMS
+     * not JSON, otpPattern / moneyVerbPattern / amountPattern / banks missing or empty, any
+     * regex fails to compile, or a "version" that is present but not a non-negative integer (a
+     * missing version is 0). (An empty otpPattern would match every body and classify every SMS
      * as an OTP, so the caller must fall back to the bundled set on null.)
      */
     fun fromJson(json: String): TemplateEngine? {
@@ -159,7 +160,7 @@ class TemplateEngine private constructor(
           }
           banks.add(Bank(sp, tpls))
         }
-        val version = if (root.has("version") && !root.isNull("version")) root.getInt("version") else null
+        val version = parseVersion(root) ?: return null
         TemplateEngine(otp, moneyVerb, amountRx, banks, version)
       } catch (e: Throwable) {
         null
@@ -177,6 +178,19 @@ class TemplateEngine private constructor(
       } catch (e: Throwable) {
         false
       }
+    }
+
+    /**
+     * Missing -> 0. Present -> must be a JSON number with an integral value in 0..Int.MAX_VALUE
+     * (3 and 3.0 are accepted; "3", -1, 1.5, null, true are not), else null (R27: the set is invalid).
+     */
+    private fun parseVersion(root: JSONObject): Int? {
+      if (!root.has("version")) return 0
+      val v = root.get("version")
+      if (v !is Number) return null
+      val d = v.toDouble()
+      if (d.isNaN() || d.isInfinite() || d != Math.floor(d) || d < 0 || d > Int.MAX_VALUE) return null
+      return d.toInt()
     }
 
     private fun compileRequired(root: JSONObject, key: String): Pattern {

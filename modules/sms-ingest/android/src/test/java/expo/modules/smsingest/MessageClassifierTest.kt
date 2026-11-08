@@ -44,7 +44,7 @@ class LooksLikeMoneyTest {
   @Test
   fun versionIsRead() {
     assertEquals(org.json.JSONObject(RepoFiles.templateJson).getInt("version"), engine.version)
-    assertTrue(engine.version!! >= 2)
+    assertTrue(engine.version >= 2)
   }
 
   @Test

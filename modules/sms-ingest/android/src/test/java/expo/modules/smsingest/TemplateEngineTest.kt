@@ -107,6 +107,33 @@ class TemplateEngineTest {
   }
 
   @Test
+  fun versionMissingDefaultsToZero() {
+    val j = JSONObject(templateJson).also { it.remove("version") }.toString()
+    val e = TemplateEngine.fromJson(j)
+    assertNotNull(e)
+    assertEquals(0, e!!.version)
+  }
+
+  @Test
+  fun versionIntegralNumbersAreAccepted() {
+    for ((raw, want) in listOf("0" to 0, "3" to 3, "3.0" to 3, "2147483647" to Int.MAX_VALUE)) {
+      val j = templateJson.replaceFirst(Regex("\"version\":\\s*\\d+"), "\"version\": $raw")
+      assertNotEquals(templateJson, j)
+      assertEquals(raw, want, TemplateEngine.fromJson(j)?.version)
+    }
+  }
+
+  @Test
+  fun versionPresentButInvalidRejectsTheSet() {
+    // R27: an invalid set must not activate.
+    for (raw in listOf("\"2\"", "\"x\"", "-1", "1.5", "null", "true", "[]", "{}", "2147483648", "1e400")) {
+      val j = templateJson.replaceFirst(Regex("\"version\":\\s*\\d+"), "\"version\": $raw")
+      assertNotEquals(templateJson, j)
+      assertNull(raw, TemplateEngine.fromJson(j))
+    }
+  }
+
+  @Test
   fun malformedTemplateSetsAreRejected() {
     val base = JSONObject(templateJson)
     fun without(k: String) = JSONObject(base.toString()).also { it.remove(k) }.toString()
