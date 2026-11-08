@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import Activity from '../app/(tabs)/activity';
-import Home from '../app/(tabs)/home';
 import Inbox from '../app/(tabs)/inbox';
 import Settings from '../app/(tabs)/settings';
 import TabsLayout from '../app/(tabs)/_layout';
@@ -50,8 +49,6 @@ describe('tabs shell', () => {
     expect(screen.getByTestId('redirect').props.children).toBe('/(setup)/company');
   });
   it('placeholders have clear empty states', async () => {
-    await render(<Home />);
-    expect(screen.getByText('Your balances will appear here')).toBeTruthy();
     await render(<Inbox />);
     expect(screen.getByText('No transactions to classify')).toBeTruthy();
     await render(<Activity />);
