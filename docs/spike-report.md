@@ -381,4 +381,21 @@ Tap **Reset templates** (expect `{"source":"bundled","version":1}`), clear the e
 
 ### C.5 Results
 
-_Recorded by the controller after the run._
+Run on 2026-11-08 with the Oppo CPH2487 (ColorOS), a second handset sending plain SMS, the debug APK built from commit 84b9e20 (minSdk 26, allowBackup=false). No phone numbers or message bodies are recorded here.
+
+| Step | Result | Evidence |
+|---|---|---|
+| C.1 static checks | PASS | RECEIVE_SMS, READ_SMS, POST_NOTIFICATIONS granted; no ALLOW_BACKUP in pkgFlags; receiver registered for SMS_RECEIVED (priority 999); two sender patterns stored; template override file present; no spike prefs file |
+| C.2 #1 credit alert, app open | PASS | queue item `ca_credit`; notification on channel `transactions`, title "Rs 100.00 credited to IDFC First ...1234", PRIVATE with public version "AutoLedger / New bank transaction" |
+| C.2 #2 money-like, unknown format | PASS | queue item `unrecognised`; no notification |
+| C.2 #3 OTP-like message | NOT VERIFIED ON DEVICE | the sending carrier held the OTP-looking SMS; the rule is covered by the JUnit classifier tests |
+| C.2 #4 non-money text | PASS | message reached the inbox; queue unchanged |
+| C.2 #5 unconfigured sender | PASS | only IDFCFB configured: two later test messages not stored |
+| C.2 #6 app swiped away, screen on | PASS | process started about 2 s after the SMS; queue `ca_credit`; notification posted |
+| C.2 #7 app swiped away, screen off about 12 min | NOT RUN (skipped by the user) | the Task 2 spike receiver passed the same test on this phone; the production receiver adds a goAsync background thread, so this remains an open item |
+| C.3 peek twice | PASS | same 3 items both times |
+| C.3 backfill 7 days | PASS | 55 returned; 81 messages from IDFCFB senders existed in the window before OTP/marketing filtering; queue unchanged |
+| C.3 ack all | PASS | acked 3; queue.json items empty |
+| C.3 deep link | PASS | `am start -W -a VIEW -d autoledger://inbox` delivered to the running app; 0 fatal errors in logcat (Unmatched Route screen until Task 17) |
+| C.4 cleanup | DONE | templates reset to bundled, extra pattern cleared |
+
