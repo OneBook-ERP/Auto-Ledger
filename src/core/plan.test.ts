@@ -261,6 +261,36 @@ describe('PlanError', () => {
   });
 });
 
+describe('bad_date (R35)', () => {
+  const bads = ['2026-02-31', '2026-13-01', '2026-11', 'not-a-date'];
+  const t = pending(parsed('idfc-006'));
+  const choice: ActionChoice = { type: 'customer_advance', party: acme };
+  it.each(bads)('occurredOn %s', (d) => {
+    expect(() => planAction({ ...t, occurredOn: d }, choice, { ...ctxFor(t, bank), today: '2026-11-08' })).toThrow(expect.objectContaining({ code: 'bad_date' }));
+  });
+  it.each(bads)('today %s', (d) => {
+    expect(() => planAction(t, choice, { ...ctxFor(t, bank), today: d })).toThrow(expect.objectContaining({ code: 'bad_date' }));
+  });
+  it('ignore returns before the date check', () => {
+    expect(planAction({ ...t, occurredOn: 'not-a-date' }, { type: 'ignore' }, { ...ctxFor(t, bank), today: 'x' }).steps).toEqual([]);
+  });
+});
+
+describe('live-verified ERPNext behaviour (stage, Task 12 check, spike B.14)', () => {
+  // Live on stage: a Pay Payment Entry WITHOUT paid_to was accepted as a draft; the server filled
+  // paid_to = Creditors - ZP for a Supplier and Payroll Payable - ZP for an Employee. So the planner omits paid_to.
+  it('Pay entries omit paid_to (server fills the party payable account)', () => {
+    for (const [c, id] of [[{ type: 'supplier_payment', party: airtel }, 'idfc-010'], [{ type: 'salary', party: staff }, 'idfc-010']] as const) {
+      expect(run(id, bank, c).doc).not.toHaveProperty('paid_to');
+    }
+  });
+  // Live on stage: a Journal Entry with party_type/party on the expense debit row was accepted and kept.
+  it('expense with a party keeps party_type/party on the debit row', () => {
+    const { doc } = run('idfc-025', card, { type: 'expense', expenseAccount: 'Software - ZP', party: airtel });
+    expect(doc.accounts[0]).toMatchObject({ party_type: 'Supplier', party: airtel.name });
+  });
+});
+
 describe('new party (R34)', () => {
   it('prepends create_party when newParty equals the choice party', () => {
     const t = pending(parsed('idfc-006'));

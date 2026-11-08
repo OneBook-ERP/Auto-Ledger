@@ -318,3 +318,13 @@ Method: plain SMS from a second handset; results read over adb from the app's pr
 Notes: a first attempt returned nothing because the message was sent as RCS/chat, not SMS (not delivered to the SMS inbox at all). A test where the app had not actually been swiped away (process still alive from the previous SMS) was discarded as inconclusive. Real bank alerts are plain SMS. `RECEIVE_SMS` had to be granted by tapping the in-app request on the phone (`adb shell pm grant` is blocked on this phone). The "Allow background activity" scenario was not needed.
 
 **Go/no-go: GO.** The Kotlin broadcast receiver inside the Expo module receives SMS on this phone when the app has been swiped away and has been idle for about 12 minutes. Not tested: a reboot, battery-saver mode, deep overnight idle, other OEMs (Samsung/Xiaomi), and a release (non-debug) build.
+
+### B.14 Pay without paid_to (live check, Task 12)
+
+Run on stage (2026-11-08) with bodies produced verbatim by `planAction`; every draft was deleted afterwards (list queries by reference confirmed nothing remained).
+
+- Payment Entry Pay, Supplier, **no `paid_to`**, paid from the bank GL: `200`, draft, server set `paid_to = Creditors - ZP`. Same from the card GL (`paid_from = IDFC Credit Card - ZP`): `200`, `paid_to = Creditors - ZP`.
+- Payment Entry Pay, Employee (HR-EMP-00001), **no `paid_to`**: `200`, draft, server set `paid_to = Payroll Payable - ZP` (the right account for salary). Passing `paid_to = Creditors - ZP` for the Employee was also accepted, but is the wrong account, so the planner deliberately omits `paid_to` on Pay entries.
+- Company default payable account is `Creditors - ZP`. Result: no planner change needed (no `payableAccount` in `PlanContext`).
+- `bill_paid_by_card` references row path: not live-tested against a real invoice (stage had no submitted Purchase Invoice with outstanding > 0, and invoices must not be submitted on stage). A reference to a nonexistent invoice is rejected: `417 LinkValidationError "Could not find Row #1: Name: PINV-NONE"`; the body shape was otherwise as in B.5.
+- Journal Entry with `party_type: Supplier` + `party` on the **expense debit row** (`Administrative Expenses - ZP`), credit the card GL: `200`, draft, party fields stored on the row as sent. Kept in the planner.

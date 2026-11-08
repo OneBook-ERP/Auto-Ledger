@@ -51,9 +51,14 @@ const rupees = (minor: number) => '₹' + formatMoney(minor, true);
 
 const DAY = 86_400_000;
 function dayNumber(iso: string): number {
-  const t = Date.parse(iso + 'T00:00:00Z');
-  if (Number.isNaN(t)) throw new PlanError('bad_date', `bad date ${iso}`);
-  return Math.round(t / DAY);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) throw new PlanError('bad_date', `bad date ${iso}`);
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) {
+    throw new PlanError('bad_date', `bad date ${iso}`);
+  }
+  return Math.round(dt.getTime() / DAY);
 }
 
 const sameParty = (a: PartyRef, b: PartyRef) => a.doctype === b.doctype && a.name === b.name;
