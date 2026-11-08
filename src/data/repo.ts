@@ -17,6 +17,10 @@ export interface Repo {
   listRules(): Promise<Rule[]>;
   enqueue(op: OutboxOp): Promise<void>;
   nextOutbox(): Promise<OutboxOp | null>;
+  /** The outbox item with this id, or null (also null when its stored JSON is unreadable). */
+  getOutbox(id: string): Promise<OutboxOp | null>;
+  /** Marks every OTHER pending item of `txnId` 'superseded' (the user made a newer decision). */
+  supersedePending(txnId: string, exceptId: string): Promise<void>;
   markOutbox(id: string, patch: Partial<Pick<OutboxOp, 'progress' | 'attempts' | 'status'>>): Promise<void>;
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;
@@ -45,6 +49,14 @@ const PENDING_COLS = `id, raw_hash, state, merged_count, created_docs, error, ki
   utr, merchant, balance_minor, sender, received_at`;
 
 const FAIL = Symbol('parse-fail');
+
+type OutboxRow = { id: string; txn_id: string; plan: string; progress: string; attempts: number; status: OutboxOp['status'] };
+function toOutbox(r: OutboxRow): OutboxOp | null {
+  const plan = safeParse<OutboxOp['plan'] | typeof FAIL>(r.plan, FAIL);
+  const progress = safeParse<OutboxOp['progress'] | typeof FAIL>(r.progress, FAIL);
+  if (plan === FAIL || progress === FAIL || plan === null || progress === null) return null;
+  return { id: r.id, txnId: r.txn_id, plan, progress, attempts: r.attempts, status: r.status };
+}
 function safeParse<T>(s: string, fallback: T): T {
   try { return JSON.parse(s) as T; } catch { return fallback; }
 }
@@ -121,19 +133,24 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
         [op.id, op.txnId, JSON.stringify(op.plan), JSON.stringify(op.progress), op.attempts, op.status],
       );
     },
+    async getOutbox(id) {
+      const rows = await d.all<OutboxRow>('SELECT id, txn_id, plan, progress, attempts, status FROM outbox WHERE id = ?', [id]);
+      return rows.length ? toOutbox(rows[0]) : null;
+    },
+    async supersedePending(txnId, exceptId) {
+      await d.exec(`UPDATE outbox SET status = 'superseded' WHERE txn_id = ? AND id != ? AND status = 'pending'`, [txnId, exceptId]);
+    },
     async nextOutbox() {
       for (;;) {
-        const rows = await d.all<{ id: string; txn_id: string; plan: string; progress: string; attempts: number; status: OutboxOp['status'] }>(
+        const rows = await d.all<OutboxRow>(
           `SELECT id, txn_id, plan, progress, attempts, status FROM outbox WHERE status = 'pending' ORDER BY seq LIMIT 1`);
         if (!rows.length) return null;
-        const r = rows[0];
-        const plan = safeParse<OutboxOp['plan'] | typeof FAIL>(r.plan, FAIL);
-        const progress = safeParse<OutboxOp['progress'] | typeof FAIL>(r.progress, FAIL);
-        if (plan === FAIL || progress === FAIL || plan === null || progress === null) {
-          await d.exec(`UPDATE outbox SET status = 'failed' WHERE id = ?`, [r.id]);
+        const op = toOutbox(rows[0]);
+        if (!op) {
+          await d.exec(`UPDATE outbox SET status = 'failed' WHERE id = ?`, [rows[0].id]);
           continue;
         }
-        return { id: r.id, txnId: r.txn_id, plan, progress, attempts: r.attempts, status: r.status };
+        return op;
       }
     },
     async markOutbox(id, patch) {

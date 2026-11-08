@@ -4,7 +4,8 @@
 // rejected for good, and (4) an in-process lock per txn. Spec section 13; plan Review Focus 3, 4, 5.
 //
 // The runner owns the outbox item for (txnId, plan): its id is outboxIdFor(txnId, plan). A caller may
-// enqueue it first under that id (for example the pipeline); otherwise runPlan enqueues it.
+// enqueue it first under that id (for example the pipeline); otherwise runPlan enqueues it and supersedes
+// the txn's other pending items. Progress and attempts are read back with repo.getOutbox.
 // It never submits a document and never logs.
 import type { ActionPlan, OutboxOp, PartyRef, PendingTxn, PlanStep } from '../core/types';
 import type { Repo } from '../data/repo';
@@ -72,51 +73,10 @@ async function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 
 // ---------- outbox bookkeeping ----------
 
-// Repo has no lookup by outbox id, so the runner remembers what it last wrote for each item, per Repo
-// object. After a restart it falls back to the queue head (the drainer's retry path) and then to the
-// server (party search by name, document lookup by reference), which are authoritative anyway.
-// `exact` is false when the stored item could not be read back: failure paths then avoid overwriting
-// its progress/attempts with values that might be older than what is stored.
-type Known = { progress: Progress; attempts: number; exact?: boolean };
-const known = new WeakMap<Repo, Map<string, Known>>();
-
-function knownFor(repo: Repo): Map<string, Known> {
-  let m = known.get(repo);
-  if (!m) known.set(repo, (m = new Map()));
-  return m;
-}
-
-async function openOp(repo: Repo, id: string, txnId: string, plan: ActionPlan): Promise<Known> {
-  const fresh: Known = { progress: { stepIndex: 0, created: [] }, attempts: 0, exact: true };
-  try {
-    await repo.enqueue({ id, txnId, plan, progress: fresh.progress, attempts: 0, status: 'pending' });
-    knownFor(repo).set(id, fresh);
-    return fresh;
-  } catch (e) {
-    if (!(e instanceof Error) || !/UNIQUE/i.test(e.message)) throw e;
-  }
-  let k = knownFor(repo).get(id);
-  if (!k) {
-    const head = await repo.nextOutbox();
-    k = head && head.id === id
-      ? { progress: head.progress, attempts: head.attempts, exact: true }
-      : { progress: { stepIndex: 0, created: [] }, attempts: 0, exact: false };
-  }
-  await repo.markOutbox(id, { status: 'pending' });
-  knownFor(repo).set(id, k);
-  return k;
-}
+type Known = { progress: Progress; attempts: number };
 
 async function writeOp(repo: Repo, id: string, k: Known, status?: OutboxOp['status']): Promise<void> {
   await repo.markOutbox(id, { progress: k.progress, attempts: k.attempts, ...(status ? { status } : {}) });
-  knownFor(repo).set(id, { ...k, exact: true });
-}
-
-/** Failure-path write: when the stored item was not readable, write only what cannot regress it. */
-async function writeFailedOp(repo: Repo, id: string, op: Known, progress: Progress, bump: number, status?: OutboxOp['status']) {
-  if (op.exact) return writeOp(repo, id, { progress, attempts: op.attempts + bump }, status);
-  await repo.markOutbox(id, { ...(progress.stepIndex > 0 ? { progress } : {}), ...(status ? { status } : {}) });
-  knownFor(repo).delete(id);
 }
 
 async function writeTxn(repo: Repo, txnId: string, fallback: PendingTxn, patch: Pick<PendingTxn, 'state' | 'createdDocs' | 'error'>) {
@@ -150,8 +110,8 @@ function checkPlan(plan: ActionPlan): string | null {
   return null;
 }
 
-/** The party name the later document steps refer to, else the display name in the party fields. */
-function plannedPartyName(plan: ActionPlan, i: number): string | null {
+/** The party name the later document steps refer to (the planner writes the chosen PartyRef name there). */
+function referencedPartyName(plan: ActionPlan, i: number): string | null {
   const dt = plan.steps[i].doctype;
   for (const s of plan.steps.slice(i + 1)) {
     if (s.kind !== 'create_doc') continue;
@@ -160,12 +120,19 @@ function plannedPartyName(plan: ActionPlan, i: number): string | null {
     const row = rows.find((r) => r && r.party_type === dt && typeof r.party === 'string');
     if (row) return row.party as string;
   }
-  const f = plan.steps[i].body;
-  const direct = f[NAME_FIELD[dt]];
+  return null;
+}
+
+/** The display name in the new party's fields (customer_name / supplier_name / employee_name or first + last). */
+function displayNameOf(step: PlanStep): string | null {
+  const f = step.body;
+  const direct = f[NAME_FIELD[step.doctype]];
   if (typeof direct === 'string' && direct.trim()) return direct.trim();
-  const full = [f.first_name, f.last_name].filter((x) => typeof x === 'string' && x.trim()).join(' ');
+  const full = [f.first_name, f.last_name].filter((x) => typeof x === 'string' && x.trim()).map((x) => (x as string).trim()).join(' ');
   return full || null;
 }
+
+const norm = (s: string) => s.trim().toLowerCase();
 
 /** Points document party fields at the names ERPNext actually assigned to parties created in this plan. */
 function applyRenames(body: Record<string, unknown>, renames: Map<string, string>): Record<string, unknown> {
@@ -209,25 +176,50 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
   const txn: PendingTxn = found;
   const id = outboxIdFor(txnId, plan);
 
-  // Already done (for example the second of two parallel runs): report it, touch nothing on the server.
-  if ((txn.state === 'created' || txn.state === 'submitted') && txn.createdDocs.length) {
+  // Only a txn still waiting for a decision is acted on. 'created'/'submitted': the work is done (also the
+  // recovery path when the txn write landed but the outbox 'done' write did not). 'ignored' (or anything
+  // else): the user decided otherwise after this plan was queued, so the plan is superseded.
+  if (txn.state === 'created' || txn.state === 'submitted') {
     await repo.markOutbox(id, { status: 'done' });
     return { status: 'created', docs: txn.createdDocs.map(({ doctype, name }) => ({ doctype, name })) };
   }
+  if (txn.state !== 'new') {
+    if (txn.state === 'ignored' && plan.steps.length === 0 && !plan.needsInrAmount) {
+      await repo.markOutbox(id, { status: 'done' });
+      return { status: 'created', docs: [] };
+    }
+    await repo.markOutbox(id, { status: 'superseded' });
+    const msg = `This transaction is already ${txn.state === 'ignored' ? 'ignored' : 'handled'}, so the queued entry was not created.`;
+    return { status: 'failed', error: new ErpValidationError(msg, 0), retryable: false };
+  }
 
-  const op = await openOp(repo, id, txnId, plan);
+  // Open (or re-open) the outbox item; progress and attempts are read back from the database only.
+  let op: Known;
+  const stored = await repo.getOutbox(id);
+  if (!stored) {
+    await repo.enqueue({ id, txnId, plan, progress: { stepIndex: 0, created: [] }, attempts: 0, status: 'pending' });
+    await repo.supersedePending(txnId, id);
+    op = { progress: { stepIndex: 0, created: [] }, attempts: 0 };
+  } else {
+    if (stored.status !== 'pending') {
+      // A user re-run of an earlier decision: it becomes the current one.
+      await repo.markOutbox(id, { status: 'pending' });
+      await repo.supersedePending(txnId, id);
+    }
+    op = { progress: stored.progress, attempts: stored.attempts };
+  }
 
   const bad = checkPlan(plan);
   if (bad) {
     const error = new ErpValidationError(bad, 0);
-    await writeFailedOp(repo, id, op, op.progress, 1, 'failed');
+    await writeOp(repo, id, { progress: op.progress, attempts: op.attempts + 1 }, 'failed');
     await writeTxn(repo, txnId, txn, { state: 'new', createdDocs: txn.createdDocs, error: bad });
     return { status: 'failed', error, retryable: false };
   }
 
   if (plan.steps.length === 0) {
-    await writeOp(repo, id, { progress: { stepIndex: 0, created: [] }, attempts: op.attempts }, 'done');
     await writeTxn(repo, txnId, txn, { state: 'ignored', createdDocs: [], error: null });
+    await writeOp(repo, id, { progress: { stepIndex: 0, created: [] }, attempts: op.attempts }, 'done');
     return { status: 'created', docs: [] };
   }
 
@@ -244,20 +236,31 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
       const step = plan.steps[i];
       if (step.kind === 'create_party') {
         const dt = step.doctype as PartyRef['doctype'];
-        const planned = plannedPartyName(plan, i);
+        const refName = referencedPartyName(plan, i);
+        const display = displayNameOf(step);
         const fromProgress = i < prior.stepIndex ? prior.created[i] : undefined;
         let ref: PartyRef | undefined = fromProgress && fromProgress.doctype === dt ? { doctype: dt, name: fromProgress.name } : undefined;
-        if (!ref && planned) {
-          const hits = await erp.searchParties(dt, planned);
-          ref = hits.find((h) => h.doctype === dt && h.name === planned);
+        const q = display ?? refName;
+        if (!ref && q) {
+          // A series-named party (HR-EMP-00007, CUST-00042) only matches on its display name.
+          const wanted = new Set([display, refName].filter((x): x is string => !!x).map(norm));
+          const hits = (await erp.searchParties(dt, q)).filter((h) => h.doctype === dt);
+          const hit = hits.find((h) => h.name === refName) ?? hits.find((h) => wanted.has(norm(h.displayName)));
+          if (hit) ref = { doctype: dt, name: hit.name };
         }
         if (!ref) ref = await erp.createParty(dt, step.body);
-        if (planned && ref.name !== planned) renames.set(`${dt}\u0000${planned}`, ref.name);
+        if (refName && ref.name !== refName) renames.set(`${dt}\u0000${refName}`, ref.name);
         created[i] = { doctype: ref.doctype, name: ref.name };
       } else {
         const hit = await erp.findDraftByUtr(referenceOf(step) as string);
         let doc: CreatedDoc;
         if (hit) {
+          if (hit.doctype !== step.doctype) {
+            throw new ErpValidationError(
+              `An entry ${hit.name} (${hit.doctype}) already exists for this reference; open it in ERPNext or delete it, then try again.`,
+              0,
+            );
+          }
           doc = { doctype: hit.doctype, name: hit.name, docstatus: hit.docstatus };
         } else {
           const body = applyRenames(step.body, renames);
@@ -270,21 +273,23 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
         created[i] = { doctype: doc.doctype, name: doc.name };
       }
       progress = { stepIndex: i + 1, created: created.slice(0, i + 1) };
-      if (op.exact) await writeOp(repo, id, { progress, attempts: op.attempts });
-      else await repo.markOutbox(id, { progress });
+      await writeOp(repo, id, { progress, attempts: op.attempts });
     }
   } catch (e) {
     return fail(e);
   }
 
-  await writeOp(repo, id, { progress, attempts: op.attempts }, 'done');
+  // Txn first, then the item: if the second write is lost, the next run sees 'created' and only marks it done.
   await writeTxn(repo, txnId, txn, { state: 'created', createdDocs: docs, error: null });
+  await writeOp(repo, id, { progress, attempts: op.attempts }, 'done');
   return { status: 'created', docs: docs.map(({ doctype, name }) => ({ doctype, name })) };
 
   async function fail(e: unknown): Promise<RunResult> {
+    // Never record less progress than was stored (a step reused from progress may fail before advancing).
+    const best = progress.stepIndex >= prior.stepIndex ? progress : prior;
     if (e instanceof ErpAuthError) {
       // Credentials problem, not a data problem: keep the item queued, keep any drafts, count nothing.
-      await writeFailedOp(repo, id, op, progress, 0);
+      await writeOp(repo, id, { progress: best, attempts: op.attempts });
       if (docs.length) await writeTxn(repo, txnId, txn, { state: 'new', createdDocs: docs, error: txn.error });
       return { status: 'needs_login' };
     }
@@ -302,14 +307,15 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
           notes.push(`The draft ${d.doctype} ${d.name} was not removed: ${why} Delete or cancel it in ERPNext.`);
         }
       }
-      await writeFailedOp(repo, id, op, { stepIndex: keep, created: created.slice(0, keep) }, 1, 'failed');
+      const kept = madeHere.length ? { stepIndex: keep, created: created.slice(0, keep) } : best;
+      await writeOp(repo, id, { progress: kept, attempts: op.attempts + 1 }, 'failed');
       await writeTxn(repo, txnId, txn, { state: 'new', createdDocs: docs, error: notes.join(' ') });
       return { status: 'failed', error: e, retryable: false };
     }
     // Network failures, timeouts and anything unexpected: retry later. Never delete here: if a create
     // reached the server, the retry's findDraftByUtr finds it. An unknown error's text is not forwarded.
     const error = e instanceof ErpNetworkError ? e : new ErpNetworkError('Something went wrong while creating the entry. It will be retried.');
-    await writeFailedOp(repo, id, op, progress, 1);
+    await writeOp(repo, id, { progress: best, attempts: op.attempts + 1 });
     if (docs.length) await writeTxn(repo, txnId, txn, { state: 'new', createdDocs: docs, error: txn.error });
     return { status: 'failed', error, retryable: true };
   }

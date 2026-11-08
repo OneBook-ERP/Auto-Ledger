@@ -53,14 +53,20 @@ export async function listLedgerAccounts(
 
 const NAME_FIELD: Record<PartyRef['doctype'], string> = { Customer: 'customer_name', Supplier: 'supplier_name', Employee: 'employee_name' };
 
-export async function searchParties(c: ErpClient, doctype: PartyRef['doctype'], q: string): Promise<PartyRef[]> {
+/** `name` is the document id (may be a naming series such as HR-EMP-00007); `displayName` is the
+ *  customer_name / supplier_name / employee_name (falls back to `name` when empty). */
+export async function searchParties(c: ErpClient, doctype: PartyRef['doctype'], q: string): Promise<(PartyRef & { displayName: string })[]> {
   const like = `%${q}%`;
-  const rows = await list<{ name: string }>(c, doctype, {
-    fields: ['name'],
+  const field = NAME_FIELD[doctype];
+  const rows = await list<Record<string, unknown> & { name: string }>(c, doctype, {
+    fields: ['name', field],
     or_filters: [['name', 'like', like], [NAME_FIELD[doctype], 'like', like]],
     limit_page_length: 20,
   });
-  return rows.map((r) => ({ doctype, name: r.name }));
+  return rows.map((r) => {
+    const dn = r[field];
+    return { doctype, name: r.name, displayName: typeof dn === 'string' && dn.trim() ? dn : r.name };
+  });
 }
 
 const nonEmpty = (v: unknown) => typeof v === 'string' && v.trim().length > 0;

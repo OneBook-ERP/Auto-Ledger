@@ -92,23 +92,27 @@ describe('simple lists', () => {
   });
 
   it('searchParties queries name and display name', async () => {
-    const { c, calls } = setup({ body: { data: [{ name: 'CUST-1' }, { name: 'Acme #1/2' }] } });
+    const { c, calls } = setup({ body: { data: [{ name: 'CUST-1', customer_name: 'Acme Traders' }, { name: 'Acme #1/2', customer_name: null }] } });
     expect(await searchParties(c, 'Customer', 'ac')).toEqual([
-      { doctype: 'Customer', name: 'CUST-1' },
-      { doctype: 'Customer', name: 'Acme #1/2' },
+      { doctype: 'Customer', name: 'CUST-1', displayName: 'Acme Traders' },
+      { doctype: 'Customer', name: 'Acme #1/2', displayName: 'Acme #1/2' },
     ]);
     expect(calls[0].url).toBe(
-      `${BASE}/api/resource/Customer?${q({ fields: ['name'], or_filters: [['name', 'like', '%ac%'], ['customer_name', 'like', '%ac%']], limit_page_length: 20 })}`,
+      `${BASE}/api/resource/Customer?${q({ fields: ['name', 'customer_name'], or_filters: [['name', 'like', '%ac%'], ['customer_name', 'like', '%ac%']], limit_page_length: 20 })}`,
     );
   });
 
   it('searchParties uses supplier_name / employee_name', async () => {
     const s = setup({ body: { data: [] } });
     await searchParties(s.c, 'Supplier', 'x');
-    expect(s.calls[0].url).toContain(encodeURIComponent('"supplier_name"'));
-    const e = setup({ body: { data: [] } });
-    await searchParties(e.c, 'Employee', 'x');
-    expect(e.calls[0].url).toContain(encodeURIComponent('"employee_name"'));
+    expect(s.calls[0].url).toBe(
+      `${BASE}/api/resource/Supplier?${q({ fields: ['name', 'supplier_name'], or_filters: [['name', 'like', '%x%'], ['supplier_name', 'like', '%x%']], limit_page_length: 20 })}`,
+    );
+    const e = setup({ body: { data: [{ name: 'HR-EMP-00007', employee_name: 'Ravi Kumar' }] } });
+    expect(await searchParties(e.c, 'Employee', 'Ravi Kumar')).toEqual([{ doctype: 'Employee', name: 'HR-EMP-00007', displayName: 'Ravi Kumar' }]);
+    expect(e.calls[0].url).toBe(
+      `${BASE}/api/resource/Employee?${q({ fields: ['name', 'employee_name'], or_filters: [['name', 'like', '%Ravi Kumar%'], ['employee_name', 'like', '%Ravi Kumar%']], limit_page_length: 20 })}`,
+    );
   });
 });
 

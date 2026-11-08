@@ -54,7 +54,7 @@ export type Suggestion = {
 export type OutboxOp = {
   id: string; txnId: string; plan: ActionPlan;
   progress: { stepIndex: number; created: { doctype: string; name: string }[] };
-  attempts: number; status: 'pending'|'done'|'failed';
+  attempts: number; status: 'pending'|'done'|'failed'|'superseded';
 };
 
 export type TemplateSet = {

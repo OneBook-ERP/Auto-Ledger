@@ -45,8 +45,8 @@ describe('makeErpOps', () => {
   });
 
   it('searchParties and createParty delegate', async () => {
-    const { ops } = setup({ body: { data: [{ name: 'Acme' }] } }, { body: { data: { name: 'Acme' } } });
-    expect(await ops.searchParties('Customer', 'Acme')).toEqual([{ doctype: 'Customer', name: 'Acme' }]);
+    const { ops } = setup({ body: { data: [{ name: 'Acme', customer_name: 'Acme Ltd' }] } }, { body: { data: { name: 'Acme' } } });
+    expect(await ops.searchParties('Customer', 'Acme')).toEqual([{ doctype: 'Customer', name: 'Acme', displayName: 'Acme Ltd' }]);
     expect(await ops.createParty('Customer', { customer_name: 'Acme' })).toEqual({ doctype: 'Customer', name: 'Acme' });
   });
 

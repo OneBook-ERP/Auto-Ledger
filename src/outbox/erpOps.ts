@@ -11,7 +11,8 @@ export interface ErpOps {
   createDraft(doctype: string, body: Record<string, unknown>): Promise<{ name: string }>;
   /** Throws NotDraftError when the document is no longer a draft. */
   deleteDraft(doctype: string, name: string): Promise<void>;
-  searchParties(doctype: PartyRef['doctype'], q: string): Promise<PartyRef[]>;
+  /** `name` is the document id (may be a naming series); `displayName` is customer/supplier/employee name. */
+  searchParties(doctype: PartyRef['doctype'], q: string): Promise<(PartyRef & { displayName: string })[]>;
   createParty(doctype: PartyRef['doctype'], fields: Record<string, unknown>): Promise<PartyRef>;
 }
 

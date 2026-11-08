@@ -34,9 +34,16 @@ const income = (t: PendingTxn) => planAction(t, { type: 'other_income', incomeAc
 type Doc = { doctype: string; name: string; docstatus: number; body: Record<string, unknown> };
 type OpName = keyof ErpOps;
 
+type Party = PartyRef & { displayName: string };
+const displayOf = (f: Record<string, unknown>) =>
+  String(f.customer_name ?? f.supplier_name ?? f.employee_name ?? [f.first_name, f.last_name].filter(Boolean).join(' '));
+
 class FakeErp implements ErpOps {
   docs: Doc[] = [];
-  parties: PartyRef[] = [];
+  parties: Party[] = [];
+  /** Series naming: the party `name` is CUST-0001 / SUPP-0001 / HR-EMP-0001, not its display name. */
+  seriesNaming = false;
+  private partySeq = 0;
   calls: { op: OpName; args: unknown[] }[] = [];
   /** Queue of errors thrown by the next call(s) of an operation. */
   private failures: { op: OpName; error: Error; afterEffect?: boolean }[] = [];
@@ -83,14 +90,19 @@ class FakeErp implements ErpOps {
   }
   async searchParties(doctype: PartyRef['doctype'], q: string) {
     await this.enter('searchParties', [doctype, q]);
-    return this.parties.filter((p) => p.doctype === doctype && p.name.toLowerCase().includes(q.toLowerCase()));
+    const lq = q.toLowerCase();
+    return this.parties
+      .filter((p) => p.doctype === doctype && (p.name.toLowerCase().includes(lq) || p.displayName.toLowerCase().includes(lq)))
+      .map((p) => ({ ...p }));
   }
   async createParty(doctype: PartyRef['doctype'], fields: Record<string, unknown>) {
     const f = await this.enter('createParty', [doctype, fields]);
-    const p: PartyRef = { doctype, name: String(fields.customer_name ?? fields.supplier_name ?? fields.employee_name) };
-    this.parties.push(p);
+    const displayName = displayOf(fields);
+    const prefix = { Customer: 'CUST', Supplier: 'SUPP', Employee: 'HR-EMP' }[doctype];
+    const name = this.seriesNaming ? `${prefix}-${String(++this.partySeq).padStart(4, '0')}` : displayName;
+    this.parties.push({ doctype, name, displayName });
     if (f) throw f.error;
-    return p;
+    return { doctype, name };
   }
 }
 
@@ -108,7 +120,7 @@ async function setup(t: PendingTxn = txn()) {
   return { repo, erp, outbox, deps: { repo, erp } };
 }
 
-/** A view of the same database through a fresh Repo object: models an app restart (no in-memory state). */
+/** A view of the same database through a fresh Repo object: models an app restart. */
 const restarted = (repo: Repo): Repo => ({ ...repo });
 
 // ---------- tests ----------
@@ -235,7 +247,7 @@ describe('runPlan: partial failure (b)', () => {
     erp.failNext('createDraft', new ErpValidationError('Value missing for Payment Entry: Cost Center', 417, ['Cost Center']));
     const r1 = await runPlan('t1', plan, deps);
     expect(r1).toMatchObject({ status: 'failed', retryable: false });
-    expect(erp.parties).toEqual([ACME]);
+    expect(erp.parties).toEqual([{ ...ACME, displayName: 'Acme Traders' }]);
     expect(erp.count('deleteDraft')).toBe(0); // parties are master data, never deleted
     const ob = await outbox();
     expect(ob[0].progress).toEqual({ stepIndex: 1, created: [{ doctype: 'Customer', name: 'Acme Traders' }] });
@@ -248,20 +260,65 @@ describe('runPlan: partial failure (b)', () => {
     expect((await outbox())[0]).toMatchObject({ status: 'done', progress: { stepIndex: 2 } });
   });
 
-  it('after a restart the retry finds the party by name instead of creating a second', async () => {
+  it('after a restart the retry reads the stored progress and reuses the party', async () => {
     const { repo, erp, deps } = await setup();
     const plan = advanceNewParty(txn());
     erp.failNext('createDraft', new ErpValidationError('rejected', 417));
     await runPlan('t1', plan, deps);
+    const searches = erp.count('searchParties');
     const r2 = await runPlan('t1', plan, { repo: restarted(repo), erp });
     expect(r2.status).toBe('created');
     expect(erp.count('createParty')).toBe(1);
-    expect(erp.calls.filter((c) => c.op === 'searchParties').map((c) => c.args)).toContainEqual(['Customer', 'Acme Traders']);
+    expect(erp.count('searchParties')).toBe(searches); // progress from getOutbox, no search needed
+  });
+
+  describe.each([
+    ['Employee', () => {
+      const t = txn({ kind: 'ca_debit', direction: 'out' });
+      const ravi: PartyRef = { doctype: 'Employee', name: 'Ravi Kumar' };
+      return { t, plan: planAction(t, { type: 'salary', party: ravi }, ctx({ newParty: { ref: ravi, fields: { first_name: 'Ravi', last_name: 'Kumar', gender: 'Male' } } })), series: 'HR-EMP-0001' };
+    }],
+    ['Customer', () => ({ t: txn(), plan: advanceNewParty(txn()), series: 'CUST-0001' })],
+  ] as const)('series-named %s', (_dt, make) => {
+    it('a lost create reply is not followed by a second party', async () => {
+      const { t, plan, series } = make();
+      const { erp, deps } = await setup(t);
+      erp.seriesNaming = true;
+      erp.failNext('createParty', new ErpNetworkError('timeout'), { afterEffect: true });
+      expect(await runPlan('t1', plan, deps)).toMatchObject({ status: 'failed', retryable: true });
+      expect(await runPlan('t1', plan, deps)).toMatchObject({ status: 'created' });
+      expect(erp.parties).toHaveLength(1);
+      expect(erp.count('createParty')).toBe(1);
+      expect(erp.docs[0].body.party).toBe(series);
+    });
+
+    it('a crash before the progress write is not followed by a second party', async () => {
+      const { t, plan, series } = make();
+      const { repo, erp } = await setup(t);
+      erp.seriesNaming = true;
+      let crash = true;
+      const crashing: Repo = {
+        ...repo,
+        async markOutbox(id, patch) {
+          // The process dies right after the party create: no later write of this run lands.
+          if (crash && patch.progress && patch.progress.stepIndex >= 1) throw new Error('process killed');
+          return repo.markOutbox(id, patch);
+        },
+      };
+      await expect(runPlan('t1', plan, { repo: crashing, erp })).rejects.toThrow('process killed');
+      crash = false;
+      expect(erp.parties).toHaveLength(1);
+      expect((await repo.getOutbox(outboxIdFor('t1', plan)))!.progress.stepIndex).toBe(0);
+      expect(await runPlan('t1', plan, { repo: restarted(repo), erp })).toMatchObject({ status: 'created' });
+      expect(erp.count('createParty')).toBe(1);
+      expect(erp.docs).toHaveLength(1);
+      expect(erp.docs[0].body.party).toBe(series);
+    });
   });
 
   it('a party that already exists by exact name is reused, not created', async () => {
     const { erp, deps } = await setup();
-    erp.parties.push({ doctype: 'Customer', name: 'Acme Traders Pvt' }, ACME);
+    erp.parties.push({ doctype: 'Customer', name: 'Acme Traders Pvt', displayName: 'Acme Traders Pvt' }, { ...ACME, displayName: 'Acme Traders' });
     const r = await runPlan('t1', advanceNewParty(txn()), deps);
     expect(r.status).toBe('created');
     expect(erp.count('createParty')).toBe(0);
@@ -281,9 +338,8 @@ describe('runPlan: partial failure (b)', () => {
     const { erp, deps } = await setup();
     erp.createParty = async (doctype, fields) => {
       erp.calls.push({ op: 'createParty', args: [doctype, fields] });
-      const p: PartyRef = { doctype, name: 'CUST-00042' };
-      erp.parties.push(p);
-      return p;
+      erp.parties.push({ doctype, name: 'CUST-00042', displayName: 'Acme Traders' });
+      return { doctype, name: 'CUST-00042' };
     };
     await runPlan('t1', advanceNewParty(txn()), deps);
     expect(erp.docs[0].body.party).toBe('CUST-00042');
@@ -404,16 +460,16 @@ describe('runPlan: network (e)', () => {
     expect((await repo.getPending('t1'))!.state).toBe('new');
   });
 
-  it('after a restart, a failure does not overwrite stored progress or attempts it could not read', async () => {
+  it('after a restart, a failure keeps the stored progress and counts on from the stored attempts', async () => {
     const { repo, erp, outbox, deps } = await setup();
     const plan = advanceNewParty(txn());
     erp.failNext('createDraft', new ErpValidationError('bad', 417));
     await runPlan('t1', plan, deps); // item failed, progress {1, [party]}, attempts 1
-    erp.failNext('searchParties', new ErpNetworkError('down'));
+    erp.failNext('findDraftByUtr', new ErpNetworkError('down'));
     expect(await runPlan('t1', plan, { repo: restarted(repo), erp })).toMatchObject({ status: 'failed', retryable: true });
     const ob = (await outbox())[0];
     expect(ob.status).toBe('pending');
-    expect(ob.attempts).toBe(1);
+    expect(ob.attempts).toBe(2);
     expect(ob.progress).toEqual({ stepIndex: 1, created: [{ doctype: 'Customer', name: 'Acme Traders' }] });
   });
 
@@ -568,5 +624,106 @@ describe('runPlan: secrets (j)', () => {
     erp.failNext('createDraft', new ErpValidationError('bad', 417, ['Gender']));
     await runPlan('t1', advance(txn()), deps);
     for (const s of spies) { expect(s).not.toHaveBeenCalled(); s.mockRestore(); }
+  });
+});
+
+async function drain(repo: Repo, erp: ErpOps): Promise<string[]> {
+  const ran: string[] = [];
+  for (let op = await repo.nextOutbox(); op; op = await repo.nextOutbox()) {
+    ran.push(op.id);
+    await runPlan(op.txnId, op.plan, { repo, erp });
+  }
+  return ran;
+}
+
+describe('runPlan: superseded plans (I2)', () => {
+  it('a queued plan does not run after the user chose Ignore', async () => {
+    const { repo, erp, outbox, deps } = await setup();
+    const a = advance(txn());
+    erp.failNext('findDraftByUtr', new ErpNetworkError('offline'));
+    expect(await runPlan('t1', a, deps)).toMatchObject({ status: 'failed', retryable: true });
+    expect(await runPlan('t1', planAction(txn(), { type: 'ignore' }, ctx()), deps)).toEqual({ status: 'created', docs: [] });
+    expect((await repo.getPending('t1'))!.state).toBe('ignored');
+    expect(await drain(repo, erp)).toEqual([]); // A was superseded when Ignore was enqueued
+    // Even when the drainer (or anyone) runs A directly, nothing is created.
+    const r = await runPlan('t1', a, deps);
+    expect(r).toMatchObject({ status: 'failed', retryable: false });
+    expect(erp.count('createDraft')).toBe(0);
+    expect((await repo.getPending('t1'))!.state).toBe('ignored');
+    expect((await repo.getOutbox(outboxIdFor('t1', a)))!.status).toBe('superseded');
+    expect((await outbox()).map((o) => o.status)).toEqual(['superseded', 'done']);
+  });
+
+  it('a pending plan on a txn that is no longer new is superseded by the drainer', async () => {
+    const { repo, erp, deps } = await setup();
+    const a = advance(txn());
+    erp.failNext('findDraftByUtr', new ErpNetworkError('offline'));
+    await runPlan('t1', a, deps);
+    await repo.upsertPending({ ...(await repo.getPending('t1'))!, state: 'ignored' });
+    expect(await drain(repo, erp)).toEqual([outboxIdFor('t1', a)]);
+    expect(erp.count('createDraft')).toBe(0);
+    expect((await repo.getPending('t1'))!.state).toBe('ignored');
+    expect((await repo.getOutbox(outboxIdFor('t1', a)))!.status).toBe('superseded');
+  });
+
+  it('a newer plan supersedes the older pending one and only the newer runs', async () => {
+    const { repo, erp, deps } = await setup();
+    const a = advance(txn());
+    const b = income(txn());
+    erp.failNext('findDraftByUtr', new ErpNetworkError('offline'));
+    await runPlan('t1', a, deps);
+    erp.failNext('findDraftByUtr', new ErpNetworkError('offline'));
+    await runPlan('t1', b, deps);
+    expect((await repo.getOutbox(outboxIdFor('t1', a)))!.status).toBe('superseded');
+    expect(await drain(repo, erp)).toEqual([outboxIdFor('t1', b)]);
+    expect(erp.docs.map((d) => d.doctype)).toEqual(['Journal Entry']);
+    expect((await repo.getPending('t1'))!.state).toBe('created');
+  });
+});
+
+describe('runPlan: reference hit of another doctype (I3)', () => {
+  it.each([
+    ['Payment Entry', 'reference_no', income],
+    ['Journal Entry', 'cheque_no', advance],
+  ] as const)('a %s hit for a different step doctype fails without creating', async (doctype, field, make) => {
+    const { repo, erp, outbox, deps } = await setup();
+    erp.docs.push({ doctype, name: 'OLD-1', docstatus: 0, body: { [field]: 'UTR123' } });
+    const r = await runPlan('t1', make(txn()), deps);
+    expect(r).toMatchObject({ status: 'failed', retryable: false });
+    if (r.status === 'failed') {
+      expect(r.error).toBeInstanceOf(ErpValidationError);
+      expect(r.error.message).toMatch(/An entry OLD-1 .*already exists for this reference; open it in ERPNext or delete it, then try again/);
+    }
+    expect(erp.count('createDraft')).toBe(0);
+    expect(erp.count('deleteDraft')).toBe(0);
+    const saved = await repo.getPending('t1');
+    expect(saved!.state).toBe('new');
+    expect(saved!.createdDocs).toEqual([]);
+    expect(saved!.error).toMatch(/An entry OLD-1 .*already exists for this reference/);
+    expect((await outbox())[0].status).toBe('failed');
+  });
+});
+
+describe('runPlan: final write order (I4)', () => {
+  it('a crash between the txn write and the outbox done write recovers without creating', async () => {
+    const { repo, erp, outbox } = await setup();
+    const plan = advance(txn());
+    let crash = true;
+    const crashing: Repo = {
+      ...repo,
+      async markOutbox(id, patch) {
+        if (crash && patch.status === 'done') { crash = false; throw new Error('process killed'); }
+        return repo.markOutbox(id, patch);
+      },
+    };
+    await expect(runPlan('t1', plan, { repo: crashing, erp })).rejects.toThrow('process killed');
+    expect((await repo.getPending('t1'))!.state).toBe('created');
+    expect((await outbox())[0].status).toBe('pending');
+    expect(await drain(repo, erp)).toEqual([outboxIdFor('t1', plan)]);
+    expect(erp.count('createDraft')).toBe(1);
+    expect((await outbox())[0].status).toBe('done');
+    const saved = await repo.getPending('t1');
+    expect(saved!.state).toBe('created');
+    expect(saved!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0 }]);
   });
 });

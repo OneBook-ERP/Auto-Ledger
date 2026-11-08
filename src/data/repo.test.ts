@@ -136,6 +136,26 @@ describe('mappings, rules, outbox, settings', () => {
     await r.markOutbox('o2', { status: 'failed' });
     expect(await r.nextOutbox()).toBeNull();
   });
+  it('getOutbox reads any item by id, whatever its status', async () => {
+    const r = await mk();
+    expect(await r.getOutbox('o1')).toBeNull();
+    await r.enqueue(op({ id: 'o1' }));
+    await r.markOutbox('o1', { status: 'failed', attempts: 2, progress: { stepIndex: 1, created: [{ doctype: 'Customer', name: 'C' }] } });
+    expect(await r.getOutbox('o1')).toEqual(op({ id: 'o1', status: 'failed', attempts: 2, progress: { stepIndex: 1, created: [{ doctype: 'Customer', name: 'C' }] } }));
+  });
+  it('supersedePending marks only other pending items of the txn, and nextOutbox skips them', async () => {
+    const r = await mk();
+    await r.enqueue(op({ id: 'a' }));
+    await r.enqueue(op({ id: 'f', status: 'failed' }));
+    await r.enqueue(op({ id: 'b' }));
+    await r.enqueue(op({ id: 'x', txnId: 't2' }));
+    await r.supersedePending('t1', 'b');
+    expect((await r.getOutbox('a'))?.status).toBe('superseded');
+    expect((await r.getOutbox('f'))?.status).toBe('failed');
+    expect((await r.getOutbox('b'))?.status).toBe('pending');
+    expect((await r.getOutbox('x'))?.status).toBe('pending');
+    expect((await r.nextOutbox())?.id).toBe('b');
+  });
   it('settings get/set', async () => {
     const r = await mk();
     expect(await r.getSetting('a')).toBeNull();
