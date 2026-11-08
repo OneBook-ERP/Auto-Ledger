@@ -16,6 +16,7 @@ import { getNative, type SmsNative } from './native';
 import { clearSession, persistSession, restoreSession, summarize } from './session';
 import { useUiStore } from './store';
 import { maybeRefreshTemplates } from './templatesSchedule';
+import { setCrashReportSite } from './sentry';
 
 export const SETUP_DONE_KEY = 'setupDone';
 export const SITE_URL_KEY = 'site_url';
@@ -167,6 +168,8 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
   }, [ready, signedIn, setupDone, runner, startCycle, native, templatesUrl, now, fetchImpl]);
 
   const client = useMemo(() => (full ? buildErp(full, { fetchImpl }).client : null), [full, fetchImpl]);
+  // Crash reports never name the ERPNext site (the scrubber replaces this host).
+  useEffect(() => setCrashReportSite(full?.siteUrl ?? null), [full]);
 
   const value = useMemo<AppContextValue | null>(() => {
     if (!repo) return null;

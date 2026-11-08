@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
+    "@sentry/react-native": "~8.28.0",
     "@tanstack/react-query": "^5.107.1",
     "babel-preset-expo": "~58.0.0",
     "expo": "~58.0.23",
