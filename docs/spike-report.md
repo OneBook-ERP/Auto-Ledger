@@ -399,3 +399,15 @@ Run on 2026-11-08 with the Oppo CPH2487 (ColorOS), a second handset sending plai
 | C.3 deep link | PASS | `am start -W -a VIEW -d autoledger://inbox` delivered to the running app; 0 fatal errors in logcat (Unmatched Route screen until Task 17) |
 | C.4 cleanup | PARTIAL | templates reset to bundled; the extra test sender pattern was still configured afterwards (clear it with Set sender patterns; Task 16 re-asserts the production patterns on every launch) |
 
+
+### C.6 Changes since C.5 that the next device check should confirm (Task 20B)
+
+No new adb-only behaviour; the C.1-C.4 procedure still applies, with these differences:
+
+- Template set version is now 2. Expect `{"source":"override","version":2}` after **Use test templates** and `{"source":"bundled","version":2}` after **Reset templates**.
+- An override older than the bundled set is ignored (`source: "bundled"`, and `engineHealth().reason` says "override version N is older than bundled M; using bundled"). An override at the same version (the debug screen's test templates) still wins.
+- The engine now loads on first use, not at module creation: the first **Engine health and templates** tap or the first SMS does the load. `health.usable` and `reason` are as before.
+- Money heuristic widened: a body such as `₹1,250.00 debited from your A/c XX1234. Team IDFC FIRST Bank` or `Rs 500.00 sent to TEST via UPI. Team IDFC FIRST Bank` from the second handset is now stored as `unrecognised` (no notification); before it was dropped. Worth one extra C.2 row.
+- Notification ids come from the queue's persisted `seq` (1, 2, 3, ...), so `dumpsys notification` shows small ascending ids.
+- Quarantined `*.corrupt-<ms>` files: at most one per key is kept, and none older than 7 days (pruned when quarantining and once per process start). `run-as $P ls no_backup/sms-ingest` should never show two `queue.json.corrupt-*` files.
+- With no usable engine at all, OTP-shaped messages are still dropped by a hard-coded fallback check (JUnit only; not reproducible on a healthy install).

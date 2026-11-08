@@ -35,7 +35,8 @@ internal object Storage {
       Log.w(TAG, "spike cleanup failed: ${t.javaClass.simpleName}")
     }
     try {
-      Quarantine.prune(store(ctx), now)
+      // Same lock as every queue/settings read-modify-write, which is where quarantine happens.
+      synchronized(SmsQueue.LOCK) { Quarantine.prune(store(ctx), now) }
     } catch (t: Throwable) {
       Log.w(TAG, "quarantine prune failed: ${t.javaClass.simpleName}")
     }
