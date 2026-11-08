@@ -1,7 +1,7 @@
 // Home data: local rows (mappings, drafts, settings) + ERPNext figures, both under site-keyed query keys.
 import { useFocusEffect } from 'expo-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { focusManager, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AccountMapping, PendingTxn } from '../core/types';
 import { getBankBalance, getReceivablesPayables } from '../erp/docs';
 import { ErpAuthError, type ErpClient } from '../erp/client';
@@ -11,7 +11,8 @@ import { useUiStore } from '../state/store';
 import { buildHomeModel, HOME_CACHE_KEY, LAST_SYNCED_KEY, parseHomeCache, serializeHomeCache, type HomeFigures, type HomeModel } from './viewModel';
 
 type Local = { mappings: AccountMapping[]; pending: PendingTxn[]; lastSyncedAt: number | null; company: string | null };
-type Fetched = { figures: HomeFigures; at: number; stale: boolean; authError: boolean };
+export type AuthProblem = { status: number; deniedDoctype?: string };
+type Fetched = { figures: HomeFigures; at: number; stale: boolean; auth: AuthProblem | null };
 
 export const homeKey = (siteUrl: string | null) => ['home', siteUrl] as const;
 
@@ -41,7 +42,7 @@ export async function loadFigures(args: {
     } catch {
       // the cache is a convenience
     }
-    return { figures: { balances, receivableMinor: rp.receivableMinor, payableMinor: rp.payableMinor }, at, stale: false, authError: false };
+    return { figures: { balances, receivableMinor: rp.receivableMinor, payableMinor: rp.payableMinor }, at, stale: false, auth: null };
   } catch (e) {
     let cache = null;
     try {
@@ -54,7 +55,7 @@ export async function loadFigures(args: {
       figures: { balances: cache.balances, receivableMinor: cache.receivableMinor, payableMinor: cache.payableMinor },
       at: cache.at,
       stale: true,
-      authError: e instanceof ErpAuthError,
+      auth: e instanceof ErpAuthError ? { status: e.status, deniedDoctype: e.deniedDoctype } : null,
     };
   }
 }
@@ -63,17 +64,28 @@ export type HomeState = {
   status: 'loading' | 'ready' | 'error';
   model: HomeModel | null;
   company: string | null;
-  authError: boolean;
+  /** Set when ERPNext answered 401 (sign-in expired) or 403 (no permission). */
+  auth: AuthProblem | null;
   refreshing: boolean;
   refresh(): Promise<void>;
   retry(): void;
 };
 
-export function useHome(now: () => number = Date.now): HomeState {
+/** `now` and `tickMs` are test seams: the clock is re-read on every refetch, foreground return and tick. */
+export function useHome(now: () => number = Date.now, tickMs = 60_000): HomeState {
   const { repo, client, runCycle } = useApp();
   const siteUrl = useUiStore((s) => s.session?.siteUrl ?? null);
   const qc = useQueryClient();
   const [pulling, setPulling] = useState(false);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), tickMs);
+    const unsub = focusManager.subscribe((focused) => focused && setTick((t) => t + 1));
+    return () => {
+      clearInterval(id);
+      unsub();
+    };
+  }, [tickMs]);
 
   const local = useQuery({
     queryKey: [...homeKey(siteUrl), 'local'],
@@ -127,13 +139,23 @@ export function useHome(now: () => number = Date.now): HomeState {
   }, [qc, runCycle, siteUrl]);
 
   const f = figures.data;
+  // A failed refetch keeps the earlier data: say so instead of presenting it as fresh.
+  const refetchFailed = figures.isError && !!f;
   const model = useMemo(
     () =>
       l
-        ? buildHomeModel({ mappings: l.mappings, pending: l.pending, figures: f?.figures ?? null, figuresAt: f?.at ?? null, figuresStale: f?.stale ?? false, lastSyncedAt: l.lastSyncedAt, now: now() })
+        ? buildHomeModel({
+            mappings: l.mappings,
+            pending: l.pending,
+            figures: f?.figures ?? null,
+            figuresAt: f?.at ?? null,
+            figuresStale: (f?.stale ?? false) || refetchFailed,
+            lastSyncedAt: l.lastSyncedAt,
+            now: now(),
+          })
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [l, f],
+    [l, f, refetchFailed, tick],
   );
 
   const loading = local.isPending || (!!l?.company && figures.isPending && !figures.isError);
@@ -142,7 +164,7 @@ export function useHome(now: () => number = Date.now): HomeState {
     status: failed ? 'error' : loading || !model ? 'loading' : 'ready',
     model: failed ? null : model,
     company: l?.company ?? null,
-    authError: f?.authError === true || figures.error instanceof ErpAuthError,
+    auth: f?.auth ?? (figures.error instanceof ErpAuthError ? { status: figures.error.status, deniedDoctype: figures.error.deniedDoctype } : null),
     refreshing: pulling,
     refresh,
     retry: () => void qc.invalidateQueries({ queryKey: homeKey(siteUrl) }),

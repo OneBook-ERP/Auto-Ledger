@@ -1,3 +1,4 @@
+import { focusManager } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ErpAuthError, ErpNetworkError, type ErpClient } from '../erp/client';
 import type { AccountMapping, PendingTxn } from '../core/types';
@@ -15,7 +16,7 @@ import Home from '../../app/(tabs)/home';
 
 const SITE = 'https://a.example';
 const NOW = Date.now();
-const mapping = (n: string, kind: 'bank' | 'card' = 'bank', last4 = '6507'): AccountMapping => ({ bankAccount: n, glAccount: `${n} - GL`, kind, senderIds: [], last4: [last4], modeOfPayment: 'Bank' });
+const mapping = (n: string, kind: 'bank' | 'card' = 'bank', last4 = '6507'): AccountMapping => ({ bankAccount: n, glAccount: `${n} - GL`, kind, senderIds: ['X'], last4: [last4], modeOfPayment: 'Bank' });
 const txn = (o: Partial<PendingTxn>): PendingTxn => ({
   id: Math.random().toString(), mergedCount: 1, state: 'created', createdDocs: [], error: null, kind: 'ca_credit', direction: 'in', amountMinor: 100, currency: 'INR',
   occurredOn: '2026-11-01', occurredTime: null, accountType: 'bank', accountLast4: '6507', counterparty: null, utr: null, merchant: null, balanceMinor: null, sender: 'X',
@@ -54,7 +55,7 @@ it('renders figures with last synced and drafts beside them, no banners when all
   expect(screen.getByLabelText(/^To receive ₹11,21,725, After advances/)).toBeTruthy();
   expect(screen.getByLabelText(/^To pay ₹2,50,526/)).toBeTruthy();
   expect(screen.getByText('1 draft. It is not in the figures above yet.')).toBeTruthy();
-  expect(screen.getByText('₹1,30,466.00')).toBeTruthy();
+  expect(screen.getByText('₹1,30,466.00 in')).toBeTruthy();
   expect(screen.getByText('Last synced 2 minutes ago')).toBeTruthy();
   expect(screen.queryByTestId('banner-incomplete')).toBeNull();
   expect(screen.queryByTestId('banner-mismatch')).toBeNull();
@@ -113,8 +114,34 @@ it('an auth error with cached figures shows them and a sign-in prompt without cr
     client: fakeClient({ fail: new ErpAuthError('no', 401) }),
     cache: { at: Date.now() - 60_000, site: SITE, balances: { 'IDFC - GL': 100 }, receivableMinor: 0, payableMinor: 0 },
   });
-  await waitFor(() => screen.getByText(/sign-in has expired/));
+  await waitFor(() => screen.getByText('Your ERPNext sign-in has expired'));
   expect(screen.getByLabelText(/^Bank balance · IDFC ₹1.00/)).toBeTruthy();
+  await fireEvent.press(screen.getByRole('button', { name: 'Sign in again' }));
+  expect(mockPush).toHaveBeenCalledWith('/(auth)/login');
+});
+
+it('401 with no cache renders its own Sign in again button', async () => {
+  await setup({ client: fakeClient({ fail: new ErpAuthError('no', 401) }) });
+  await waitFor(() => screen.getByText(/sign-in has expired/));
+  await fireEvent.press(screen.getByRole('button', { name: 'Sign in again' }));
+  expect(mockPush).toHaveBeenCalledWith('/(auth)/login');
+});
+
+it('403 says what is missing, offers Retry and no sign-in prompt', async () => {
+  await setup({
+    client: fakeClient({ fail: new ErpAuthError('denied', 403, 'GL Entry') }),
+    cache: { at: Date.now() - 60_000, site: SITE, balances: { 'IDFC - GL': 100 }, receivableMinor: 0, payableMinor: 0 },
+  });
+  await waitFor(() => screen.getByText("Your ERPNext user can't read GL Entry. Ask your administrator for access."));
+  expect(screen.queryByRole('button', { name: 'Sign in again' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+});
+
+it('403 with no cache and no doctype: empty state with Retry, no sign-in', async () => {
+  await setup({ client: fakeClient({ fail: new ErpAuthError('denied', 403) }) });
+  await waitFor(() => screen.getByText("Your ERPNext user can't read this report. Ask your administrator for access."));
+  expect(screen.queryByRole('button', { name: 'Sign in again' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
 });
 
 it('with no cache an error shows an empty state with Retry that refetches', async () => {
@@ -160,4 +187,92 @@ it('query keys include the site: another site refetches instead of reusing the f
   await act(async () => useUiStore.getState().setSession({ siteUrl: 'https://b.example', user: 'u' }));
   await rerender(<app.Wrap><Home /></app.Wrap>);
   await waitFor(() => expect(client.call.mock.calls.length).toBeGreaterThan(calls));
+});
+
+describe('freshness', () => {
+  it('mixed drafts show in and out separately', async () => {
+    await setup({ pending: [txn({ amountMinor: 10000000 }), txn({ amountMinor: 10000000 }), txn({ direction: 'out', amountMinor: 3046600 })] });
+    await waitFor(() => screen.getByText('₹2,00,000.00 in · ₹30,466.00 out'));
+  });
+
+  it('returning to the foreground days later re-evaluates the 24 h rule', async () => {
+    let clock = Date.now();
+    const spy = jest.spyOn(Date, 'now').mockImplementation(() => clock);
+    try {
+      await setup({ synced: clock - 60_000 });
+      await waitFor(() => screen.getByText('Last synced 1 minute ago'));
+      expect(screen.queryByTestId('banner-incomplete')).toBeNull();
+      clock += 3 * 86_400_000;
+      await act(async () => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+      await waitFor(() => screen.getByText('Not synced for more than a day.'));
+    } finally {
+      spy.mockRestore();
+      await act(async () => focusManager.setFocused(undefined));
+    }
+  });
+
+  it('a minute tick re-evaluates the clock without any refetch', async () => {
+    let clock = Date.now();
+    const spy = jest.spyOn(Date, 'now').mockImplementation(() => clock);
+    jest.useFakeTimers({ advanceTimers: true });
+    try {
+      await setup({ synced: clock - 86_400_000 + 30_000 });
+      await waitFor(() => screen.getByLabelText(/^To pay/));
+      expect(screen.queryByTestId('banner-incomplete')).toBeNull();
+      clock += 60_000;
+      await act(async () => {
+        jest.advanceTimersByTime(60_000);
+      });
+      await waitFor(() => screen.getByText('Not synced for more than a day.'));
+    } finally {
+      jest.useRealTimers();
+      spy.mockRestore();
+    }
+  });
+
+  it('a cycle that creates a draft updates the drafts row after pull-to-refresh', async () => {
+    const app = await fakeApp({ client: fakeClient() as never });
+    await app.repo.saveMapping(mapping('IDFC'));
+    await app.repo.setSetting(COMPANY_KEY, 'Acme');
+    await app.repo.setSetting(LAST_SYNCED_KEY, String(Date.now() - 1000));
+    (app.value.runCycle as jest.Mock).mockImplementation(async () => {
+      await app.repo.upsertPending(txn({ amountMinor: 5000 }));
+    });
+    useUiStore.getState().setBoot({ session: { siteUrl: SITE, user: 'u' }, setupDone: true });
+    await render(<app.Wrap><Home /></app.Wrap>);
+    await waitFor(() => screen.getByText('Nothing is waiting for your accountant.'));
+    await act(async () => {
+      await fireEvent(screen.getByTestId('screen-scroll').children[0] as never, 'refresh');
+    });
+    await waitFor(() => screen.getByText('1 draft. It is not in the figures above yet.'));
+    expect(screen.getByText('₹50.00 in')).toBeTruthy();
+  });
+
+  it('a failed refetch with earlier data says could-not-refresh and as-of, even if the cache could not be saved', async () => {
+    const client = fakeClient();
+    const app = await fakeApp({ client: client as never });
+    await app.repo.saveMapping(mapping('IDFC'));
+    await app.repo.setSetting(COMPANY_KEY, 'Acme');
+    await app.repo.setSetting(LAST_SYNCED_KEY, String(Date.now() - 1000));
+    const real = app.repo.setSetting;
+    app.repo.setSetting = async (k: string, v: string) => {
+      if (k === HOME_CACHE_KEY) throw new Error('disk full');
+      return real(k, v);
+    };
+    useUiStore.getState().setBoot({ session: { siteUrl: SITE, user: 'u' }, setupDone: true });
+    await render(<app.Wrap><Home /></app.Wrap>);
+    await waitFor(() => screen.getByLabelText(/^To pay ₹2,50,526/));
+    expect(screen.queryByText('Could not refresh. Pull down to try again.')).toBeNull();
+    client.get.mockRejectedValue(new ErpNetworkError('offline'));
+    client.call.mockRejectedValue(new ErpNetworkError('offline'));
+    await act(async () => {
+      await fireEvent(screen.getByTestId('screen-scroll').children[0] as never, 'refresh');
+    });
+    await waitFor(() => screen.getByText('Could not refresh. Pull down to try again.'));
+    expect(screen.getByLabelText(/^To pay ₹2,50,526/)).toBeTruthy();
+    expect(screen.getByText(/^Figures shown as of/)).toBeTruthy();
+  });
 });

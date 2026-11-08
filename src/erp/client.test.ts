@@ -77,6 +77,7 @@ describe('ErpClient errors', () => {
   it('401 -> ErpAuthError', async () => {
     const { c } = client({ status: 401, body: { exc_type: 'AuthenticationError' } });
     await expect(c.get('/api/x')).rejects.toBeInstanceOf(ErpAuthError);
+    await expect(c.get('/api/x')).rejects.toMatchObject({ status: 401 });
   });
   it('403 with doctype in message -> deniedDoctype', async () => {
     const { c } = client({
@@ -109,6 +110,7 @@ describe('ErpClient errors', () => {
     const e = await client({ status: 403, body: { exc_type: 'PermissionError' } }).c.get<any>('/x').catch((x) => x as any);
     expect(e).toBeInstanceOf(ErpAuthError);
     expect(e.deniedDoctype).toBeUndefined();
+    expect(e.status).toBe(403);
   });
   it('417 Mandatory fields required -> missingFields', async () => {
     const e = await client({
