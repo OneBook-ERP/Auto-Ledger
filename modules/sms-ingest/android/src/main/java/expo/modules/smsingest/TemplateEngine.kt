@@ -24,9 +24,7 @@ data class NativeParse(
  *
  * Port notes:
  *  - All patterns compile with CASE_INSENSITIVE and no inline flags (R1). Named groups are read
- *    with Matcher.group(String), which needs Android API 26+; the module/app minSdk is 24, so on
- *    API 24-25 every group read throws NoSuchMethodError and [parse] would return null (see the
- *    Task 8 report: raise minSdk to 26 or avoid group(String)).
+ *    with Matcher.group(String), which needs Android API 26+ (minSdk is 26; see [selfTest]).
  *  - Java's \s is ASCII-only, JS's is Unicode-aware, so the body is normalised first: every
  *    Unicode space separator (NBSP U+00A0, U+2009, U+202F, ...), U+FEFF, U+2028 and U+2029
  *    become a plain space.
@@ -128,15 +126,30 @@ class TemplateEngine private constructor(
           banks.add(Bank(sp, tpls))
         }
         TemplateEngine(otp, banks)
-      } catch (e: Exception) {
+      } catch (e: Throwable) {
         null
+      }
+    }
+
+    /**
+     * True when named groups can be compiled and read via Matcher.group(String) (API 26+).
+     * Task 9 should call this at receiver start and fail loudly rather than drop SMS silently.
+     */
+    fun selfTest(): Boolean {
+      return try {
+        val m = Pattern.compile("(?<probe>\\d+)", FLAGS).matcher("a12")
+        m.find() && m.group("probe") == "12"
+      } catch (e: Throwable) {
+        false
       }
     }
 
     private fun compileRequired(root: JSONObject, key: String): Pattern {
       val s = root.getString(key)
-      require(s.isNotEmpty()) { "$key is empty" }
-      return Pattern.compile(s, FLAGS)
+      require(s.isNotBlank()) { "$key is empty" }
+      val p = Pattern.compile(s, FLAGS)
+      require(!p.matcher("").find()) { "$key matches the empty string" }
+      return p
     }
 
     private fun monthNumber(m: String): Int {

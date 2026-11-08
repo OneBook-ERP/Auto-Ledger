@@ -4,6 +4,7 @@ import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -66,6 +67,29 @@ class TemplateEngineTest {
     val r = engine.parse(idfc, creditBody.replace("credited with INR 12", "credited with INR 12"))
     assertNotNull(r)
     assertEquals(1293200L, r!!.amountMinor)
+  }
+
+  @Test
+  fun nbspBodyGivesSameParseAsPlain() {
+    val nb = creditBody.replace("credited with INR 12", "credited\u00A0with\u202FINR\u00A012")
+    assertNotEquals(creditBody, nb)
+    assertEquals(engine.parse(idfc, creditBody), engine.parse(idfc, nb))
+    assertNotNull(engine.parse(idfc, nb))
+  }
+
+  @Test
+  fun selfTestPasses() {
+    assertTrue(TemplateEngine.selfTest())
+  }
+
+  @Test
+  fun degenerateRequiredPatternsAreRejected() {
+    for (k in listOf("otpPattern", "moneyVerbPattern", "amountPattern")) {
+      for (v in listOf("|", "x*", "   ", "")) {
+        val j = JSONObject(templateJson).put(k, v).toString()
+        assertNull("$k=\"$v\"", TemplateEngine.fromJson(j))
+      }
+    }
   }
 
   @Test

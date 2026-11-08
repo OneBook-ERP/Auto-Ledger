@@ -71,6 +71,12 @@ function normCurrency(c: string | undefined): string {
   return /^rs/i.test(c) ? 'INR' : c.toUpperCase();
 }
 
+/**
+ * Unicode space characters (Zs separators, BOM, line/paragraph separators) become a plain
+ * space, so JS and Java (whose \s is ASCII-only) see the same text. Same set as Kotlin.
+ */
+const UNICODE_SPACES = /[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\uFEFF\u2028\u2029]/g;
+
 export function parseSms(
   sender: string,
   body: string,
@@ -90,6 +96,7 @@ function parseSmsUnsafe(
   receivedAt: number,
   templates: TemplateSet,
 ): ParseResult {
+  body = body.replace(UNICODE_SPACES, ' ');
   if (new RegExp(templates.otpPattern, 'i').test(body)) return { ok: false, reason: 'otp' };
 
   const bank = templates.banks.find((b) => sender.includes(b.senderPattern));

@@ -99,6 +99,20 @@ describe('named cases', () => {
       if (r.ok) expect(r.txn.kind).toBe(f.expected.txn.kind);
     }
   });
+  it('NBSP and other Unicode spaces parse like plain spaces', () => {
+    for (const id of ['idfc-001', 'idfc-025']) {
+      const f = byId(id);
+      const plain = parseSms(f.sender, f.body, f.receivedAt, templates);
+      const nb = f.body.replace(/ (?=INR|Rs|on |at |spent|credited|Avbl)/g, '\u00A0').replace(/ (?=[AP]M)/g, '\u202F');
+      expect(nb).not.toBe(f.body);
+      expect(plain.ok).toBe(true);
+      expect(parseSms(f.sender, nb, f.receivedAt, templates)).toEqual(plain);
+      const otp = parseSms(f.sender, nb + ' Never share your OTP with anyone.', f.receivedAt, templates);
+      expect(otp.ok).toBe(true);
+    }
+    expect(parseSms('VM-IDFCFB-S', 'Your OTP\u00A0is\u00A0123456 for login', 0, templates)).toEqual({ ok: false, reason: 'otp' });
+  });
+
   it('OTP phrasings are detected', () => {
     for (const b of ['Your OTP is 123456 for login', 'OTP for txn of Rs 5 is 98765432', '4821 is the OTP to pay', 'Use one time password: 5566']) {
       expect(parseSms('VM-IDFCFB-S', b, 0, templates)).toEqual({ ok: false, reason: 'otp' });

@@ -10,6 +10,7 @@
     "When the body has no date, occurredOn is the Asia/Kolkata date of receivedAt (UTC+05:30, so the day boundary is 18:30 UTC) and occurredTime is null.",
     "Times with AM/PM convert to 24-hour: 12:xx AM becomes 00:xx, 12:xx PM stays 12:xx, other PM hours add 12.",
     "A two-digit year yy means 2000+yy.",
+    "Before the OTP check and matching, both engines replace every character in U+00A0, U+1680, U+2000-U+200A, U+202F, U+205F, U+3000, U+FEFF, U+2028 and U+2029 with a plain space (Java's \\s is ASCII-only, JS's is not).",
     "Currency Rs or Rs. means INR. Group names allowed: amount, currency, day, month, year, time, last4, counterparty, utr, merchant, balance."
   ],
   "banks": [

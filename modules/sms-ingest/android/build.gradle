@@ -9,6 +9,9 @@ version = '0.1.0'
 android {
   namespace "expo.modules.smsingest"
   defaultConfig {
+    // Named regex groups are read with Matcher.group(String), API 26+. The app minSdk is set to 26
+    // via expo-build-properties in app.json; this documents the module's own requirement.
+    minSdk 26
     versionCode 1
     versionName "0.1.0"
   }

@@ -24,7 +24,8 @@
     },
     "scheme": "autoledger",
     "plugins": [
-      "expo-router"
+      "expo-router",
+      ["expo-build-properties", { "android": { "minSdkVersion": 26 } }]
     ]
   }
 }
