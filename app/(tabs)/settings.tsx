@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Alert, Text, View } from 'react-native';
+import type { PermissionState } from '../../modules/sms-ingest/src';
 import type { AccountMapping } from '../../src/core/types';
 import { UNRECOGNISED_COUNT_KEY } from '../../src/ingest/pipeline';
 import { useApp } from '../../src/state/AppProvider';
@@ -17,6 +18,8 @@ export default function Settings() {
   const [mappings, setMappings] = useState<AccountMapping[]>([]);
   const [unread, setUnread] = useState(0);
   const [engine, setEngine] = useState<string>('Checking...');
+  const [perm, setPerm] = useState<PermissionState | null>(null);
+  const [asking, setAsking] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -25,6 +28,12 @@ export default function Settings() {
       if (!live) return;
       setMappings(m);
       setUnread(Number(u) || 0);
+      try {
+        const p = await native.hasPermission();
+        if (live) setPerm(p);
+      } catch {
+        // status stays unknown
+      }
       try {
         const h = await native.engineHealth();
         if (live) setEngine(h.usable ? 'Working' : 'Unavailable. Update the app.');
@@ -36,6 +45,18 @@ export default function Settings() {
       live = false;
     };
   }, [repo, native]);
+
+  const grantSms = async () => {
+    setAsking(true);
+    try {
+      await native.requestPermissions();
+      setPerm(await native.hasPermission());
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  const smsOn = !!perm && perm.receive && perm.read;
 
   const confirmSignOut = () =>
     Alert.alert('Sign out?', 'AutoLedger forgets your login. Entries and settings already on this phone are kept.', [
@@ -67,6 +88,18 @@ export default function Settings() {
       <Card title="Reading messages">
         <Text className="text-base text-ink dark:text-ink-dark">Messages that could not be read: {unread}</Text>
         <Text className="mt-2 text-base text-ink dark:text-ink-dark">SMS reading: {engine}</Text>
+      </Card>
+
+      <Card title="SMS permission">
+        <Text className="text-base text-ink dark:text-ink-dark">
+          {perm === null ? 'Checking...' : smsOn ? 'Allowed. Bank messages are being read.' : 'Not allowed. Bank messages are NOT being read.'}
+        </Text>
+        {!smsOn && perm !== null ? (
+          <View className="mt-3">
+            <Button label="Grant SMS permission" onPress={grantSms} loading={asking} />
+            <Text className="mt-2 text-sm text-muted dark:text-muted-dark">If no dialog appears, open App info &gt; Permissions.</Text>
+          </View>
+        ) : null}
       </Card>
 
       <View className="gap-3">

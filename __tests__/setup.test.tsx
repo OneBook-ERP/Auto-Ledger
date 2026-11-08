@@ -1,3 +1,4 @@
+import { Alert } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { AccountMapping } from '../src/core/types';
 import { ErpClient } from '../src/erp/client';
@@ -169,6 +170,7 @@ describe('permissions step', () => {
     expect(screen.getByText(DISCLOSURE_TITLE)).toBeTruthy();
     for (const p of DISCLOSURE_POINTS) expect(screen.getByText(p)).toBeTruthy();
     expect(screen.getByText(/raw text never leaves the phone/)).toBeTruthy();
+    expect(screen.getByText(/Transaction details go only to your own ERPNext site/)).toBeTruthy();
     expect(screen.getByText(/One-time passwords \(OTPs\) are ignored/)).toBeTruthy();
     expect(mocks.requestPermissions).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
@@ -184,10 +186,31 @@ describe('permissions step', () => {
     (app.mocks.hasPermission as jest.Mock).mockResolvedValue({ receive: false, read: false, notifications: true });
     await render(<app.Wrap><Permissions /></app.Wrap>);
     await press('Continue');
-    expect(await screen.findByText(/Allow restricted settings/)).toBeTruthy();
-    expect(screen.getByText(/Permissions/, { exact: false })).toBeTruthy();
+    expect(await screen.findByText('Some phones show this. If the permission dialog does not appear, open App info > Permissions.')).toBeTruthy();
+    expect(screen.queryByText(/ColorOS|restricted settings/i)).toBeNull();
     expect(screen.getAllByText('Not allowed')).toHaveLength(2);
     expect(screen.getByText(/Allow background activity/)).toBeTruthy();
+    expect(screen.getByText(/Turn off "Manage app if unused" for AutoLedger/)).toBeTruthy();
+    expect(screen.getByText(/does not remove the SMS permission after a quiet month|so Android does not remove the SMS permission after a quiet month/)).toBeTruthy();
+    expect(screen.queryByText(/we tested/)).toBeNull();
+  });
+
+  it('finishing with SMS denied explains that bank messages are not read, and can be cancelled', async () => {
+    const app = await fakeApp();
+    (app.mocks.hasPermission as jest.Mock).mockResolvedValue({ receive: false, read: false, notifications: true });
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation((_t, _m, b) => void b?.find((x) => x.text === 'Go back')?.onPress?.());
+    await render(<app.Wrap><Permissions /></app.Wrap>);
+    await press('Continue');
+    await screen.findByText('Receive SMS');
+    await press('Finish setup');
+    await waitFor(() => expect(alert).toHaveBeenCalled());
+    expect(alert.mock.calls[0][0]).toBe('SMS permission is off');
+    expect(alert.mock.calls[0][1]).toMatch(/will NOT read your bank messages until SMS permission is granted/);
+    expect(app.value.completeSetup).not.toHaveBeenCalled();
+    alert.mockImplementation((_t, _m, b) => void b?.find((x: { text?: string }) => x.text === 'Finish anyway')?.onPress?.());
+    await press('Finish setup');
+    await waitFor(() => expect(app.value.completeSetup).toHaveBeenCalled());
+    expect(mockReplace).toHaveBeenCalledWith('/(tabs)/home');
   });
 
   it('finishing syncs sender patterns, completes setup and goes to Home', async () => {

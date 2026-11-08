@@ -102,6 +102,18 @@ describe('settings', () => {
     alert.mockRestore();
   });
 
+  it('offers "Grant SMS permission" when SMS is off, requests it and shows the new status', async () => {
+    reset(signedIn);
+    const app = await fakeApp();
+    (app.mocks.hasPermission as jest.Mock).mockResolvedValueOnce({ receive: false, read: false, notifications: true });
+    await render(<app.Wrap><Settings /></app.Wrap>);
+    expect(await screen.findByText('Not allowed. Bank messages are NOT being read.')).toBeTruthy();
+    await fireEvent.press(screen.getByRole('button', { name: 'Grant SMS permission' }));
+    await waitFor(() => expect(screen.getByText('Allowed. Bank messages are being read.')).toBeTruthy());
+    expect(app.mocks.requestPermissions).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Grant SMS permission' })).toBeNull();
+  });
+
   it('links the debug receiver in dev builds only', async () => {
     const g = globalThis as { __DEV__?: boolean };
     const app = await fakeApp();

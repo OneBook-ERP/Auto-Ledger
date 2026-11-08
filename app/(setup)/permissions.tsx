@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Text, View } from 'react-native';
+import { Alert, Text, View } from 'react-native';
 import type { PermissionState } from '../../modules/sms-ingest/src';
 import { useApp } from '../../src/state/AppProvider';
 import { syncSenderPatterns } from '../../src/ingest/pipeline';
@@ -11,14 +11,16 @@ export const DISCLOSURE_POINTS = [
   'It reads only text messages from the bank sender ids you chose in the last step.',
   'Messages are read and understood on this phone. The raw text never leaves the phone.',
   'One-time passwords (OTPs) are ignored and never stored.',
-  'Only the amount, date and a few details of each transaction are kept, to ask you what it was for.',
+  'Only the amount, date and a few details of each transaction are kept, to ask you what it was for. Transaction details go only to your own ERPNext site.',
 ];
 
-export const RESTRICTED_HELP =
-  'If no permission dialog appears, open your phone Settings, then Apps, then AutoLedger, then Permissions, and allow SMS and Notifications. On Android 13 or newer (including ColorOS), an app installed outside the Play Store may first need "Allow restricted settings": open App info, tap the three-dot menu at the top right, and choose Allow restricted settings.';
+export const RESTRICTED_HELP = 'Some phones show this. If the permission dialog does not appear, open App info > Permissions.';
 
 export const BATTERY_TIP =
-  'If alerts stop arriving, open App info, then Battery usage, and choose Allow background activity. On the ColorOS phone we tested, the default setting was enough.';
+  'Turn off "Manage app if unused" for AutoLedger (App info), so Android does not remove the SMS permission after a quiet month. If alerts stop arriving, open App info > Battery usage and choose Allow background activity.';
+
+export const SMS_DENIED_TITLE = 'SMS permission is off';
+export const SMS_DENIED_MESSAGE = 'AutoLedger will NOT read your bank messages until SMS permission is granted. You can grant it later in Settings.';
 
 const ROWS: { key: keyof PermissionState; label: string }[] = [
   { key: 'receive', label: 'Receive SMS' },
@@ -53,6 +55,20 @@ export default function PermissionsStep() {
   };
 
   const finish = async () => {
+    if (perm && !(perm.receive && perm.read)) {
+      const go = await new Promise<boolean>((resolve) =>
+        Alert.alert(
+          SMS_DENIED_TITLE,
+          SMS_DENIED_MESSAGE,
+          [
+            { text: 'Go back', style: 'cancel', onPress: () => resolve(false) },
+            { text: 'Finish anyway', onPress: () => resolve(true) },
+          ],
+          { cancelable: true, onDismiss: () => resolve(false) },
+        ),
+      );
+      if (!go) return;
+    }
     setFinishing(true);
     setError(false);
     try {
@@ -98,7 +114,7 @@ export default function PermissionsStep() {
         ? ROWS.map((r) => (
             <View key={r.key} className="mb-2 min-h-[48px] flex-row items-center justify-between rounded-xl border border-line bg-surface px-4 dark:border-line-dark dark:bg-surface-dark">
               <Text className="text-base text-ink dark:text-ink-dark">{r.label}</Text>
-              <Text className={`text-base font-semibold ${perm[r.key] ? 'text-ok' : 'text-danger'}`}>{perm[r.key] ? 'Allowed' : 'Not allowed'}</Text>
+              <Text className={`text-base font-semibold ${perm[r.key] ? 'text-ok dark:text-ok-dark' : 'text-danger dark:text-danger-dark'}`}>{perm[r.key] ? 'Allowed' : 'Not allowed'}</Text>
             </View>
           ))
         : null}
