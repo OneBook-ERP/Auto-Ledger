@@ -1,30 +1,107 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
-import { hasPermission, peekQueue, requestPermissions } from '../modules/sms-ingest/src';
+import { ScrollView, Text, TextInput, View } from 'react-native';
+import idfc from '../templates/idfc.json';
+import * as sms from '../modules/sms-ingest/src';
+import { ListRow } from '../src/ui';
 
-// SPIKE A screen (Task 2): replaced when real screens arrive.
+// DEBUG "Receiver test" screen (Task 9). Not the final UI: replaced by the real screens (Tasks 16-17).
+// It shows queued SMS bodies only because it is a debug screen; nothing here is logged.
 export default function Index() {
+  const [extra, setExtra] = useState('');
   const [out, setOut] = useState('');
-  const run = async (fn: () => Promise<string> | string) => {
+  const run = async (fn: () => Promise<string>) => {
     try {
-      setOut(String(await fn()));
+      setOut(await fn());
     } catch (e) {
       setOut(`error: ${String(e)}`);
     }
   };
+  const patterns = () => ['IDFCFB', ...(extra.trim() ? [extra.trim()] : [])];
+
+  const actions: { title: string; subtitle?: string; fn: () => Promise<string> }[] = [
+    {
+      title: 'Request permissions',
+      fn: async () => {
+        await sms.requestPermissions();
+        return JSON.stringify(await sms.hasPermission());
+      },
+    },
+    {
+      title: 'Set sender patterns',
+      subtitle: 'IDFCFB plus the optional extra pattern',
+      fn: async () => {
+        await sms.setSenderPatterns(patterns());
+        return `patterns: ${JSON.stringify(await sms.getSenderPatterns())}`;
+      },
+    },
+    {
+      title: 'Use test templates',
+      subtitle: 'Bundled IDFC templates, also applied to the extra pattern',
+      fn: async () => {
+        const p = extra.trim();
+        if (!p) return 'enter an extra pattern first';
+        const banks = [...idfc.banks, { ...idfc.banks[0], id: 'test', senderPattern: p }];
+        const ok = await sms.setTemplates(JSON.stringify({ ...idfc, banks }));
+        return `setTemplates: ${ok}; ${JSON.stringify(await sms.getTemplatesInfo())}`;
+      },
+    },
+    {
+      title: 'Reset templates',
+      fn: async () => {
+        await sms.resetTemplates();
+        return JSON.stringify(await sms.getTemplatesInfo());
+      },
+    },
+    {
+      title: 'Engine health and templates',
+      fn: async () =>
+        JSON.stringify({
+          health: await sms.engineHealth(),
+          templates: await sms.getTemplatesInfo(),
+          patterns: await sms.getSenderPatterns(),
+          permissions: await sms.hasPermission(),
+          dropped: await sms.droppedCount(),
+        }, null, 1),
+    },
+    {
+      title: 'Peek queue',
+      fn: async () => {
+        const q = await sms.peek();
+        if (q.length === 0) return 'queue empty';
+        return q
+          .map((m) => `${m.id}  ${m.sender}  ${m.kind}  ${new Date(m.receivedAt).toISOString()}\n${m.body}`)
+          .join('\n\n');
+      },
+    },
+    {
+      title: 'Ack all',
+      fn: async () => {
+        const q = await sms.peek();
+        await sms.ack(q.map((m) => m.id));
+        return `acked ${q.length}`;
+      },
+    },
+    {
+      title: 'Backfill 7 days',
+      fn: async () => `backfill: ${(await sms.backfill(7, patterns())).length} messages`,
+    },
+  ];
+
   return (
-    <View className="flex-1 bg-white px-4 pt-16">
-      <Text className="mb-4 text-xl font-semibold">AutoLedger: SMS spike</Text>
-      <Pressable
-        className="mb-3 rounded bg-blue-600 p-3"
-        onPress={() => run(async () => { await requestPermissions(); return `requested; RECEIVE_SMS granted now: ${hasPermission()}`; })}
-      >
-        <Text className="text-center text-white">Request SMS permissions</Text>
-      </Pressable>
-      <Pressable className="mb-3 rounded bg-blue-600 p-3" onPress={() => run(peekQueue)}>
-        <Text className="text-center text-white">Show queue</Text>
-      </Pressable>
-      <ScrollView>
+    <View className="flex-1 bg-white pt-12">
+      <Text className="px-4 pb-2 text-xl font-semibold">Receiver test (debug)</Text>
+      <TextInput
+        className="mx-4 mb-2 rounded border border-neutral-300 px-3 py-2"
+        placeholder="Extra sender pattern (optional, for testing)"
+        autoCapitalize="none"
+        autoCorrect={false}
+        value={extra}
+        onChangeText={setExtra}
+      />
+      {actions.map((a) => (
+        <ListRow key={a.title} title={a.title} subtitle={a.subtitle} onPress={() => run(a.fn)} />
+      ))}
+      <ScrollView className="flex-1 px-4 pt-2">
         <Text selectable>{out}</Text>
       </ScrollView>
     </View>
