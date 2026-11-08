@@ -1,12 +1,19 @@
 import { useState } from 'react';
 import { ScrollView, Text, TextInput, View } from 'react-native';
 import idfc from '../templates/idfc.json';
-import * as sms from '../modules/sms-ingest/src';
+import { Redirect } from 'expo-router';
+import { getNative } from '../src/state/native';
 import { ListRow } from '../src/ui';
 
-// DEBUG "Receiver test" screen (Task 9). Not the final UI: replaced by the real screens (Tasks 16-17).
-// It shows queued SMS bodies only because it is a debug screen; nothing here is logged.
-export default function Index() {
+// DEBUG "Receiver test" screen (Task 9). Shows raw SMS bodies, so it exists only in development builds:
+// reachable from Settings when __DEV__ is true, and redirected away in release builds (deep links included).
+export default function DebugReceiver() {
+  if (!__DEV__) return <Redirect href="/" />;
+  return <DebugReceiverScreen />;
+}
+
+function DebugReceiverScreen() {
+  const sms = getNative();
   const [extra, setExtra] = useState('');
   const [out, setOut] = useState('');
   const run = async (fn: () => Promise<string>) => {

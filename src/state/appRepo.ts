@@ -1,9 +1,11 @@
 // The ONE Repo of the app. The Repo's mutex (and the ingest/drain locks) are per instance, so a second
 // instance on the same SQLite connection would defeat them: creating one twice throws in dev.
-import { openExpoDriver } from '../data/expoDriver';
 import { createRepo, type Repo, type SqlDriver } from '../data/repo';
 
 type Open = () => Promise<SqlDriver>;
+
+// expo-sqlite is required lazily: importing it must not happen (or fail) at module load.
+const openExpoDriver: Open = () => (require('../data/expoDriver') as typeof import('../data/expoDriver')).openExpoDriver();
 
 let created: Promise<Repo> | null = null;
 

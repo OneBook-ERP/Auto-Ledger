@@ -1,4 +1,3 @@
-jest.mock('../data/expoDriver', () => ({ openExpoDriver: jest.fn() }));
 import { createTestDriver } from '../data/testDriver';
 import { createAppRepo, getAppRepo, resetAppRepoForTests } from './appRepo';
 
