@@ -179,8 +179,10 @@ describe('tiles', () => {
 });
 
 describe('cycleCountsAsSynced', () => {
-  const ok = { failedSteps: [], drain: { ran: 0, stoppedBecause: 'empty' as const } };
+  const ok = { failedSteps: [], drain: { ran: 0, stoppedBecause: 'empty' as const }, erpReached: true };
   it.each([
+    [{ ...ok, erpReached: false }, false], [{ ...ok, erpReached: undefined }, false],
+    [{ ...ok, poll: { checked: 0, submitted: 0, cancelled: 0, missing: 0, needsLogin: true } }, false],
     [ok, true], [{ ...ok, drain: { ran: 1, stoppedBecause: 'limit' as const } }, true],
     [{ ...ok, drain: { ran: 0, stoppedBecause: 'retry_later' as const } }, false], [{ ...ok, drain: { ran: 0, stoppedBecause: 'needs_login' as const } }, false],
     [{ ...ok, failedSteps: ['ingest' as const] }, false], [{ ...ok, skipped: 'site_mismatch' }, false], [{ failedSteps: [] }, false], [null, false],

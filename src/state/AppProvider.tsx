@@ -10,12 +10,11 @@ import { NEEDS_LOGIN_SINCE_KEY } from '../ingest/drain';
 import { runForegroundCycle, type CycleSummary } from '../ingest/pipeline';
 import { getAppRepo } from './appRepo';
 import { TEMPLATES_URL } from './config';
-import { attachAppStateCycle, createCycleRunner } from './cycle';
+import { afterCycle, attachAppStateCycle, createCycleRunner } from './cycle';
 import { buildErp } from './erp';
 import { getNative, type SmsNative } from './native';
 import { clearSession, persistSession, restoreSession, summarize } from './session';
 import { useUiStore } from './store';
-import { cycleCountsAsSynced, LAST_SYNCED_KEY } from '../home/viewModel';
 import { maybeRefreshTemplates } from './templatesSchedule';
 
 export const SETUP_DONE_KEY = 'setupDone';
@@ -138,20 +137,14 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
           const { erp } = buildErp(s, { fetchImpl });
           return runForegroundCycle({ repo: r, native, erp, now, fetchImpl });
         },
-        after: async (summary) => {
-          // Home's "last synced": only a cycle where every step worked counts (spec section 14).
-          const r = repoRef.current;
-          if (r && cycleCountsAsSynced(summary)) {
-            try {
-              await r.setSetting(LAST_SYNCED_KEY, String(now()));
-            } catch {
-              // best effort
-            }
-          }
-          await refreshBanners();
-          // Whatever the cycle changed (drafts, answers, sync time) must reach Home.
-          void queryClient.invalidateQueries({ queryKey: ['home'] });
-        },
+        // Home's "last synced" only after an ERPNext round-trip (R50); Home is invalidated whatever happens.
+        after: (summary) =>
+          afterCycle(summary, {
+            repo: repoRef.current,
+            now,
+            refreshBanners,
+            invalidateHome: () => queryClient.invalidateQueries({ queryKey: ['home'] }),
+          }),
       }),
     [native, fetchImpl, now, refreshBanners, queryClient],
   );

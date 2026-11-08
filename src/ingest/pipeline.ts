@@ -305,7 +305,35 @@ export type CycleSummary = {
   drain?: DrainResult;
   poll?: PollResult;
   failedSteps: CycleStep[];
+  /**
+   * R50: true only when ERPNext actually answered during this cycle: some ERPNext call made by the drain or the
+   * status poll succeeded, or (when none was made, e.g. an empty outbox) a final checkSession() returned true.
+   * Not asked (false) when a step failed or the drain did not finish, since such a cycle never counts as synced.
+   */
+  erpReached?: boolean;
 };
+
+/**
+ * Wraps `erp` so that `onAnswer` runs whenever one of its async calls resolves (ERPNext answered).
+ * checkSession counts only when it returns true (false means the server refused the credentials).
+ */
+function watchAnswers<T extends object>(erp: T, onAnswer: () => void): T {
+  return new Proxy(erp, {
+    get(target, prop, receiver) {
+      const v = Reflect.get(target, prop, receiver);
+      if (typeof v !== 'function') return v;
+      return (...args: unknown[]) => {
+        const r = (v as (...a: unknown[]) => unknown).apply(target, args);
+        if (r && typeof (r as Promise<unknown>).then === 'function') {
+          (r as Promise<unknown>).then((x) => {
+            if (prop !== 'checkSession' || x === true) onAnswer();
+          }, () => undefined);
+        }
+        return r;
+      };
+    },
+  });
+}
 
 /**
  * What the app runs on foreground and after setup: syncSenderPatterns -> ingest -> ensureBackfill ->
@@ -321,10 +349,23 @@ export async function runForegroundCycle(deps: PipelineDeps): Promise<CycleSumma
       return undefined;
     }
   };
+  let answered = false;
+  const erp = watchAnswers(deps.erp, () => {
+    answered = true;
+  });
   out.senderPatterns = await step('syncSenderPatterns', () => syncSenderPatterns(deps));
   out.ingest = await step('ingest', () => ingest(deps));
   out.backfill = await step('ensureBackfill', () => ensureBackfill(deps));
-  out.drain = await step('drainOutbox', () => drainOutbox(deps));
-  out.poll = await step('pollStatuses', () => pollStatuses(deps));
+  out.drain = await step('drainOutbox', () => drainOutbox({ ...deps, erp }));
+  out.poll = await step('pollStatuses', () => pollStatuses({ ...deps, erp }));
+  const finished = out.drain?.stoppedBecause === 'empty' || out.drain?.stoppedBecause === 'limit';
+  if (!answered && out.failedSteps.length === 0 && finished && !out.poll?.needsLogin) {
+    try {
+      answered = (await deps.erp.checkSession()) === true;
+    } catch {
+      answered = false; // offline: not synced, but not a failed step either
+    }
+  }
+  out.erpReached = answered;
   return out;
 }

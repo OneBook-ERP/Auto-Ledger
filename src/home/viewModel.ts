@@ -68,9 +68,13 @@ function tile(m: number | null, positive: string, negative: string): { label: st
   return { label: positive, text: wholeText(m) };
 }
 
-/** A cycle counts as "synced" only if every step worked and the outbox drain finished (not stuck on retry/login). */
+/**
+ * A cycle counts as "synced" only if every step worked, the outbox drain finished (not stuck on retry/login)
+ * and ERPNext actually answered during the cycle (R50: an offline phone with an empty outbox is not synced).
+ */
 export function cycleCountsAsSynced(s: (CycleSummary & { skipped?: unknown }) | null): boolean {
-  return !!s && !s.skipped && s.failedSteps.length === 0 && (s.drain?.stoppedBecause === 'empty' || s.drain?.stoppedBecause === 'limit');
+  return !!s && !s.skipped && s.failedSteps.length === 0 && s.erpReached === true && !s.poll?.needsLogin
+    && (s.drain?.stoppedBecause === 'empty' || s.drain?.stoppedBecause === 'limit');
 }
 
 export function relativeTime(now: number, then: number): string {

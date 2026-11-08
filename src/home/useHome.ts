@@ -104,6 +104,9 @@ export function useHome(now: () => number = Date.now, tickMs = 60_000): HomeStat
     enabled: siteUrl !== null && !!l && !!l.company,
     staleTime: 0,
     retry: false,
+    // The cycle-end invalidation already re-reads the figures on every foreground (R50); refetching on
+    // focus as well would fetch them from ERPNext twice.
+    refetchOnWindowFocus: false,
     queryFn: () =>
       loadFigures({
         client,
