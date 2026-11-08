@@ -24,6 +24,9 @@ export type AccountMapping = {
   senderIds: string[]; last4: string[]; modeOfPayment: string;
 };
 
+/** The source of an incoming own-account transfer: an ERPNext Bank Account and its ledger account. */
+export type TransferSource = { bankAccount: string; glAccount: string; modeOfPayment?: string };
+
 export type ActionChoice =
  | {type:'customer_advance'; party: PartyRef}
  | {type:'supplier_payment'; party: PartyRef}
@@ -33,6 +36,8 @@ export type ActionChoice =
  | {type:'salary'; party: PartyRef}
  | {type:'other_income'; incomeAccount: string}
  | {type:'transfer'; toAccount: AccountMapping}
+ /** Money IN from another of the user's accounts (any ERPNext Bank Account, read by the app or not). */
+ | {type:'transfer'; fromAccount: TransferSource}
  | {type:'personal'} | {type:'ignore'};
 
 export interface PlanStep { kind: 'create_party'|'create_doc'; doctype: string; body: Record<string, unknown> }

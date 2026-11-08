@@ -1144,3 +1144,24 @@ describe('Undo provenance with runPlan (R49 C1)', () => {
     expect((await repo.getPending('t1'))!).toMatchObject({ state: 'created', createdDocs: [{ name: 'ACC-PAY-0002', docstatus: 0 }] });
   });
 });
+
+describe('own-account transfer, both legs read (R52b)', () => {
+  it('the incoming leg (fromAccount) adopts the outgoing leg\'s Payment Entry by the shared UTR; no duplicate', async () => {
+    const CA = { bankAccount: 'IDFC CA', glAccount: 'IDFC CA - AL', kind: 'bank' as const, senderIds: ['IDFCFB'], last4: ['3455'], modeOfPayment: 'Bank Draft' };
+    const SAV = { bankAccount: 'IDFC Savings', glAccount: 'IDFC Savings - AL', kind: 'bank' as const, senderIds: ['IDFCFB'], last4: ['1111'], modeOfPayment: 'Bank Draft' };
+    const out = txn({ id: 't1', rawHash: 'h1', kind: 'ca_debit', direction: 'out', counterparty: null, utr: 'IDFB6292M4509651' });
+    const { repo, erp, deps } = await setup(out);
+    const p1 = planAction(out, { type: 'transfer', toAccount: SAV }, ctx({ account: CA }));
+    expect(await runPlan('t1', p1, deps)).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0001' }] });
+
+    const inn = txn({ id: 't2', rawHash: 'h2', kind: 'ca_credit', direction: 'in', accountLast4: '1111', counterparty: null, utr: 'IDFB6292M4509651' });
+    await repo.upsertPending(inn);
+    const p2 = planAction(inn, { type: 'transfer', fromAccount: { bankAccount: CA.bankAccount, glAccount: CA.glAccount, modeOfPayment: CA.modeOfPayment } }, ctx({ account: SAV }));
+    expect(p2.steps[0].body).toMatchObject({ payment_type: 'Internal Transfer', paid_from: 'IDFC CA - AL', paid_to: 'IDFC Savings - AL', reference_no: 'IDFB6292M4509651' });
+    expect(await runPlan('t2', p2, deps)).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0001' }] });
+    expect(erp.docs).toHaveLength(1);
+    expect(erp.count('createDraft')).toBe(1);
+    expect((await repo.getPending('t2'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0, adopted: true }]);
+    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0 }]);
+  });
+});

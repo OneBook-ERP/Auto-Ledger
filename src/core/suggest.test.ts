@@ -191,6 +191,12 @@ describe('learnRule', () => {
 
 describe('R40 fixes', () => {
   const bank = { bankAccount: 'b', glAccount: 'g', kind: 'bank' as const, senderIds: [], last4: [], modeOfPayment: 'm' };
+  it('an incoming transfer (fromAccount) is not learned, and a stored transfer rule suggests nothing', () => {
+    const existing: Rule[] = [];
+    const t = pending('idfc-006');
+    expect(learnRule(t, { type: 'transfer', fromAccount: { bankAccount: 'ICICI', glAccount: 'ICICI - ZP' } }, existing)).toBe(existing);
+    expect(suggest(t, [{ matchKey: 'cp:in:company11', action: 'transfer', hits: 9, lastUsed: 1 }], [], [])).toEqual([]);
+  });
   it('transfer is not learned', () => {
     const existing: Rule[] = [];
     expect(learnRule(pending('idfc-010'), { type: 'transfer', toAccount: bank }, existing)).toBe(existing);

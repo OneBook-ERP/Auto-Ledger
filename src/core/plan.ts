@@ -179,10 +179,19 @@ export function planAction(txn: PendingTxn, choice: ActionChoice, ctx: PlanConte
       line = `Journal Entry (draft): other income ${amt} into ${gl}, credited to ${choice.incomeAccount}, ${tail}`;
       break;
     case 'transfer':
-      need('out');
-      if (choice.toAccount.glAccount === gl) throw new PlanError('same_account', 'Cannot transfer to the same account');
-      step = pe({ payment_type: 'Internal Transfer', paid_from: gl, paid_to: choice.toAccount.glAccount });
-      line = `Payment Entry (draft): transfer ${amt} from ${gl} to ${choice.toAccount.glAccount}, ${tail}`;
+      if ('fromAccount' in choice) {
+        // Money in from another own account (R52b): paid_from is the source, paid_to this account.
+        need('in');
+        const from = choice.fromAccount;
+        if (from.glAccount === gl) throw new PlanError('same_account', 'Cannot transfer from the same account');
+        step = pe({ payment_type: 'Internal Transfer', paid_from: from.glAccount, paid_to: gl, mode_of_payment: from.modeOfPayment ?? ctx.account.modeOfPayment });
+        line = `Internal transfer: ${amt} from ${from.glAccount} into ${gl}, ${tail}`;
+      } else {
+        need('out');
+        if (choice.toAccount.glAccount === gl) throw new PlanError('same_account', 'Cannot transfer to the same account');
+        step = pe({ payment_type: 'Internal Transfer', paid_from: gl, paid_to: choice.toAccount.glAccount });
+        line = `Internal transfer: ${amt} from ${gl} into ${choice.toAccount.glAccount}, ${tail}`;
+      }
       break;
     case 'personal':
       step = dir === 'out' ? je({ account: ctx.drawingsAccount }, { account: gl }) : je({ account: gl }, { account: ctx.drawingsAccount });

@@ -261,6 +261,38 @@ describe('PlanError', () => {
   });
 });
 
+describe('credit transfer (R52b: fromAccount, money in only)', () => {
+  const catchCode = (fn: () => unknown) => { try { fn(); } catch (e) { expect(e).toBeInstanceOf(PlanError); return (e as PlanError).code; } return 'none'; };
+  const icici = { bankAccount: 'ICICI Savings', glAccount: 'ICICI - ZP', modeOfPayment: 'Wire Transfer' };
+  it('Internal Transfer Payment Entry from the other account into this one', () => {
+    const { t, plan, doc } = run('idfc-006', bank, { type: 'transfer', fromAccount: icici });
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0]).toMatchObject({ kind: 'create_doc', doctype: 'Payment Entry' });
+    expect(doc).toEqual({
+      company: 'Zeta', posting_date: t.occurredOn, mode_of_payment: 'Wire Transfer',
+      paid_amount: minorToMajor(t.amountMinor), received_amount: minorToMajor(t.amountMinor),
+      reference_no: 'SBIN32974781', reference_date: t.occurredOn, remarks: 'AutoLedger | COMPANY_11',
+      payment_type: 'Internal Transfer', paid_from: 'ICICI - ZP', paid_to: 'IDFC First - ZP',
+    });
+    expect(plan.summary).toEqual([`Internal transfer: ₹30,000.00 from ICICI - ZP into IDFC First - ZP, UTR/ref SBIN32974781, ${t.occurredOn}`]);
+  });
+  it('mode of payment falls back to this account\'s', () => {
+    const { doc } = run('idfc-006', bank, { type: 'transfer', fromAccount: { bankAccount: 'ICICI Savings', glAccount: 'ICICI - ZP' } });
+    expect(doc.mode_of_payment).toBe('Current Account Bank Entry');
+  });
+  it('the outgoing form now also says Internal transfer', () => {
+    const { t, plan } = run('idfc-010', bank, { type: 'transfer', toAccount: card });
+    expect(plan.summary[0]).toBe(`Internal transfer: ₹30,000.00 from IDFC First - ZP into IDFC Credit Card - ZP, UTR/ref ${t.utr}, ${t.occurredOn}`);
+  });
+  it('bad_direction both ways; same_account', () => {
+    const inn = pending(parsed('idfc-006'));
+    const out = pending(parsed('idfc-010'));
+    expect(catchCode(() => planAction(inn, { type: 'transfer', toAccount: card }, ctxFor(inn, bank)))).toBe('bad_direction');
+    expect(catchCode(() => planAction(out, { type: 'transfer', fromAccount: icici }, ctxFor(out, bank)))).toBe('bad_direction');
+    expect(catchCode(() => planAction(inn, { type: 'transfer', fromAccount: { bankAccount: 'IDFC CA', glAccount: 'IDFC First - ZP' } }, ctxFor(inn, bank)))).toBe('same_account');
+  });
+});
+
 describe('bad_date (R35)', () => {
   const bads = ['2026-02-31', '2026-13-01', '2026-11', 'not-a-date'];
   const t = pending(parsed('idfc-006'));
