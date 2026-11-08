@@ -19,6 +19,7 @@ jest.mock('expo-router', () => {
   });
   return {
     useRouter: () => ({ push: mockPush, replace: mockReplace }),
+    useFocusEffect: (cb: () => void) => require('react').useEffect(cb, [cb]),
     Redirect: ({ href }: { href: string }) => <T testID="redirect">{href}</T>,
     Tabs,
   };
@@ -52,8 +53,9 @@ describe('tabs shell', () => {
   it('placeholders have clear empty states', async () => {
     await render(<Home />);
     expect(screen.getByText('Your balances will appear here')).toBeTruthy();
-    await render(<Inbox />);
-    expect(screen.getByText('No transactions to classify')).toBeTruthy();
+    const { Wrap } = await fakeApp();
+    await render(<Wrap><Inbox /></Wrap>);
+    expect(await screen.findByText('No transactions to classify')).toBeTruthy();
     await render(<Activity />);
     expect(screen.getByText('Nothing processed yet')).toBeTruthy();
   });

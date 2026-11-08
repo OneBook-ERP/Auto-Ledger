@@ -19,6 +19,8 @@ export type FlowDraft = {
   /** Expense or income ledger account. */
   account?: string;
   toAccount?: AccountMapping;
+  /** Pre-selection for the account step (a learned rule's account); never used as the answer itself. */
+  suggestedAccount?: string;
   /** Rupee value of a foreign-currency spend, in paise. */
   inrAmountMinor?: number;
 };
