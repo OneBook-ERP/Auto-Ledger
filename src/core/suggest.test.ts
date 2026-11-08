@@ -188,3 +188,53 @@ describe('learnRule', () => {
     expect(out).not.toBe(existing);
   });
 });
+
+describe('R40 fixes', () => {
+  const bank = { bankAccount: 'b', glAccount: 'g', kind: 'bank' as const, senderIds: [], last4: [], modeOfPayment: 'm' };
+  it('transfer is not learned', () => {
+    const existing: Rule[] = [];
+    expect(learnRule(pending('idfc-010'), { type: 'transfer', toAccount: bank }, existing)).toBe(existing);
+  });
+  it('incomplete stored rules produce no suggestion', () => {
+    const t = fb();
+    const mk = (o: Partial<Rule>) => suggest(t, [{ matchKey: 'm:out:facebooksi', action: 'expense', hits: 1, lastUsed: 1, ...o }], [], []);
+    expect(mk({ action: 'transfer' })).toEqual([]);
+    expect(mk({ action: 'supplier_payment' })).toEqual([]);
+    expect(mk({ action: 'salary' })).toEqual([]);
+    expect(mk({ action: 'customer_advance' })).toEqual([]);
+    expect(mk({ action: 'expense' })).toEqual([]);
+    expect(mk({ action: 'other_income' })).toEqual([]);
+    expect(mk({ action: 'personal' })).toHaveLength(1);
+    expect(mk({ action: 'ignore' })).toHaveLength(1);
+  });
+  it('Devanagari counterparty round-trips and matras do not collide', () => {
+    const a = pending('idfc-010', { counterparty: 'राम कुमार' });
+    const b = pending('idfc-010', { counterparty: 'रम कुमर' });
+    expect(normalizeKey('राम')).not.toBe(normalizeKey('रम'));
+    const rules = learnRule(a, { type: 'personal' }, []);
+    expect(rules).toHaveLength(1);
+    expect(suggest(a, rules, [], [])).toHaveLength(1);
+    expect(suggest(b, rules, [], [])).toEqual([]);
+  });
+  it('Tamil name round-trips', () => {
+    const t = pending('idfc-010', { counterparty: 'தமிழ் கடை' });
+    expect(suggest(t, learnRule(t, { type: 'ignore' }, []), [], [])).toHaveLength(1);
+  });
+  it('marks/punctuation-only name yields no rule', () => {
+    const t = pending('idfc-010', { counterparty: '\u0903 ..', merchant: null, utr: null });
+    const existing: Rule[] = [];
+    expect(learnRule(t, { type: 'personal' }, existing)).toBe(existing);
+  });
+  it('punctuation-only counterparty falls back to merchant', () => {
+    const t = pending('idfc-010', { counterparty: '--', merchant: 'Shop X' });
+    expect(learnRule(t, { type: 'personal' }, [])[0].matchKey).toBe('m:out:shopx');
+  });
+  it('doctype tie-break gives input-order independent output', () => {
+    const t = pending('idfc-010', { counterparty: 'Sam Roy' });
+    const ps: PartyRef[] = [{ doctype: 'Supplier', name: 'Sam Roy' }, { doctype: 'Employee', name: 'Sam Roy' }];
+    const s1 = suggest(t, [], [], ps);
+    const s2 = suggest(t, [], [], [...ps].reverse());
+    expect(s1).toEqual(s2);
+    expect(s1.map((x) => x.choice.type)).toEqual(['salary', 'supplier_payment']);
+  });
+});
