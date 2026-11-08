@@ -51,11 +51,12 @@ sealed class Decision {
  * keyword, so an alert that merely says "never share your OTP" is still kept. Kotlin-only.
  */
 object FallbackOtp {
-  private const val KW = "(?:otp|one[- ]?time\\s+password)"
+  private const val KW = "(?:otp|one[- ]?time\\s+password)(?:\\s*\\(otp\\))?"
+  private const val WINDOW = "(?:[^.\\n]|\\.\\d|\\.[a-z]|\\brs\\.\\s){0,80}"
   private val RX = java.util.regex.Pattern.compile(
     "\\b\\d{4,8}\\s+(?:is|as)\\s+(?:(?:your|the)\\s+)?$KW" +
-      "|\\b$KW\\s*(?:is|:)\\s*\\d{4,8}\\b" +
-      "|\\b$KW\\s+for\\b(?:[^.\\n]|\\.\\d){0,80}\\bis\\s+\\d{4,8}\\b",
+      "|\\b$KW(?:\\s+is)?\\s*[:\\-]?\\s*\\d{4,8}\\b" +
+      "|\\b$KW\\s+(?:for|to)\\b$WINDOW\\bis\\s*:?\\s*\\d{4,8}\\b",
     java.util.regex.Pattern.CASE_INSENSITIVE,
   )
 

@@ -1294,5 +1294,115 @@
       "ok": false,
       "reason": "otp"
     }
+  },
+  {
+    "id": "synthetic-otp-payment-of",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881260000,
+    "body": "OTP for payment of INR 2,500.00 at AMAZON is 123456. Do not share.",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
+  },
+  {
+    "id": "synthetic-otp-transferred",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881320000,
+    "body": "Dear Customer, OTP for Rs.5,000.00 transferred to PERSON_1 is 482913",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
+  },
+  {
+    "id": "synthetic-otp-otp-paren-payment",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881380000,
+    "body": "Your One Time Password (OTP) for payment of INR 2,500.00 at AMAZON is 123456",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
+  },
+  {
+    "id": "synthetic-otp-use-otp-confirm",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881440000,
+    "body": "Use OTP 482913 to confirm payment of Rs 1,000.00 to PERSON_1. Do not share this OTP.",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
+  },
+  {
+    "id": "synthetic-otp-one-time-password-bare",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881500000,
+    "body": "One Time Password 884210",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
+  },
+  {
+    "id": "synthetic-otp-otp-paren-is",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881560000,
+    "body": "Your One Time Password (OTP) is 123456",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
+  },
+  {
+    "id": "synthetic-otp-is-colon",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881620000,
+    "body": "OTP is: 123456",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
+  },
+  {
+    "id": "synthetic-otp-dash",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881680000,
+    "body": "OTP - 123456",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
+  },
+  {
+    "id": "synthetic-otp-code-then-transfer",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881740000,
+    "body": "OTP 482913 for transfer of INR 1,000.00",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
+  },
+  {
+    "id": "synthetic-otp-to-login",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881800000,
+    "body": "Your OTP to login is 123456",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
+  },
+  {
+    "id": "synthetic-otp-txn-rs-dot",
+    "sender": "VM-IDFCFB-S",
+    "receivedAt": 1793881860000,
+    "body": "OTP for txn of Rs. 500 at AMAZON.IN is 123456",
+    "expected": {
+      "ok": false,
+      "reason": "otp"
+    }
   }
 ]

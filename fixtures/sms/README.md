@@ -17,6 +17,7 @@ Each entry:
   - kept as `unknown_template` (money-like, so stored as "unrecognised" natively and shown in-app, never notified): `synthetic-idfc-rupee-debit` (amount with the rupee sign), `synthetic-idfc-upi-sent` ("sent ... via UPI"), `synthetic-idfc-rupee-received` (rupee-sign credit), `synthetic-idfc-inr-suffix-transferred` (amount followed by `INR`);
   - marketing that must never notify: `synthetic-idfc-marketing-cashback` and `synthetic-idfc-marketing-loan` stay `not_money` (no money verb); `synthetic-idfc-marketing-loan-credited` and `synthetic-idfc-marketing-voucher-received` are `unknown_template`: accepted false keeps (a money verb plus an amount), stored unparsed but never notified.
 - `synthetic-otp-is-code` and `synthetic-otp-one-time-password` cover the "OTP for ... is <code>" and "One Time Password ... is <code>" forms.
+- Other `synthetic-otp-*` fixtures (added with the Task 20B OTP fix) cover OTPs that mention a payment/transfer (they contain money verbs and amounts, so the OTP check must win) and the separator variants (`OTP is: 123456`, `OTP - 123456`, `One Time Password 884210`, `Your OTP to login is ...`, an amount with `Rs.` inside the window). The otpPattern change keeps template version 2 (unreleased).
 - Do not change an existing fixture's `expected` to fit a template change; if a change flips one, narrow the change.
 
 ## Redaction

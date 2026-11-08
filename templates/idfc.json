@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "otpPattern": "\\b\\d{4,8}\\s+(?:is|as)\\s+(?:(?:your|the)\\s+)?(?:otp|one[- ]time password)|\\b(?:otp|one[- ]time password)\\s*(?:is|:)\\s*\\d{4,8}\\b|\\b(?:otp|one[- ]time password)\\s+for\\b[^.\\n]{0,60}\\bis\\s+\\d{4,8}\\b",
+  "otpPattern": "\\b\\d{4,8}\\s+(?:is|as)\\s+(?:(?:your|the)\\s+)?(?:otp|one[- ]time password)(?:\\s*\\(otp\\))?|\\b(?:otp|one[- ]time password)(?:\\s*\\(otp\\))?(?:\\s+is)?\\s*[:\\-]?\\s*\\d{4,8}\\b|\\b(?:otp|one[- ]time password)(?:\\s*\\(otp\\))?\\s+(?:for|to)\\b(?:[^.\\n]|\\.\\d|\\.[a-z]|\\brs\\.\\s){0,80}\\bis\\s*:?\\s*\\d{4,8}\\b",
   "moneyVerbPattern": "\\b(?:debited|credited|spent|deducted|paid|received|withdrawn|sent|transferred|refunded|reversed|payment\\s+of)\\b",
   "amountPattern": "(?:INR|USD|Rs\\.?|\u20B9)\\s*\\d|\\d\\s*(?:INR|USD|Rs\\.?|\u20B9)",
   "notes": [
