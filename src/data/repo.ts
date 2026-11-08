@@ -1,4 +1,4 @@
-import type { PendingTxn, AccountMapping, Rule, OutboxOp } from '../core/types';
+import type { PendingTxn, ParsedTxn, AccountMapping, Rule, OutboxOp } from '../core/types';
 import { migrate, type SqlDriver } from './schema';
 
 export type { SqlDriver } from './schema';
@@ -11,6 +11,14 @@ export interface Repo {
    *  callers cannot hit a UNIQUE violation. */
   upsertPending(t: PendingTxn): Promise<void>;
   getPending(id: string): Promise<PendingTxn | null>;
+  /** Correlation write (Task 15), one transaction: unless SMS `sourceRawHash` was merged before ('already'),
+   *  applies `patch` to txn `targetId` (never its id, rawHash, state, createdDocs, error), increments its
+   *  mergedCount and records the source SMS (setting `merged_sms:<hash>` = targetId). Re-reads the row
+   *  under the lock, so a concurrent state change is never overwritten. */
+  mergeInto(targetId: string, patch: Partial<ParsedTxn>, sourceRawHash: string): Promise<
+    { status: 'merged'; txn: PendingTxn } | { status: 'already' | 'missing' }>;
+  /** True when SMS `rawHash` was merged into another txn by mergeInto. */
+  isMergedSms(rawHash: string): Promise<boolean>;
   saveMapping(m: AccountMapping): Promise<void>;
   listMappings(): Promise<AccountMapping[]>;
   saveRule(r: Rule): Promise<void>;
@@ -56,6 +64,7 @@ const PENDING_COLS = `id, raw_hash, state, merged_count, created_docs, error, ki
   utr, merchant, balance_minor, sender, received_at`;
 
 const FAIL = Symbol('parse-fail');
+const MERGED_PREFIX = 'merged_sms:';
 
 type OutboxRow = { id: string; txn_id: string; plan: string; progress: string; attempts: number; status: OutboxOp['status'] };
 function toOutbox(r: OutboxRow): OutboxOp | null {
@@ -96,6 +105,23 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
     }
   }
 
+  async function writePending(t: PendingTxn): Promise<void> {
+    await d.exec(
+      `INSERT INTO pending_txn (${PENDING_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(id) DO UPDATE SET raw_hash=excluded.raw_hash, state=excluded.state,
+         merged_count=excluded.merged_count, created_docs=excluded.created_docs, error=excluded.error,
+         kind=excluded.kind, direction=excluded.direction, amount_minor=excluded.amount_minor,
+         currency=excluded.currency, occurred_on=excluded.occurred_on, occurred_time=excluded.occurred_time,
+         account_type=excluded.account_type, account_last4=excluded.account_last4,
+         counterparty=excluded.counterparty, utr=excluded.utr, merchant=excluded.merchant,
+         balance_minor=excluded.balance_minor, sender=excluded.sender, received_at=excluded.received_at
+       ON CONFLICT(raw_hash) DO NOTHING`,
+      [t.id, t.rawHash, t.state, t.mergedCount, JSON.stringify(t.createdDocs), t.error, t.kind, t.direction,
+        t.amountMinor, t.currency, t.occurredOn, t.occurredTime, t.accountType, t.accountLast4,
+        t.counterparty, t.utr, t.merchant, t.balanceMinor, t.sender, t.receivedAt],
+    );
+  }
+
   const impl: Repo = {
     async listPending(state) {
       const rows = state
@@ -104,20 +130,28 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
       return rows.map(toPending);
     },
     async upsertPending(t) {
-      await d.exec(
-        `INSERT INTO pending_txn (${PENDING_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-         ON CONFLICT(id) DO UPDATE SET raw_hash=excluded.raw_hash, state=excluded.state,
-           merged_count=excluded.merged_count, created_docs=excluded.created_docs, error=excluded.error,
-           kind=excluded.kind, direction=excluded.direction, amount_minor=excluded.amount_minor,
-           currency=excluded.currency, occurred_on=excluded.occurred_on, occurred_time=excluded.occurred_time,
-           account_type=excluded.account_type, account_last4=excluded.account_last4,
-           counterparty=excluded.counterparty, utr=excluded.utr, merchant=excluded.merchant,
-           balance_minor=excluded.balance_minor, sender=excluded.sender, received_at=excluded.received_at
-         ON CONFLICT(raw_hash) DO NOTHING`,
-        [t.id, t.rawHash, t.state, t.mergedCount, JSON.stringify(t.createdDocs), t.error, t.kind, t.direction,
-          t.amountMinor, t.currency, t.occurredOn, t.occurredTime, t.accountType, t.accountLast4,
-          t.counterparty, t.utr, t.merchant, t.balanceMinor, t.sender, t.receivedAt],
-      );
+      await writePending(t);
+    },
+    async mergeInto(targetId, patch, sourceRawHash) {
+      let out: { status: 'merged'; txn: PendingTxn } | { status: 'already' | 'missing' } = { status: 'missing' };
+      await inTransaction(async () => {
+        const seen = await d.all<{ value: string }>('SELECT value FROM settings WHERE key = ?', [MERGED_PREFIX + sourceRawHash]);
+        if (seen.length) { out = { status: 'already' }; return; }
+        const rows = await d.all<PendingRow>(`SELECT ${PENDING_COLS} FROM pending_txn WHERE id = ?`, [targetId]);
+        if (!rows.length) { out = { status: 'missing' }; return; }
+        const cur = toPending(rows[0]);
+        const { id: _i, rawHash: _h, state: _s, createdDocs: _c, error: _e, mergedCount: _m, ...fields } =
+          patch as Partial<PendingTxn>;
+        const next: PendingTxn = { ...cur, ...fields, mergedCount: cur.mergedCount + 1 };
+        await writePending(next);
+        await d.exec('INSERT INTO settings (key, value) VALUES (?,?)', [MERGED_PREFIX + sourceRawHash, targetId]);
+        out = { status: 'merged', txn: next };
+      });
+      return out;
+    },
+    async isMergedSms(rawHash) {
+      const rows = await d.all<{ value: string }>('SELECT value FROM settings WHERE key = ?', [MERGED_PREFIX + rawHash]);
+      return rows.length > 0;
     },
     async getPending(id) {
       const rows = await d.all<PendingRow>(`SELECT ${PENDING_COLS} FROM pending_txn WHERE id = ?`, [id]);

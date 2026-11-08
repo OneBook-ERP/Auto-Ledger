@@ -308,3 +308,47 @@ describe('migrations', () => {
     expect(await real.all("SELECT name FROM sqlite_master WHERE name IN ('pending_txn','rule','idx_pending_state')")).toHaveLength(3);
   });
 });
+
+describe('mergeInto (Task 15: correlation writes)', () => {
+  it('applies the patch, increments mergedCount and records the source SMS, in one step', async () => {
+    const r = await mk();
+    const t = txn({ state: 'created', error: 'kept', utr: null, counterparty: null });
+    await r.upsertPending(t);
+    const res = await r.mergeInto('t1', { utr: 'NEW', counterparty: 'PERSON', state: 'new', id: 'zz', rawHash: 'other', mergedCount: 9, createdDocs: [], error: null } as never, 'src1');
+    const want = { ...t, utr: 'NEW', counterparty: 'PERSON', mergedCount: 2 };
+    expect(res).toEqual({ status: 'merged', txn: want });
+    expect(await r.getPending('t1')).toEqual(want);
+    expect(await r.getSetting('merged_sms:src1')).toBe('t1');
+    expect(await r.isMergedSms('src1')).toBe(true);
+    expect(await r.isMergedSms('src2')).toBe(false);
+  });
+  it('a second merge of the same source SMS changes nothing', async () => {
+    const r = await mk();
+    await r.upsertPending(txn());
+    await r.mergeInto('t1', {}, 'src1');
+    expect(await r.mergeInto('t1', { utr: 'X' }, 'src1')).toEqual({ status: 'already' });
+    expect((await r.getPending('t1'))!.mergedCount).toBe(2);
+    expect((await r.getPending('t1'))!.utr).toBe('UTR1');
+  });
+  it('a missing target changes nothing', async () => {
+    const r = await mk();
+    expect(await r.mergeInto('nope', {}, 'src1')).toEqual({ status: 'missing' });
+    expect(await r.isMergedSms('src1')).toBe(false);
+  });
+  it('rolls back the pending write when the marker write fails', async () => {
+    const real = createTestDriver();
+    let armed = false;
+    const d: SqlDriver = {
+      all: (s, p) => real.all(s, p),
+      exec: async (s, p) => {
+        if (armed && s.includes('INSERT INTO settings')) throw new Error('boom');
+        return real.exec(s, p);
+      },
+    };
+    const r = await createRepo(d);
+    await r.upsertPending(txn());
+    armed = true;
+    await expect(r.mergeInto('t1', { utr: 'X' }, 'src1')).rejects.toThrow('boom');
+    expect((await r.getPending('t1'))!).toEqual(txn());
+  });
+});
