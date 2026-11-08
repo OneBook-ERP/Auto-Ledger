@@ -42,32 +42,31 @@ internal object Storage {
   }
 }
 
-/** Cached template engine: the override in filesDir/templates/idfc.json if valid, else the bundled asset. */
+/**
+ * Template engine: the override in filesDir/templates/idfc.json if valid and not older than the
+ * bundled asset, else the bundled asset (see [EngineLoader.choose]). Loaded on first use, never
+ * at module creation, and cached ([LazyEngine]).
+ */
 internal object EngineProvider {
   private const val ASSET = "templates/idfc.json"
 
-  @Volatile private var cached: LoadedEngine? = null
+  private val lazy = LazyEngine()
 
   private fun overrideDir(ctx: Context) = File(ctx.filesDir, "templates")
 
-  fun get(ctx: Context): LoadedEngine = cached ?: synchronized(this) {
-    cached ?: load(ctx).also {
-      cached = it
-      if (!it.usable) Log.e(TAG, "template engine unusable: ${it.reason}")
-    }
+  fun get(ctx: Context): LoadedEngine = lazy.get({ load(ctx) }) {
+    if (!it.usable) Log.e(TAG, "template engine unusable: ${it.reason}")
   }
 
   /** Validates (TemplateEngine.fromJson) and writes atomically only when valid. */
-  fun setOverride(ctx: Context, json: String): Boolean = synchronized(this) {
-    if (TemplateEngine.fromJson(json) == null) return@synchronized false
-    FileKeyValueStore(overrideDir(ctx)).write("idfc.json", json)
-    cached = null
-    true
+  fun setOverride(ctx: Context, json: String): Boolean {
+    if (TemplateEngine.fromJson(json) == null) return false
+    lazy.update { FileKeyValueStore(overrideDir(ctx)).write("idfc.json", json) }
+    return true
   }
 
-  fun clearOverride(ctx: Context) = synchronized(this) {
-    File(overrideDir(ctx), "idfc.json").delete()
-    cached = null
+  fun clearOverride(ctx: Context) {
+    lazy.update { File(overrideDir(ctx), "idfc.json").delete() }
   }
 
   private fun load(ctx: Context): LoadedEngine {

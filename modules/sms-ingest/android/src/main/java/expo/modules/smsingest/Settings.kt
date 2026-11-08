@@ -38,6 +38,36 @@ data class LoadedEngine(
   val version: Int?,
 )
 
+/**
+ * Lazily built, cached engine, shared by the module and the receiver. Nothing is loaded until
+ * the first [get] (module start does no asset/file reads or regex compiles); concurrent first
+ * calls load exactly once. [update] runs a change (e.g. writing the override) under the same lock
+ * and drops the cache so the next [get] reloads. A load that throws is not cached.
+ */
+class LazyEngine {
+  @Volatile private var cached: LoadedEngine? = null
+  private val lock = Any()
+
+  val isLoaded: Boolean get() = cached != null
+
+  /** [onLoaded] runs once per actual load (e.g. to log an unusable engine), not per call. */
+  fun get(load: () -> LoadedEngine, onLoaded: (LoadedEngine) -> Unit = {}): LoadedEngine =
+    cached ?: synchronized(lock) {
+      cached ?: load().also {
+        cached = it
+        onLoaded(it)
+      }
+    }
+
+  fun <T> update(change: () -> T): T = synchronized(lock) {
+    try {
+      change()
+    } finally {
+      cached = null
+    }
+  }
+}
+
 object EngineLoader {
   /**
    * The override (app files dir) is used only when it builds and its version is >= the bundled

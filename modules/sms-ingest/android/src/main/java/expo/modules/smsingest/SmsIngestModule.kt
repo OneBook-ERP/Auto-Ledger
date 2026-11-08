@@ -27,9 +27,10 @@ class SmsIngestModule : Module() {
 
     OnCreate {
       try {
+        // Cheap only: the template engine (asset/file reads, regex compiles, selfTest) loads on
+        // first use, off the main thread (an AsyncFunction or the receiver's executor); an
+        // unusable engine is logged then and reported by engineHealth().
         Storage.housekeeping(context)
-        // First load runs TemplateEngine.selfTest(); an unusable engine is logged and reported by engineHealth().
-        EngineProvider.get(context)
       } catch (t: Throwable) {
         Log.e(TAG, "init failed: ${t.javaClass.simpleName}")
       }
