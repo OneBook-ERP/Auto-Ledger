@@ -1,4 +1,4 @@
-import { ErpAuthError, ErpClient, erpFetch, parseJson } from './client';
+import { ErpAuthError, ErpClient, encodeSegment, erpFetch, normalizeSiteUrl, parseJson, unexpectedResponse } from './client';
 
 export type Session = { siteUrl: string; apiKey: string; apiSecret: string; user: string; roles: string[] };
 
@@ -25,13 +25,24 @@ export class RotateDeclined extends Error {
 }
 
 const JSON_HEADERS = { 'Content-Type': 'application/json', Accept: 'application/json' };
-const rolesOf = (doc: { roles?: { role?: string }[] } | undefined): string[] =>
-  (doc?.roles ?? []).map((r) => r.role).filter((r): r is string => typeof r === 'string');
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const rolesOf = (doc: unknown): string[] => {
+  const r = isObj(doc) && Array.isArray(doc.roles) ? doc.roles : [];
+  return r.map((x) => (isObj(x) ? x.role : undefined)).filter((x): x is string => typeof x === 'string');
+};
+
+/** Password login succeeded but the follow-up session-cookie request was rejected. */
+export class SessionCookieMissing extends ErpAuthError {
+  constructor(status: number) {
+    super('Signed in, but the session cookie was not kept. Try again or paste an API key.', status);
+    this.name = 'SessionCookieMissing';
+  }
+}
 
 /**
  * Password login, then mint an API key pair. The session cookie from /login is relied on to be
- * kept by the platform cookie jar (React Native does this; no CSRF token needed, spike B.2).
- * The password is only ever sent in the login request body.
+ * kept by the platform cookie jar (React Native does this; no CSRF token needed, spike B.2), so
+ * these requests use credentials 'include'. The password is only ever sent in the login body.
  */
 export async function login(args: {
   siteUrl: string;
@@ -39,41 +50,62 @@ export async function login(args: {
   password: string;
   confirmRotate: () => Promise<boolean>;
   fetchImpl?: typeof fetch;
+  allowHttp?: boolean;
 }): Promise<Session> {
   const f = args.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
-  const base = args.siteUrl.replace(/\/+$/, '');
+  const base = normalizeSiteUrl(args.siteUrl, { allowHttp: args.allowHttp ?? false });
+  const flow = { headers: JSON_HEADERS, credentials: 'include' as const };
 
   const res = await erpFetch(f, `${base}/api/method/login`, {
+    ...flow,
     method: 'POST',
-    headers: JSON_HEADERS,
     body: JSON.stringify({ usr: args.username, pwd: args.password }),
   });
-  const body = parseJson<{ message?: string; verification?: unknown; tmp_id?: unknown }>(res.text);
-  // 2FA shape was NOT verified against a real site (spike B.2). Per Frappe source the body carries
-  // a `verification` object and `tmp_id` instead of message "Logged In"; treat anything other than
-  // "Logged In" as needing 2FA.
-  if (body?.message !== 'Logged In') throw new TwoFactorRequired();
+  let body: unknown;
+  try {
+    body = parseJson<unknown>(res.text);
+  } catch {
+    throw new ErpAuthError('Unexpected login response', res.status);
+  }
+  if (!(isObj(body) && body.message === 'Logged In')) {
+    // 2FA shape was NOT verified against a real site (spike B.2). Coded defensively on the
+    // documented Frappe markers: `verification` / `tmp_id` in the body or in a `message` payload.
+    const m = isObj(body) ? body.message : undefined;
+    const has = (o: unknown) => isObj(o) && ('verification' in o || 'tmp_id' in o);
+    if (has(body) || has(m)) throw new TwoFactorRequired();
+    throw new ErpAuthError('Unexpected login response', res.status);
+  }
 
-  const userPath = `${base}/api/resource/User/${encodeURIComponent(args.username)}`;
-  const doc = parseJson<{ data?: { api_key?: string | null; roles?: { role?: string }[] } }>(
-    (await erpFetch(f, userPath, { method: 'GET', headers: JSON_HEADERS })).text,
-  ).data;
+  let doc: unknown;
+  try {
+    const r = await erpFetch(f, `${base}/api/resource/User/${encodeSegment(args.username)}`, { ...flow, method: 'GET' });
+    const parsed = parseJson<unknown>(r.text);
+    doc = isObj(parsed) ? parsed.data : undefined;
+  } catch (e) {
+    if (e instanceof ErpAuthError) throw new SessionCookieMissing(e.status);
+    throw e;
+  }
+  if (!isObj(doc)) throw unexpectedResponse();
 
-  if (doc?.api_key) {
+  if (doc.api_key) {
     if (!(await args.confirmRotate())) throw new RotateDeclined();
   }
 
-  let keys: { api_key: string; api_secret: string };
+  let keys: unknown;
   try {
     const r = await erpFetch(f, `${base}/api/method/frappe.core.doctype.user.user.generate_keys`, {
+      ...flow,
       method: 'POST',
-      headers: JSON_HEADERS,
       body: JSON.stringify({ user: args.username }),
     });
-    keys = parseJson<{ message: { api_key: string; api_secret: string } }>(r.text).message;
+    const parsed = parseJson<unknown>(r.text);
+    keys = isObj(parsed) ? parsed.message : undefined;
   } catch (e) {
     if (e instanceof ErpAuthError && e.status === 403) throw new KeyGenerationNotPermitted();
     throw e;
+  }
+  if (!isObj(keys) || typeof keys.api_key !== 'string' || typeof keys.api_secret !== 'string' || !keys.api_key || !keys.api_secret) {
+    throw unexpectedResponse();
   }
 
   return { siteUrl: base, apiKey: keys.api_key, apiSecret: keys.api_secret, user: args.username, roles: rolesOf(doc) };
@@ -85,16 +117,18 @@ export async function loginWithKeys(args: {
   apiKey: string;
   apiSecret: string;
   fetchImpl?: typeof fetch;
+  allowHttp?: boolean;
 }): Promise<Session> {
-  const siteUrl = args.siteUrl.replace(/\/+$/, '');
-  const client = new ErpClient({ siteUrl, apiKey: args.apiKey, apiSecret: args.apiSecret, fetchImpl: args.fetchImpl });
-  const r = await client.get<{ message: string }>('/api/method/frappe.auth.get_logged_user');
+  const siteUrl = normalizeSiteUrl(args.siteUrl, { allowHttp: args.allowHttp ?? false });
+  const client = new ErpClient({ siteUrl, apiKey: args.apiKey, apiSecret: args.apiSecret, fetchImpl: args.fetchImpl, allowHttp: args.allowHttp });
+  const r = await client.get<{ message?: unknown }>('/api/method/frappe.auth.get_logged_user');
   const user = r.message;
+  if (typeof user !== 'string' || !user) throw unexpectedResponse();
   // Own User doc is readable with the token in the spike; for a restricted user it may be 403, in
   // which case roles are left empty (they are informational only).
   let roles: string[] = [];
   try {
-    const d = await client.get<{ data?: { roles?: { role?: string }[] } }>(`/api/resource/User/${encodeURIComponent(user)}`);
+    const d = await client.get<{ data?: unknown }>(`/api/resource/User/${encodeSegment(user)}`);
     roles = rolesOf(d.data);
   } catch (e) {
     if (!(e instanceof ErpAuthError)) throw e;
@@ -108,7 +142,10 @@ export async function saveSession(session: Session, store: { setItem(key: string
   await store.setItem(SESSION_KEY, JSON.stringify(session));
 }
 
-export async function loadSession(store: { getItem(key: string): Promise<string | null> }): Promise<Session | null> {
+export async function loadSession(
+  store: { getItem(key: string): Promise<string | null> },
+  opts: { allowHttp?: boolean } = {},
+): Promise<Session | null> {
   const raw = await store.getItem(SESSION_KEY);
   if (!raw) return null;
   try {
@@ -117,7 +154,7 @@ export async function loadSession(store: { getItem(key: string): Promise<string 
       typeof s.siteUrl === 'string' && typeof s.apiKey === 'string' && typeof s.apiSecret === 'string' &&
       typeof s.user === 'string' && Array.isArray(s.roles)
     ) {
-      return { siteUrl: s.siteUrl, apiKey: s.apiKey, apiSecret: s.apiSecret, user: s.user, roles: s.roles.map(String) };
+      return { siteUrl: normalizeSiteUrl(s.siteUrl, { allowHttp: opts.allowHttp ?? false }), apiKey: s.apiKey, apiSecret: s.apiSecret, user: s.user, roles: s.roles.map(String) };
     }
   } catch {
     // fall through

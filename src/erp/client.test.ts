@@ -3,6 +3,7 @@ import {
   ErpClient,
   ErpNetworkError,
   ErpValidationError,
+  encodeSegment,
   normalizeSiteUrl,
 } from './client';
 
@@ -48,7 +49,7 @@ describe('normalizeSiteUrl', () => {
 describe('ErpClient requests', () => {
   it('sends the token header and JSON-encodes params', async () => {
     const { c, calls } = client({ status: 200, body: { data: [1] } });
-    const r = await c.get<{ data: number[] }>('/api/resource/Payment Entry', {
+    const r = await c.get<{ data: number[] }>(`/api/resource/${encodeSegment('Payment Entry')}`, {
       fields: ['name'],
       limit_page_length: 5,
     });
@@ -56,6 +57,7 @@ describe('ErpClient requests', () => {
     expect(calls[0].url).toBe(
       'https://x.example/api/resource/Payment%20Entry?fields=%5B%22name%22%5D&limit_page_length=5',
     );
+    expect(calls[0].init.credentials).toBe('omit');
     expect((calls[0].init.headers as Record<string, string>).Authorization).toBe(`token ${KEY}:${SECRET}`);
   });
   it('treats 200 create and 202 delete as success', async () => {
@@ -185,5 +187,37 @@ describe('ErpClient errors', () => {
       expect(JSON.stringify(s.mock.calls)).not.toContain(SECRET);
       s.mockRestore();
     }
+  });
+});
+
+describe('encoding, https, empty and malformed bodies', () => {
+  it('does not re-encode caller-built paths', async () => {
+    const { c, calls } = client({ status: 200, body: { data: {} } });
+    await c.get(`/api/resource/User/${encodeSegment('a+b@x.com')}`);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://x.example/api/resource/User/a%2Bb%40x.com');
+  });
+  it('constructor enforces https unless allowHttp', () => {
+    const o = { siteUrl: 'http://x.example', apiKey: 'k', apiSecret: 's' };
+    expect(() => new ErpClient(o)).toThrow();
+    expect(() => new ErpClient({ ...o, allowHttp: true })).not.toThrow();
+  });
+  it('credentials omit on post, delete and call too', async () => {
+    const { c, calls } = client({ status: 200, body: { message: 1 } });
+    await c.post('/x', {});
+    await c.delete('/x');
+    await c.call('m');
+    expect(calls.map((x) => x.init.credentials)).toEqual(['omit', 'omit', 'omit']);
+  });
+  it('empty 2xx: post and delete tolerate, get and call throw ErpNetworkError', async () => {
+    const e = () => client({ status: 200, raw: '' }).c;
+    await expect(e().post('/x', {})).resolves.toBeUndefined();
+    await expect(e().delete('/x')).resolves.toBeUndefined();
+    await expect(e().get('/x')).rejects.toBeInstanceOf(ErpNetworkError);
+    await expect(e().call('m')).rejects.toBeInstanceOf(ErpNetworkError);
+    await expect(client({ status: 200, body: {} }).c.call('m')).rejects.toThrow('Unexpected response from server');
+  });
+  it('non-JSON 2xx -> ErpNetworkError', async () => {
+    await expect(client({ status: 200, raw: '<html>' }).c.get('/x')).rejects.toBeInstanceOf(ErpNetworkError);
   });
 });

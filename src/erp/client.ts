@@ -47,6 +47,11 @@ export function normalizeSiteUrl(input: string, opts: { allowHttp: boolean }): s
   return `${u.protocol}//${u.host}`;
 }
 
+/** Encode one URL path segment (document names, user ids). ErpClient never re-encodes paths. */
+export const encodeSegment = (s: string): string => encodeURIComponent(s);
+
+export const unexpectedResponse = () => new ErpNetworkError('Unexpected response from server');
+
 const stripTags = (s: string) =>
   s.replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
 
@@ -163,14 +168,15 @@ export class ErpClient {
   private readonly authHeader: string;
   private readonly fetchImpl: typeof fetch;
 
-  constructor(opts: { siteUrl: string; apiKey: string; apiSecret: string; fetchImpl?: typeof fetch }) {
-    this.siteUrl = opts.siteUrl.replace(/\/+$/, '');
+  constructor(opts: { siteUrl: string; apiKey: string; apiSecret: string; fetchImpl?: typeof fetch; allowHttp?: boolean }) {
+    this.siteUrl = normalizeSiteUrl(opts.siteUrl, { allowHttp: opts.allowHttp ?? false });
     this.authHeader = `token ${opts.apiKey}:${opts.apiSecret}`;
     this.fetchImpl = opts.fetchImpl ?? ((...a) => fetch(...a));
   }
 
   private async send<T>(method: string, path: string, params?: Record<string, unknown>, body?: unknown): Promise<T> {
-    let url = this.siteUrl + encodeURI(path);
+    // Paths are caller-built and already encoded (use encodeSegment for names); never re-encoded here.
+    let url = this.siteUrl + path;
     if (params) {
       const q = Object.entries(params)
         .filter(([, v]) => v !== undefined)
@@ -179,7 +185,8 @@ export class ErpClient {
       if (q) url += `?${q}`;
     }
     const headers: Record<string, string> = { Authorization: this.authHeader, Accept: 'application/json' };
-    const init: RequestInit = { method, headers };
+    // 'omit': token auth only, a stale sid cookie must never be attached.
+    const init: RequestInit = { method, headers, credentials: 'omit' };
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(body);
@@ -188,23 +195,27 @@ export class ErpClient {
     return parseJson<T>(text);
   }
 
-  /** Returns the parsed JSON body as-is (e.g. `{data: [...]}` for /api/resource lists). */
-  get<T>(path: string, params?: Record<string, unknown>): Promise<T> {
-    return this.send<T>('GET', path, params);
+  /** Returns the parsed JSON object body as-is (e.g. `{data: [...]}`). An empty/non-object 2xx body throws ErpNetworkError. */
+  async get<T>(path: string, params?: Record<string, unknown>): Promise<T> {
+    const r = await this.send<unknown>('GET', path, params);
+    if (!r || typeof r !== 'object') throw unexpectedResponse();
+    return r as T;
   }
 
-  /** Returns the parsed JSON body as-is (create returns `{data: doc}`). */
+  /** Returns the parsed JSON body (create returns `{data: doc}`); an empty 2xx body is tolerated and yields undefined. */
   post<T>(path: string, body: unknown): Promise<T> {
     return this.send<T>('POST', path, undefined, body);
   }
 
+  /** Empty 2xx bodies are fine. */
   async delete(path: string): Promise<void> {
     await this.send<unknown>('DELETE', path);
   }
 
-  /** POST /api/method/<method>; returns the unwrapped `message` field. */
+  /** POST /api/method/<method>; returns the unwrapped `message` field; a missing `message` throws ErpNetworkError. */
   async call<T>(method: string, args?: Record<string, unknown>): Promise<T> {
-    const r = await this.send<{ message: T }>('POST', `/api/method/${method}`, undefined, args ?? {});
-    return r?.message as T;
+    const r = await this.send<{ message?: T }>('POST', `/api/method/${method}`, undefined, args ?? {});
+    if (!r || typeof r !== 'object' || r.message === undefined || r.message === null) throw unexpectedResponse();
+    return r.message;
   }
 }
