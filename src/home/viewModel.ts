@@ -1,6 +1,8 @@
 // Home view-model: pure, built from fetched figures + local data. The screen only renders it.
 import { buildTrust, type Trust } from '../core/trust';
 import type { AccountMapping, PendingTxn } from '../core/types';
+import { resolveMapping } from '../ingest/pipeline';
+import type { CycleSummary } from '../ingest/pipeline';
 import { formatInr } from '../ui/format';
 
 export const DASH = '—';
@@ -29,9 +31,20 @@ export type HomeModel = {
     /** Only with more than one bank account. */
     total: { minor: number | null; text: string } | null;
   };
-  receivableText: string;
-  payableText: string;
-  drafts: { count: number; totalMinor: number; totalText: string; otherCurrencyCount: number; footnote: string | null };
+  /** Net of advances. A negative net is shown as an absolute amount under a different label. */
+  receivable: { label: string; text: string };
+  payable: { label: string; text: string };
+  drafts: {
+    count: number;
+    inCount: number;
+    inMinor: number;
+    outCount: number;
+    outMinor: number;
+    /** "₹2,00,000.00 in · ₹30,466.00 out"; a side with no items is left out. Empty when there are no rupee drafts. */
+    summaryText: string;
+    otherCurrencyCount: number;
+    footnote: string | null;
+  };
   unclassifiedCount: number;
   smsBalanceMinor: number | null;
   trust: Trust;
@@ -42,8 +55,23 @@ export type HomeModel = {
 };
 
 const inrText = (m: number | null) => (m === null || !Number.isFinite(m) ? DASH : formatInr(m));
-/** Whole rupees for the tiles. */
-const wholeText = (m: number | null) => (m === null || !Number.isFinite(m) ? DASH : formatInr(Math.round(m / 100) * 100).replace(/\.\d\d$/, ''));
+/** Whole rupees for the tiles, rounding half away from zero; a real but tiny amount is never shown as zero. */
+export function wholeText(m: number | null): string {
+  if (m === null || !Number.isFinite(m)) return DASH;
+  const abs = Math.abs(m);
+  if (abs > 0 && abs < 50) return 'under ₹1';
+  return formatInr(Math.sign(m) * Math.round(abs / 100) * 100).replace(/\.\d\d$/, '');
+}
+
+function tile(m: number | null, positive: string, negative: string): { label: string; text: string } {
+  if (m !== null && Number.isFinite(m) && m < 0) return { label: negative, text: wholeText(-m) };
+  return { label: positive, text: wholeText(m) };
+}
+
+/** A cycle counts as "synced" only if every step worked and the outbox drain finished (not stuck on retry/login). */
+export function cycleCountsAsSynced(s: (CycleSummary & { skipped?: unknown }) | null): boolean {
+  return !!s && !s.skipped && s.failedSteps.length === 0 && (s.drain?.stoppedBecause === 'empty' || s.drain?.stoppedBecause === 'limit');
+}
 
 export function relativeTime(now: number, then: number): string {
   const s = Math.max(0, Math.floor((now - then) / 1000));
@@ -67,8 +95,15 @@ export function buildHomeModel(i: HomeInputs): HomeModel {
   const created = i.pending.filter((t) => t.state === 'created');
   const inr = created.filter((t) => t.currency === 'INR');
   const otherCurrencyCount = created.length - inr.length;
-  const draftsTotal = inr.reduce((s, t) => s + t.amountMinor, 0);
-  const unclassifiedCount = i.pending.filter((t) => t.state === 'new').length;
+  // amountMinor is unsigned: money in and money out are never added together.
+  const ins = inr.filter((t) => t.direction === 'in');
+  const outs = inr.filter((t) => t.direction === 'out');
+  const sum = (a: PendingTxn[]) => a.reduce((n, t) => n + t.amountMinor, 0);
+  const inMinor = sum(ins);
+  const outMinor = sum(outs);
+  const summaryText = [ins.length ? `${formatInr(inMinor)} in` : null, outs.length ? `${formatInr(outMinor)} out` : null].filter(Boolean).join(' · ');
+  // 'failed' items also wait for the user, so they count as unanswered.
+  const unclassifiedCount = i.pending.filter((t) => t.state === 'new' || t.state === 'failed').length;
 
   // Newest bank message with a balance, per mapped bank account. A cached (stale) ERP balance is never
   // compared with a fresh message: that would raise a false alarm.
@@ -77,9 +112,10 @@ export function buildHomeModel(i: HomeInputs): HomeModel {
     for (const [idx, m] of banks.entries()) {
       const computed = accounts[idx].minor;
       if (computed === null) continue;
-      const newest = i.pending
-        .filter((t) => t.accountType === 'bank' && t.currency === 'INR' && t.balanceMinor !== null && t.accountLast4 !== null && m.last4.includes(t.accountLast4))
-        .sort((a, b) => b.receivedAt - a.receivedAt)[0];
+      const mine = i.pending.filter((t) => t.accountType === 'bank' && resolveMapping(i.mappings, t) === m);
+      // Items not yet in the ledger make a difference expected: do not compare this account.
+      if (mine.some((t) => t.state === 'new' || t.state === 'created')) continue;
+      const newest = mine.filter((t) => t.currency === 'INR' && t.balanceMinor !== null).sort((x, y) => y.receivedAt - x.receivedAt)[0];
       if (!newest || newest.balanceMinor === null) continue;
       const cand = { computed, sms: newest.balanceMinor };
       if (cand.computed !== cand.sms) {
@@ -94,7 +130,7 @@ export function buildHomeModel(i: HomeInputs): HomeModel {
     lastSyncedAt: i.lastSyncedAt,
     now: i.now,
     unclassifiedCount,
-    pendingDrafts: { count: created.length, totalMinor: draftsTotal },
+    pendingDrafts: { count: created.length, totalMinor: inMinor + outMinor },
     computedBankBalanceMinor: pair?.computed ?? null,
     smsBalanceMinor: pair?.sms ?? null,
   });
@@ -102,12 +138,15 @@ export function buildHomeModel(i: HomeInputs): HomeModel {
   return {
     hasFigures: i.figures !== null,
     bank: { accounts, total },
-    receivableText: wholeText(i.figures?.receivableMinor ?? null),
-    payableText: wholeText(i.figures?.payableMinor ?? null),
+    receivable: tile(i.figures?.receivableMinor ?? null, 'To receive', 'Advances received'),
+    payable: tile(i.figures?.payableMinor ?? null, 'To pay', 'Advances paid'),
     drafts: {
       count: created.length,
-      totalMinor: draftsTotal,
-      totalText: formatInr(draftsTotal),
+      inCount: ins.length,
+      inMinor,
+      outCount: outs.length,
+      outMinor,
+      summaryText,
       otherCurrencyCount,
       footnote: otherCurrencyCount > 0 ? `plus ${otherCurrencyCount} in other currencies` : null,
     },
