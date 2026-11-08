@@ -269,7 +269,7 @@ export function planAction(txn: PendingTxn, choice: ActionChoice, ctx: PlanConte
 **Interfaces:**
 - Produces: `suggest(txn: PendingTxn, rules: Rule[], openInvoices: OpenInvoice[], parties: PartyRef[]): Suggestion[]` ordered best first, `Suggestion = {choice: Partial<ActionChoice>; reason: 'rule'|'utr'|'exact_invoice_amount'|'name_match'; confidence: number}`; `learnRule(txn: PendingTxn, choice: ActionChoice, existing: Rule[]): Rule[]` (key = normalised counterparty, else normalised merchant).
 
-- [ ] **Step 1: Failing tests:** a saved rule for merchant `FACEBOOK` yields an `expense` suggestion with its account; a debit whose amount equals exactly one open Purchase Invoice's outstanding yields `exact_invoice_amount`; counterparty "SSK TEXTILE EXPORTS" fuzzy-matches customer "SSK Textile Exports Pvt Ltd" as `name_match`; nothing is ever returned with an auto-post flag (phase 1, §7.8); `learnRule` increments `hits` on repeat. **Steps 2–5** as usual; commit `feat: suggestions and rules`.
+- [ ] **Step 1: Failing tests:** a saved rule for merchant `FACEBOOK` yields an `expense` suggestion with its account; a debit whose amount equals exactly one open Purchase Invoice's outstanding yields `exact_invoice_amount`; counterparty "ACME TEST TRADERS" fuzzy-matches customer "Acme Test Traders Pvt Ltd" as `name_match`; nothing is ever returned with an auto-post flag (phase 1, §7.8); `learnRule` increments `hits` on repeat. **Steps 2–5** as usual; commit `feat: suggestions and rules`.
 
 ### Task 15: Ingestion pipeline and template updates
 
