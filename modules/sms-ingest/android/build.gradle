@@ -13,3 +13,18 @@ android {
     versionName "0.1.0"
   }
 }
+
+dependencies {
+  // JVM unit tests have no org.json (android.jar stubs throw "not mocked"); on device the
+  // framework's org.json is used, so this is test-only.
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation 'org.json:json:20240303'
+}
+
+// templates/idfc.json is the single source shared with the TypeScript parser. Copy it into the
+// module's assets before every build; the copy is git-ignored so it cannot drift.
+tasks.register('copyTemplates', Copy) {
+  from file('../../../templates/idfc.json')
+  into file('src/main/assets/templates')
+}
+tasks.matching { it.name == 'preBuild' }.configureEach { dependsOn 'copyTemplates' }
