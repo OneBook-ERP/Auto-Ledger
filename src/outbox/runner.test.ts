@@ -249,7 +249,7 @@ describe('runPlan: success (f)', () => {
 describe('runPlan: idempotent retry (a)', () => {
   it('a findDraftsByUtr hit is used and nothing is created', async () => {
     const { repo, erp, outbox, deps } = await setup();
-    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-OLD', docstatus: 0, body: { reference_no: 'UTR123' } });
+    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-OLD', docstatus: 0, body: { ...advance(txn()).steps[0].body } });
     const r = await runPlan('t1', advance(txn()), deps);
     expect(r).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'PE-OLD' }] });
     expect(erp.count('createDraft')).toBe(0);
@@ -259,7 +259,7 @@ describe('runPlan: idempotent retry (a)', () => {
 
   it('a hit already submitted by the accountant (docstatus 1) is reported with docstatus 1', async () => {
     const { repo, erp, deps } = await setup();
-    erp.docs.push({ doctype: 'Journal Entry', name: 'JV-1', docstatus: 1, body: { cheque_no: 'UTR123' } });
+    erp.docs.push({ doctype: 'Journal Entry', name: 'JV-1', docstatus: 1, body: { ...income(txn()).steps[0].body } });
     const r = await runPlan('t1', income(txn()), deps);
     expect(r).toEqual({ status: 'created', docs: [{ doctype: 'Journal Entry', name: 'JV-1' }] });
     expect(erp.count('createDraft')).toBe(0);
@@ -510,7 +510,7 @@ describe('runPlan: compensation (c)', () => {
 
   it('does not delete a document found by reference (not created by this run)', async () => {
     const { erp, deps } = await setup();
-    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-OLD', docstatus: 0, body: { reference_no: 'UTR123' } });
+    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-OLD', docstatus: 0, body: { ...advance(txn()).steps[0].body } });
     erp.failNext('createDraft', new ErpValidationError('nope', 417));
     await runPlan('t1', twoDocs(txn()), deps);
     expect(erp.count('deleteDraft')).toBe(0);
@@ -996,8 +996,8 @@ describe('runPlan: a definitive rejection clears the attempt marker (R43.1)', ()
     s.erp.failNext('createDraft', new ErpValidationError('Value missing for Payment Entry: Cost Center', 417, ['Cost Center']));
     expect(await runPlan('t1', a, s.deps)).toMatchObject({ status: 'failed', retryable: false });
     expect((await s.repo.getOutbox(outboxIdFor('t1', a)))!.progress.attempting).toBeUndefined();
-    // "complete this entry in ERPNext": the accountant enters it by hand with the same reference.
-    s.erp.docs.push({ doctype: 'Payment Entry', name: 'PE-MANUAL', docstatus, body: { reference_no: 'UTR123' } });
+    // "complete this entry in ERPNext": the accountant enters it by hand (for Beta Ltd) with the same reference.
+    s.erp.docs.push({ doctype: 'Payment Entry', name: 'PE-MANUAL', docstatus, body: { ...advanceBeta(txn()).steps[0].body } });
     return s;
   }
 
@@ -1139,7 +1139,7 @@ describe('Undo provenance with runPlan (R49 C1)', () => {
 
   it('B: a draft the accountant entered by hand and the app adopted is not deleted by Undo', async () => {
     const { repo, erp, deps } = await setup();
-    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body: { reference_no: 'UTR123' } });
+    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body: { ...advance(txn()).steps[0].body } });
     await runPlan('t1', advance(txn()), deps);
     expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, adopted: true }]);
     expect(await undoTxn('t1', deps)).toMatchObject({ status: 'undone', kept: [{ name: 'PE-HAND' }] });
@@ -1286,7 +1286,7 @@ describe('a real UTR shared by several txns (KL1/KL2, R51)', () => {
 
   it('replacing a decision after an adoption keeps the adopted (hand-made) document', async () => {
     const { repo, erp, deps } = await setup();
-    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body: { reference_no: 'UTR123' } });
+    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body: { ...advance(txn()).steps[0].body } });
     // Two documents: step 0 adopts PE-HAND, step 1's create fails on the network (nothing reached the server).
     const plan: ActionPlan = { steps: [advance(txn()).steps[0], income(txn({ utr: 'UTR999' })).steps[0]], summary: [], needsInrAmount: false };
     erp.failNext('createDraft', new ErpNetworkError('timeout'));
@@ -1303,7 +1303,7 @@ describe('a real UTR shared by several txns (KL1/KL2, R51)', () => {
 
   it('a retry after an adoption keeps the adopted flag, so Undo still never deletes the hand-made document', async () => {
     const { repo, erp, deps } = await setup();
-    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body: { reference_no: 'UTR123' } });
+    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body: { ...advance(txn()).steps[0].body } });
     const plan: ActionPlan = { steps: [advance(txn()).steps[0], income(txn({ utr: 'UTR999' })).steps[0]], summary: [], needsInrAmount: false };
     erp.failNext('createDraft', new ErpNetworkError('timeout'));
     await runPlan('t1', plan, deps);
@@ -1318,7 +1318,7 @@ describe('a real UTR shared by several txns (KL1/KL2, R51)', () => {
 
   it('the adopted flag on the outbox progress alone protects the document (txn record lost)', async () => {
     const { repo, erp, deps } = await setup();
-    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body: { reference_no: 'UTR123' } });
+    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body: { ...advance(txn()).steps[0].body } });
     const plan: ActionPlan = { steps: [advance(txn()).steps[0], income(txn({ utr: 'UTR999' })).steps[0]], summary: [], needsInrAmount: false };
     erp.failNext('createDraft', new ErpNetworkError('timeout'));
     await runPlan('t1', plan, deps);
@@ -1345,7 +1345,7 @@ describe('a real UTR shared by several txns (KL1/KL2, R51)', () => {
 
   it('a submitted adopted document does not block a replaced decision (it is only detached)', async () => {
     const { repo, erp, deps } = await setup();
-    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body: { reference_no: 'UTR123' } });
+    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body: { ...advance(txn()).steps[0].body } });
     const plan: ActionPlan = { steps: [advance(txn()).steps[0], income(txn({ utr: 'UTR999' })).steps[0]], summary: [], needsInrAmount: false };
     erp.failNext('createDraft', new ErpNetworkError('timeout'));
     await runPlan('t1', plan, deps);
@@ -1364,5 +1364,109 @@ describe('a real UTR shared by several txns (KL1/KL2, R51)', () => {
     expect(erp.calls.filter((c) => c.op === 'deleteDraft').map((c) => c.args)).toEqual([['Payment Entry', 'ACC-PAY-0002']]);
     expect(erp.docs.map((d) => d.name)).toEqual(['ACC-PAY-0001']);
     expect(await repo.getPending('t1')).toEqual(t1Before);
+  });
+});
+
+describe('an unlisted reference hit is adopted only when provably ours or the planned document (T20A I1)', () => {
+  const SUP: PartyRef = { doctype: 'Supplier', name: 'Sup' };
+  const t2 = txn({ id: 't2', rawHash: 'h2', kind: 'ca_debit', direction: 'out' }); // the reversal, same UTR
+  const reversal = () => planAction(t2, { type: 'supplier_payment', party: SUP }, ctx());
+
+  /** txn 1 (the receipt) creates ACC-PAY-0001 but the reply is lost: only its write-ahead marker remains. */
+  async function txn1LostReply() {
+    const s = await setup();
+    s.erp.failNext('createDraft', new ErpNetworkError('timeout'), { afterEffect: true });
+    expect(await runPlan('t1', advance(txn()), s.deps)).toMatchObject({ status: 'failed', retryable: true });
+    const item = (await s.repo.getOutbox(outboxIdFor('t1', advance(txn()))))!;
+    expect(item.progress).toEqual({ stepIndex: 0, created: [], attempting: 0 });
+    expect((await s.repo.getPending('t1'))!.createdDocs).toEqual([]);
+    await s.repo.upsertPending(t2);
+    return s;
+  }
+
+  it('txn 1 lost reply, txn 2 reversal answered, txn 1 retries: no duplicate receipt, the reversal books its own', async () => {
+    const { repo, erp, deps } = await txn1LostReply();
+    expect(await runPlan('t2', reversal(), deps)).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0002' }] });
+    expect((await repo.getPending('t2'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0002', docstatus: 0 }]); // never ACC-PAY-0001
+    expect(await rawRunPlan('t1', advance(txn()), deps)).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0001' }] });
+    expect(erp.count('createDraft')).toBe(2);
+    expect(erp.docs.map((d) => [d.name, d.body.payment_type])).toEqual([['ACC-PAY-0001', 'Receive'], ['ACC-PAY-0002', 'Pay']]);
+    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0 }]); // ours
+    expect(await undoTxn('t1', deps)).toEqual({ status: 'undone' });
+    expect(erp.docs.map((d) => d.name)).toEqual(['ACC-PAY-0002']);
+  });
+
+  it('cleanup of a replaced decision never deletes another txn\'s unrecorded draft, but does delete its own', async () => {
+    const { repo, erp, deps } = await txn1LostReply();
+    erp.failNext('createDraft', new ErpNetworkError('timeout'), { afterEffect: true });
+    expect(await runPlan('t2', reversal(), deps)).toMatchObject({ status: 'failed', retryable: true }); // txn 2 lost reply too
+    expect(erp.docs.map((d) => d.name)).toEqual(['ACC-PAY-0001', 'ACC-PAY-0002']);
+    expect(await runPlan('t2', planAction(t2, { type: 'ignore' }, ctx()), deps)).toEqual({ status: 'created', docs: [] });
+    expect(erp.calls.filter((c) => c.op === 'deleteDraft').map((c) => c.args)).toEqual([['Payment Entry', 'ACC-PAY-0002']]);
+    expect(await rawRunPlan('t1', advance(txn()), deps)).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0001' }] });
+    expect(erp.count('createDraft')).toBe(2);
+    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0 }]);
+  });
+
+  it('crash between txn 1\'s progress write and its txn write: txn 2 does not adopt the document, even a matching one', async () => {
+    const { repo, erp, deps } = await setup();
+    const plan = advance(txn());
+    await runPlan('t1', plan, deps);
+    // Model the crash: the step's progress was saved, the final txn write and the done write were not.
+    await repo.upsertPending({ ...(await repo.getPending('t1'))!, state: 'new', createdDocs: [] });
+    await repo.markOutbox(outboxIdFor('t1', plan), { status: 'pending' });
+    const t2same = txn({ id: 't2', rawHash: 'h2' }); // same UTR, same details as txn 1's document
+    await repo.upsertPending(t2same);
+    expect(await runPlan('t2', advance(t2same), deps)).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0002' }] });
+    expect((await repo.getPending('t2'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0002', docstatus: 0 }]);
+    expect(await rawRunPlan('t1', plan, deps)).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0001' }] });
+    expect(erp.count('createDraft')).toBe(2);
+  });
+
+  it('crash variant with a reversal: txn 2 books its own, txn 1 finishes with its recorded document', async () => {
+    const { repo, erp, deps } = await setup();
+    const plan = advance(txn());
+    await runPlan('t1', plan, deps);
+    await repo.upsertPending({ ...(await repo.getPending('t1'))!, state: 'new', createdDocs: [] });
+    await repo.markOutbox(outboxIdFor('t1', plan), { status: 'pending' });
+    await repo.upsertPending(t2);
+    expect(await runPlan('t2', reversal(), deps)).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0002' }] });
+    expect(await rawRunPlan('t1', plan, deps)).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0001' }] });
+    expect(erp.count('createDraft')).toBe(2);
+    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0 }]);
+  });
+
+  it('an accountant\'s hand-made draft with the planned details is still adopted', async () => {
+    const { repo, erp, deps } = await setup();
+    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body: { ...advance(txn()).steps[0].body, remarks: 'by hand' } });
+    expect(await runPlan('t1', advance(txn()), deps)).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'PE-HAND' }] });
+    expect(erp.count('createDraft')).toBe(0);
+    expect(erp.calls.filter((c) => c.op === 'getDraftSummary').map((c) => c.args)).toEqual([['Payment Entry', 'PE-HAND']]);
+    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, adopted: true }]);
+  });
+
+  it.each([
+    ['another amount', { paid_amount: 999, received_amount: 999 }],
+    ['another party', { party: 'Someone Else' }],
+    ['another payment type', { payment_type: 'Pay', party_type: 'Supplier' }],
+    ['no details at all', null],
+  ])('a hand-made draft with %s is skipped: this txn books its own and Undo removes only that', async (_l, over) => {
+    const { repo, erp, deps } = await setup();
+    const body = over ? { ...advance(txn()).steps[0].body, ...over } : { reference_no: 'UTR123' };
+    erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body });
+    expect(await runPlan('t1', advance(txn()), deps)).toEqual({ status: 'created', docs: [{ doctype: 'Payment Entry', name: 'ACC-PAY-0001' }] });
+    expect((await repo.getPending('t1'))!.createdDocs).toEqual([{ doctype: 'Payment Entry', name: 'ACC-PAY-0001', docstatus: 0 }]);
+    expect(await undoTxn('t1', deps)).toEqual({ status: 'undone' });
+    expect(erp.docs.map((d) => d.name)).toEqual(['PE-HAND']);
+  });
+
+  it('a hand-made Journal Entry is compared by its total debit', async () => {
+    const ok = await setup();
+    ok.erp.docs.push({ doctype: 'Journal Entry', name: 'JV-HAND', docstatus: 0, body: { ...income(txn()).steps[0].body } });
+    expect(await runPlan('t1', income(txn()), ok.deps)).toEqual({ status: 'created', docs: [{ doctype: 'Journal Entry', name: 'JV-HAND' }] });
+    const bad = await setup();
+    const rows = (income(txn()).steps[0].body.accounts as Record<string, unknown>[]).map((r) => ({ ...r, ...(r.debit_in_account_currency ? { debit_in_account_currency: 1 } : {}) }));
+    bad.erp.docs.push({ doctype: 'Journal Entry', name: 'JV-HAND', docstatus: 0, body: { ...income(txn()).steps[0].body, accounts: rows } });
+    expect(await runPlan('t1', income(txn()), bad.deps)).toEqual({ status: 'created', docs: [{ doctype: 'Journal Entry', name: 'ACC-JV-0001' }] });
   });
 });

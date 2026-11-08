@@ -189,9 +189,35 @@ function withoutDocs(op: OutboxOp): Progress {
 
 type Orphans = { items: OutboxOp[]; docs: DocRef[] };
 
-/** `${doctype}:${name}` of every document that a txn other than `txnId` has recorded. */
-async function docsOfOtherTxns(repo: Repo, txnId: string): Promise<Set<string>> {
-  return new Set((await repo.listPending()).filter((t) => t.id !== txnId).flatMap((t) => t.createdDocs.map(docKey)));
+/**
+ * What the txns other than `txnId` claim. `docs`: `${doctype}:${name}` of every document such a txn has recorded,
+ * on the txn or in the progress of one of its outbox items that is not superseded (a crash between a step's
+ * progress write and the final txn write leaves the document only there). `attempting`: `${doctype}\u0000${reference}`
+ * of every document step such a txn has STARTED on a still-open item (pending or failed) without recording its
+ * result (write-ahead marker, lost reply): an unlisted draft with that reference may be that txn's.
+ * Outbox items are read only for txns still waiting for a decision ('new'); a finished txn lists its documents.
+ */
+type Claims = { docs: Set<string>; attempting: Set<string> };
+const claimKey = (doctype: string, ref: string) => `${doctype}\u0000${ref}`;
+
+async function claimsOfOtherTxns(repo: Repo, txnId: string): Promise<Claims> {
+  const docs = new Set<string>();
+  const attempting = new Set<string>();
+  for (const t of await repo.listPending()) {
+    if (t.id === txnId) continue;
+    for (const d of t.createdDocs) docs.add(docKey(d));
+    if (t.state !== 'new') continue;
+    for (const o of await repo.listOutbox(t.id)) {
+      if (o.status === 'superseded') continue;
+      for (const c of o.progress.created.slice(0, o.progress.stepIndex)) if (c) docs.add(docKey(c));
+      const att = o.progress.attempting;
+      if (o.status === 'done' || att === undefined || att < o.progress.stepIndex) continue;
+      const s = o.plan.steps[att];
+      const ref = s ? referenceOf(s) : null;
+      if (s && ref) attempting.add(claimKey(s.doctype, ref));
+    }
+  }
+  return { docs, attempting };
 }
 
 /**
@@ -208,12 +234,12 @@ async function findOrphans(repo: Repo, erp: ErpOps, others: OutboxOp[], txn: Pen
   const items: OutboxOp[] = [];
   // A real UTR can be shared with another txn (reversal/refund, both legs of an own-account transfer).
   // A document that another txn has recorded is that txn's, never this txn's orphan.
-  let foreign: Set<string> | null = null;
+  let foreign: Claims | null = null;
   const adopted = new Set(txn.createdDocs.filter((d) => d.adopted).map(docKey));
   const removable = async (d: DocRef) => {
     if (adopted.has(docKey(d))) return false;
-    foreign ??= await docsOfOtherTxns(repo, txn.id);
-    return !foreign.has(docKey(d));
+    foreign ??= await claimsOfOtherTxns(repo, txn.id);
+    return !foreign.docs.has(docKey(d));
   };
   for (const o of others) {
     const steps = o.plan.steps
@@ -232,8 +258,13 @@ async function findOrphans(repo: Repo, erp: ErpOps, others: OutboxOp[], txn: Pen
         hit = hits.find((h) => h.name === rec.name);
       } else {
         // Started but unrecorded (lost reply): the first hit that no other txn lists and this txn did not adopt.
+        // When another txn has also started a document with this reference and not recorded it, an unlisted
+        // hit may be that txn's lost reply: it is deleted only when it is the document this item planned
+        // (samePlanned), otherwise left alone (detached: never deleted).
+        const ref = referenceOf(s) as string;
         for (const h of hits) {
           if (await removable(h)) {
+            if (foreign!.attempting.has(claimKey(h.doctype, ref)) && !(await samePlanned(erp, h, s.doctype, s.body))) continue;
             hit = h;
             break;
           }
@@ -302,6 +333,39 @@ async function sameTransfer(erp: ErpOps, hit: UtrHit, body: Record<string, unkno
     && (s.company === null || typeof body.company !== 'string' || s.company === body.company)
     && s.party === null
   );
+}
+
+/**
+ * True when `hit` (a draft no txn has recorded and that this step has no marker for: entered by hand, or
+ * another txn's lost reply) is the document `body` plans: same doctype, payment type and amount (minor units),
+ * the same party when one is planned, and the same company when both name one. A document that is gone is not.
+ */
+async function samePlanned(erp: ErpOps, hit: UtrHit, doctype: string, body: Record<string, unknown>): Promise<boolean> {
+  if (hit.doctype !== doctype) return false;
+  let s;
+  try {
+    s = await erp.getDraftSummary(hit.doctype, hit.name);
+  } catch (e) {
+    if (e instanceof ErpValidationError && e.status === 404) return false;
+    throw e;
+  }
+  if (typeof body.company === 'string' && s.company !== null && s.company !== body.company) return false;
+  if (doctype === 'Payment Entry') {
+    if (typeof body.paid_amount !== 'number' || !Number.isFinite(body.paid_amount)) return false;
+    if (s.paymentType === null || s.paymentType !== body.payment_type) return false;
+    if (s.paidAmountMinor === null || s.paidAmountMinor !== toMinor(body.paid_amount)) return false;
+    if (typeof body.party === 'string' && (s.party !== body.party || (typeof body.party_type === 'string' && s.partyType !== body.party_type))) return false;
+    if (typeof body.party !== 'string' && s.party !== null) return false;
+    return true;
+  }
+  // Journal Entry: the planned total debit.
+  const rows = Array.isArray(body.accounts) ? (body.accounts as Record<string, unknown>[]) : [];
+  let debit = 0;
+  for (const r of rows) {
+    const v = r && typeof r === 'object' ? r.debit_in_account_currency : undefined;
+    if (typeof v === 'number' && Number.isFinite(v)) debit += toMinor(v);
+  }
+  return debit > 0 && s.totalDebitMinor !== null && s.totalDebitMinor === debit;
 }
 
 // ---------- runner ----------
@@ -454,22 +518,38 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
   };
 
   // KL1: a real UTR can be shared by several txns (a reversal or refund, both legs of an own-account transfer).
-  let foreign: Set<string> | null = null;
+  let foreign: Claims | null = null;
   /**
    * The reference hit step `i` may use, or null to create its own document. The document an earlier attempt of
-   * this step recorded wins. Otherwise the first acceptable hit in server order: one no other txn lists (a lost
-   * reply of this txn, or a draft entered by hand: today's adopt), or one another txn lists ONLY when it is the
-   * same Internal Transfer (the other leg books the very same Payment Entry). Anything else another txn lists
-   * (a reversal, a refund, a different amount or doctype) is that txn's, and this txn books its own.
+   * this step recorded wins. Otherwise the first acceptable hit in server order:
+   *  - one another txn lists (on the txn or in an open item's progress) ONLY when it is the same Internal
+   *    Transfer (the other leg books the very same Payment Entry), `shared`;
+   *  - one no other txn lists, when this step's own write-ahead marker is set (its lost reply) and no other txn
+   *    has an unrecorded attempt with this reference;
+   *  - otherwise (entered by hand, or possibly another txn's lost reply) only when it is the planned document
+   *    (samePlanned), `adopted`. A different doctype nobody lists or contests still blocks (returned as is).
+   * Anything else is skipped, and this txn books its own document.
    */
-  const chooseHit = async (hits: UtrHit[], step: PlanStep, at: number): Promise<{ hit: UtrHit; shared?: true } | null> => {
+  const chooseHit = async (hits: UtrHit[], step: PlanStep, at: number): Promise<{ hit: UtrHit; shared?: true; adopted?: true } | null> => {
     const rec = at < prior.stepIndex ? prior.created[at] : undefined;
     const mine = rec && hits.find((h) => h.doctype === rec.doctype && h.name === rec.name);
     if (mine) return { hit: mine };
+    const ownMarker = prior.attempting !== undefined && prior.attempting >= at;
+    const ref = referenceOf(step) as string;
+    const body = applyRenames(step.body, renames);
     for (const h of hits) {
-      foreign ??= await docsOfOtherTxns(repo, txnId);
-      if (!foreign.has(docKey(h))) return { hit: h };
-      if (h.doctype === step.doctype && (await sameTransfer(erp, h, applyRenames(step.body, renames)))) return { hit: h, shared: true };
+      foreign ??= await claimsOfOtherTxns(repo, txnId);
+      if (foreign.docs.has(docKey(h))) {
+        if (h.doctype === step.doctype && (await sameTransfer(erp, h, body))) return { hit: h, shared: true };
+        continue;
+      }
+      const contested = foreign.attempting.has(claimKey(h.doctype, ref));
+      if (h.doctype !== step.doctype) {
+        if (!contested) return { hit: h }; // blocks: someone's entry of another doctype
+        continue;
+      }
+      if (ownMarker && !contested) return { hit: h };
+      if (await samePlanned(erp, h, step.doctype, body)) return { hit: h, adopted: true };
     }
     return null;
   };
@@ -513,7 +593,7 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
           // (the other leg of the same transfer, or entered by hand) and Undo must never delete it.
           // A step recorded earlier keeps what it recorded (an adoption stays an adoption on a retry).
           const rec = i < prior.stepIndex ? prior.created[i] : undefined;
-          const ours = !choice.shared
+          const ours = !choice.shared && !choice.adopted
             && (rec && rec.doctype === hit.doctype && rec.name === hit.name ? !rec.adopted : prior.attempting !== undefined && prior.attempting >= i);
           doc = { doctype: hit.doctype, name: hit.name, docstatus: hit.docstatus, ...(ours ? {} : { adopted: true }) };
         } else {
