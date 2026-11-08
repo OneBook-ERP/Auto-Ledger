@@ -75,3 +75,8 @@ export type TemplateSet = {
     }[];
   }[];
 };
+
+export type Correlation =
+ | { action: 'insert' }
+ | { action: 'drop_duplicate'; of: string }
+ | { action: 'enrich'; target: string; patch: Partial<ParsedTxn> };
