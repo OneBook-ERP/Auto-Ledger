@@ -12,7 +12,8 @@ export interface ParsedTxn {
 export type IgnoreReason = 'otp'|'si_notice'|'not_money'|'unknown_template';
 export type ParseResult = { ok: true; txn: ParsedTxn } | { ok: false; reason: IgnoreReason };
 export interface PendingTxn extends ParsedTxn {
-  id: string; state: 'new'|'created'|'submitted'|'ignored'|'failed';
+  id: string; mergedCount: number; // 1 for a fresh item; see Correlation
+  state: 'new'|'created'|'submitted'|'ignored'|'failed';
   createdDocs: { doctype: string; name: string; docstatus: number }[]; error: string | null;
 }
 
@@ -76,7 +77,11 @@ export type TemplateSet = {
   }[];
 };
 
+// The pipeline (Task 15) must increment the target's `mergedCount` on every
+// `enrich` and on every `drop_duplicate` whose reason is 'paired' or
+// 'empty_patch' ('same_sms' does not count). `correlate` only pairs a
+// complementary SMS with an item whose mergedCount is 1.
 export type Correlation =
  | { action: 'insert' }
- | { action: 'drop_duplicate'; of: string }
+ | { action: 'drop_duplicate'; of: string; reason: 'same_sms'|'paired'|'empty_patch' }
  | { action: 'enrich'; target: string; patch: Partial<ParsedTxn> };
