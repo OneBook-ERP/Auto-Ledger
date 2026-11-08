@@ -15,13 +15,19 @@ function setup(...replies: Reply[]) {
 }
 
 describe('makeErpOps', () => {
-  it('findDraftByUtr delegates (Payment Entry then Journal Entry)', async () => {
+  it('findDraftsByUtr delegates (Payment Entry then Journal Entry)', async () => {
     const { ops, calls } = setup({ body: { data: [] } }, { body: { data: [{ name: 'JV-1', docstatus: 0 }] } });
-    expect(await ops.findDraftByUtr('UTR1')).toEqual({ doctype: 'Journal Entry', name: 'JV-1', docstatus: 0 });
+    expect(await ops.findDraftsByUtr('UTR1')).toEqual([{ doctype: 'Journal Entry', name: 'JV-1', docstatus: 0 }]);
     expect(calls.map((c) => decodeURIComponent(c.url.split('?')[0]))).toEqual([
       'https://x.example/api/resource/Payment Entry',
       'https://x.example/api/resource/Journal Entry',
     ]);
+  });
+
+  it('getDraftSummary delegates (GET one document)', async () => {
+    const { ops, calls } = setup({ body: { data: { name: 'PE-1', docstatus: 0, payment_type: 'Internal Transfer', paid_amount: 10 } } });
+    expect(await ops.getDraftSummary('Payment Entry', 'PE-1')).toMatchObject({ name: 'PE-1', paymentType: 'Internal Transfer', paidAmountMinor: 1000 });
+    expect(calls[0]).toMatchObject({ method: 'GET', url: 'https://x.example/api/resource/Payment%20Entry/PE-1' });
   });
 
   it('createDraft posts a draft (docstatus forced to 0)', async () => {
@@ -59,6 +65,6 @@ describe('makeErpOps', () => {
 
   it('passes ERP error classes through unchanged', async () => {
     const { ops } = setup({ status: 401, body: { exc_type: 'AuthenticationError' } });
-    await expect(ops.findDraftByUtr('U')).rejects.toBeInstanceOf(ErpAuthError);
+    await expect(ops.findDraftsByUtr('U')).rejects.toBeInstanceOf(ErpAuthError);
   });
 });

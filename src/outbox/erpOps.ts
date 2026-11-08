@@ -2,11 +2,18 @@
 // runner can be tested against a fake. makeErpOps binds it to a real client (used by the pipeline).
 import type { PartyRef } from '../core/types';
 import { ErpValidationError, type ErpClient } from '../erp/client';
-import { createDraft, createParty, deleteDraft, findDraftByUtr, getDocStatuses, searchParties } from '../erp/docs';
+import { createDraft, createParty, deleteDraft, findDraftsByUtr, getDocStatuses, getDraftSummary, searchParties, type DraftSummary, type UtrHit } from '../erp/docs';
+
+export type { DraftSummary, UtrHit } from '../erp/docs';
 
 export interface ErpOps {
-  /** Non-cancelled Payment Entry (reference_no) or Journal Entry (cheque_no) carrying `reference`; docstatus 0 or 1. */
-  findDraftByUtr(reference: string): Promise<{ doctype: string; name: string; docstatus: number } | null>;
+  /**
+   * Every non-cancelled Payment Entry (reference_no) and Journal Entry (cheque_no) carrying `reference`
+   * (docstatus 0 or 1), Payment Entries first, each oldest first; [] when none.
+   */
+  findDraftsByUtr(reference: string): Promise<UtrHit[]>;
+  /** One document's compared fields (payment type, accounts, amount, party); throws like any read. */
+  getDraftSummary(doctype: string, name: string): Promise<DraftSummary>;
   /** Creates a DRAFT (docstatus 0) and never submits. */
   createDraft(doctype: string, body: Record<string, unknown>): Promise<{ name: string }>;
   /** Throws NotDraftError when the document is no longer a draft. */
@@ -20,7 +27,8 @@ export interface ErpOps {
 
 export function makeErpOps(client: ErpClient): ErpOps {
   return {
-    findDraftByUtr: (reference) => findDraftByUtr(client, reference),
+    findDraftsByUtr: (reference) => findDraftsByUtr(client, reference),
+    getDraftSummary: (doctype, name) => getDraftSummary(client, doctype, name),
     createDraft: async (doctype, body) => {
       if (doctype !== 'Payment Entry' && doctype !== 'Journal Entry') {
         throw new ErpValidationError(`AutoLedger cannot create a ${doctype}.`, 0);

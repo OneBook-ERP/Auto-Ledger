@@ -10,7 +10,7 @@
 import type { ActionPlan, OutboxOp, PartyRef, PendingTxn, PlanStep } from '../core/types';
 import type { Repo } from '../data/repo';
 import { ErpAuthError, ErpNetworkError, ErpValidationError } from '../erp/client';
-import { NotDraftError } from '../erp/docs';
+import { NotDraftError, toMinor, type UtrHit } from '../erp/docs';
 import type { ErpOps } from './erpOps';
 
 export type { ErpOps } from './erpOps';
@@ -179,11 +179,6 @@ const docKey = (d: DocRef) => `${d.doctype}:${d.name}`;
 const submittedError = (name: string) => new ErpValidationError(`${name} was already submitted in ERPNext; cancel it there first.`, 0);
 const replacedError = () => new ErpValidationError('This action was replaced by a newer decision.', 0);
 
-/** Document steps of `op` whose create may have reached the server (done, or started per the write-ahead marker). */
-function attemptedDocSteps(op: OutboxOp): PlanStep[] {
-  return op.plan.steps.filter((s, j) => s.kind === 'create_doc' && (j < op.progress.stepIndex || j === op.progress.attempting));
-}
-
 /** Progress of a cleaned-up item: party steps are kept (master data is never deleted), document steps forgotten. */
 function withoutDocs(op: OutboxOp): Progress {
   const k = op.plan.steps.findIndex((s) => s.kind === 'create_doc');
@@ -194,10 +189,18 @@ function withoutDocs(op: OutboxOp): Progress {
 
 type Orphans = { items: OutboxOp[]; docs: DocRef[] };
 
+/** `${doctype}:${name}` of every document that a txn other than `txnId` has recorded. */
+async function docsOfOtherTxns(repo: Repo, txnId: string): Promise<Set<string>> {
+  return new Set((await repo.listPending()).filter((t) => t.id !== txnId).flatMap((t) => t.createdDocs.map(docKey)));
+}
+
 /**
  * Read-only. Drafts left on the server by this txn's replaced decisions (other unfinished outbox items whose
  * document create was attempted, and documents recorded on the txn that the current item did not make).
- * Throws the "already submitted" ErpValidationError when one of them is no longer a draft.
+ * Same rule as Undo (splitRemovable, R51): only a document this app created for this txn is deleted. One it
+ * adopted by reference (an accountant's draft, the shared leg of a transfer) or that another txn lists is
+ * detached: dropped from this txn's record and left in ERPNext.
+ * Throws the "already submitted" ErpValidationError when a document to delete is no longer a draft.
  */
 async function findOrphans(repo: Repo, erp: ErpOps, others: OutboxOp[], txn: PendingTxn, keep: Set<string>): Promise<Orphans> {
   const docs: DocRef[] = [];
@@ -206,27 +209,45 @@ async function findOrphans(repo: Repo, erp: ErpOps, others: OutboxOp[], txn: Pen
   // A real UTR can be shared with another txn (reversal/refund, both legs of an own-account transfer).
   // A document that another txn has recorded is that txn's, never this txn's orphan.
   let foreign: Set<string> | null = null;
-  const ownedElsewhere = async (d: DocRef) => {
-    if (!foreign) {
-      foreign = new Set((await repo.listPending()).filter((t) => t.id !== txn.id).flatMap((t) => t.createdDocs.map(docKey)));
-    }
-    return foreign.has(docKey(d));
+  const adopted = new Set(txn.createdDocs.filter((d) => d.adopted).map(docKey));
+  const removable = async (d: DocRef) => {
+    if (adopted.has(docKey(d))) return false;
+    foreign ??= await docsOfOtherTxns(repo, txn.id);
+    return !foreign.has(docKey(d));
   };
   for (const o of others) {
-    const steps = attemptedDocSteps(o);
+    const steps = o.plan.steps
+      .map((s, j) => ({ s, j }))
+      .filter(({ s, j }) => s.kind === 'create_doc' && (j < o.progress.stepIndex || j === o.progress.attempting));
     if (!steps.length) continue;
     items.push(o);
-    for (const s of steps) {
-      const hit = await erp.findDraftByUtr(referenceOf(s) as string);
+    for (const { s, j } of steps) {
       // Only a document of that item's own doctype is its orphan; anything else is not ours to touch.
-      if (!hit || hit.doctype !== s.doctype || seen.has(docKey(hit))) continue;
-      if (await ownedElsewhere(hit)) continue;
-      if (hit.docstatus !== 0) throw submittedError(hit.name);
+      const hits = (await erp.findDraftsByUtr(referenceOf(s) as string)).filter((h) => h.doctype === s.doctype && !seen.has(docKey(h)));
+      const rec = j < o.progress.stepIndex ? o.progress.created[j] : undefined;
+      let hit: (typeof hits)[number] | undefined;
+      if (rec) {
+        // A finished step names its document; if that one is gone, nothing else with the reference is its orphan.
+        if (rec.adopted) adopted.add(docKey(rec));
+        hit = hits.find((h) => h.name === rec.name);
+      } else {
+        // Started but unrecorded (lost reply): the first hit that no other txn lists and this txn did not adopt.
+        for (const h of hits) {
+          if (await removable(h)) {
+            hit = h;
+            break;
+          }
+        }
+      }
+      if (!hit) continue;
       seen.add(docKey(hit));
+      if (!(await removable(hit))) continue; // detached, never deleted
+      if (hit.docstatus !== 0) throw submittedError(hit.name);
       docs.push({ doctype: hit.doctype, name: hit.name });
     }
   }
-  const recorded = txn.createdDocs.filter((d) => !seen.has(docKey(d)));
+  const recorded: CreatedDoc[] = [];
+  for (const d of txn.createdDocs) if (!seen.has(docKey(d)) && (await removable(d))) recorded.push(d); // others: detached
   if (recorded.length) {
     const st = await erp.getDocStatuses(recorded.map(({ doctype, name }) => ({ doctype, name })));
     for (const d of recorded) {
@@ -254,6 +275,33 @@ async function removeOrphans(repo: Repo, erp: ErpOps, o: Orphans): Promise<void>
     }
   }
   for (const it of o.items) await repo.markOutbox(it.id, { progress: withoutDocs(it) });
+}
+
+// ---------- shared real UTR (KL1) ----------
+
+/**
+ * True when `hit` (a Payment Entry another txn recorded) is exactly the Internal Transfer that `body` plans:
+ * both legs of an own-account transfer carry the bank's UTR and the planner books ONE Payment Entry for them
+ * (same paid_from, paid_to, amount and company, no party). A document that is gone is not the same.
+ */
+async function sameTransfer(erp: ErpOps, hit: UtrHit, body: Record<string, unknown>): Promise<boolean> {
+  if (hit.doctype !== 'Payment Entry' || body.payment_type !== 'Internal Transfer') return false;
+  if (typeof body.paid_amount !== 'number' || !Number.isFinite(body.paid_amount)) return false;
+  let s;
+  try {
+    s = await erp.getDraftSummary(hit.doctype, hit.name);
+  } catch (e) {
+    if (e instanceof ErpValidationError && e.status === 404) return false;
+    throw e;
+  }
+  return (
+    s.paymentType === 'Internal Transfer'
+    && s.paidFrom !== null && s.paidFrom === body.paid_from
+    && s.paidTo !== null && s.paidTo === body.paid_to
+    && s.paidAmountMinor !== null && s.paidAmountMinor === toMinor(body.paid_amount)
+    && (s.company === null || typeof body.company !== 'string' || s.company === body.company)
+    && s.party === null
+  );
 }
 
 // ---------- runner ----------
@@ -405,6 +453,27 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
     }
   };
 
+  // KL1: a real UTR can be shared by several txns (a reversal or refund, both legs of an own-account transfer).
+  let foreign: Set<string> | null = null;
+  /**
+   * The reference hit step `i` may use, or null to create its own document. The document an earlier attempt of
+   * this step recorded wins. Otherwise the first acceptable hit in server order: one no other txn lists (a lost
+   * reply of this txn, or a draft entered by hand: today's adopt), or one another txn lists ONLY when it is the
+   * same Internal Transfer (the other leg books the very same Payment Entry). Anything else another txn lists
+   * (a reversal, a refund, a different amount or doctype) is that txn's, and this txn books its own.
+   */
+  const chooseHit = async (hits: UtrHit[], step: PlanStep, at: number): Promise<{ hit: UtrHit; shared?: true } | null> => {
+    const rec = at < prior.stepIndex ? prior.created[at] : undefined;
+    const mine = rec && hits.find((h) => h.doctype === rec.doctype && h.name === rec.name);
+    if (mine) return { hit: mine };
+    for (const h of hits) {
+      foreign ??= await docsOfOtherTxns(repo, txnId);
+      if (!foreign.has(docKey(h))) return { hit: h };
+      if (h.doctype === step.doctype && (await sameTransfer(erp, h, applyRenames(step.body, renames)))) return { hit: h, shared: true };
+    }
+    return null;
+  };
+
   try {
     for (i = 0; i < plan.steps.length; i++) {
       const step = plan.steps[i];
@@ -428,9 +497,11 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
         if (refName && ref.name !== refName) renames.set(`${dt}\u0000${refName}`, ref.name);
         created[i] = { doctype: ref.doctype, name: ref.name };
       } else {
-        const hit = await erp.findDraftByUtr(referenceOf(step) as string);
+        const hits = await erp.findDraftsByUtr(referenceOf(step) as string);
+        const choice = await chooseHit(hits, step, i);
         let doc: CreatedDoc;
-        if (hit) {
+        if (choice) {
+          const { hit } = choice;
           if (hit.doctype !== step.doctype) {
             throw new ErpValidationError(
               `An entry ${hit.name} (${hit.doctype}) already exists for this reference; open it in ERPNext or delete it, then try again.`,
@@ -439,8 +510,11 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
           }
           // Found by reference, not created in this run. It is this app's own draft only when an earlier attempt
           // of this step was started (write-ahead marker) or recorded it; otherwise it was already in ERPNext
-          // (another leg of the same UTR, or entered by hand) and Undo must never delete it.
-          const ours = (prior.attempting !== undefined && prior.attempting >= i) || prior.created[i]?.name === hit.name;
+          // (the other leg of the same transfer, or entered by hand) and Undo must never delete it.
+          // A step recorded earlier keeps what it recorded (an adoption stays an adoption on a retry).
+          const rec = i < prior.stepIndex ? prior.created[i] : undefined;
+          const ours = !choice.shared
+            && (rec && rec.doctype === hit.doctype && rec.name === hit.name ? !rec.adopted : prior.attempting !== undefined && prior.attempting >= i);
           doc = { doctype: hit.doctype, name: hit.name, docstatus: hit.docstatus, ...(ours ? {} : { adopted: true }) };
         } else {
           const body = applyRenames(step.body, renames);
@@ -451,7 +525,7 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
           madeHere.push(doc);
         }
         docs.push(doc);
-        created[i] = { doctype: doc.doctype, name: doc.name };
+        created[i] = { doctype: doc.doctype, name: doc.name, ...(doc.adopted ? { adopted: true } : {}) };
       }
       progress = { stepIndex: i + 1, created: created.slice(0, i + 1), ...markerAfter(i) };
       await writeOp(repo, id, { progress, attempts: op.attempts });
@@ -496,7 +570,7 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
       return { status: 'failed', error: e, retryable: false };
     }
     // Network failures, timeouts and anything unexpected: retry later. Never delete here: if a create
-    // reached the server, the retry's findDraftByUtr finds it. An unknown error's text is not forwarded.
+    // reached the server, the retry's findDraftsByUtr finds it. An unknown error's text is not forwarded.
     const error = e instanceof ErpNetworkError ? e : new ErpNetworkError('Something went wrong while creating the entry. It will be retried.');
     await writeOp(repo, id, { progress: best, attempts: op.attempts + 1 });
     if (docs.length) await writeTxn(repo, txnId, txn, { state: 'new', createdDocs: docs, error: txn.error });

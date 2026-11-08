@@ -523,7 +523,8 @@ describe('ensureBackfill', () => {
 // ---------- foreground cycle ----------
 
 class NoErp implements DrainErp {
-  async findDraftByUtr() { return null; }
+  async findDraftsByUtr(_ref: string): Promise<{ doctype: string; name: string; docstatus: number }[]> { return []; }
+  async getDraftSummary(): Promise<never> { throw new Error('unused'); }
   async createDraft(): Promise<{ name: string }> { throw new Error('unused'); }
   async deleteDraft() { /* unused */ }
   async searchParties() { return []; }
@@ -622,7 +623,7 @@ describe('runForegroundCycle: ERPNext round-trip (R50)', () => {
     const plan = { steps: [{ kind: 'create_doc' as const, doctype: 'Payment Entry', body: { reference_no: 'AL-q' } }], summary: [], needsInrAmount: false };
     await repo.enqueue({ id: outboxIdFor('t-q', plan), txnId: 't-q', plan, progress: { stepIndex: 0, created: [] }, attempts: 0, status: 'pending' });
     const erp = new NoErp();
-    erp.findDraftByUtr = async () => { throw new ErpNetworkError('offline'); };
+    erp.findDraftsByUtr = async () => { throw new ErpNetworkError('offline'); };
     const spy = jest.spyOn(erp, 'checkSession');
     const r = await runForegroundCycle({ ...deps, erp });
     expect(r.drain).toEqual({ ran: 1, stoppedBecause: 'retry_later' });

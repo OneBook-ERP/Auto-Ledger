@@ -5,6 +5,8 @@ import {
   createParty,
   deleteDraft,
   findDraftByUtr,
+  findDraftsByUtr,
+  getDraftSummary,
   getBankBalance,
   getDocStatuses,
   getReceivablesPayables,
@@ -256,12 +258,11 @@ describe('createDraft', () => {
 });
 
 describe('findDraftByUtr', () => {
-  it('queries Payment Entry by reference_no, returns first hit', async () => {
-    const { c, calls } = setup({ body: { data: [{ name: 'ACC-PAY-1', docstatus: 0 }] } });
+  it('queries Payment Entry by reference_no, returns first hit (a thin wrapper of findDraftsByUtr)', async () => {
+    const { c, calls } = setup({ body: { data: [{ name: 'ACC-PAY-1', docstatus: 0 }] } }, { body: { data: [] } });
     expect(await findDraftByUtr(c, 'U/1 #')).toEqual({ doctype: 'Payment Entry', name: 'ACC-PAY-1', docstatus: 0 });
-    expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe(
-      `${BASE}/api/resource/Payment%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['reference_no', '=', 'U/1 #'], ['docstatus', '!=', 2]], order_by: 'creation asc', limit_page_length: 1 })}`,
+      `${BASE}/api/resource/Payment%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['reference_no', '=', 'U/1 #'], ['docstatus', '!=', 2]], order_by: 'creation asc', limit_page_length: 20 })}`,
     );
   });
 
@@ -269,7 +270,7 @@ describe('findDraftByUtr', () => {
     const { c, calls } = setup({ body: { data: [] } }, { body: { data: [{ name: 'ACC-JV-9', docstatus: 1 }] } });
     expect(await findDraftByUtr(c, 'U2')).toEqual({ doctype: 'Journal Entry', name: 'ACC-JV-9', docstatus: 1 });
     expect(calls[1].url).toBe(
-      `${BASE}/api/resource/Journal%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['cheque_no', '=', 'U2'], ['docstatus', '!=', 2]], order_by: 'creation asc', limit_page_length: 1 })}`,
+      `${BASE}/api/resource/Journal%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['cheque_no', '=', 'U2'], ['docstatus', '!=', 2]], order_by: 'creation asc', limit_page_length: 20 })}`,
     );
   });
 
@@ -290,6 +291,55 @@ describe('findDraftByUtr', () => {
   it('null when neither has it', async () => {
     const { c } = setup({ body: { data: [] } });
     expect(await findDraftByUtr(c, 'U3')).toBeNull();
+  });
+});
+
+describe('findDraftsByUtr (KL1)', () => {
+  it('returns every hit, Payment Entries first then Journal Entries, in server (creation asc) order', async () => {
+    const { c, calls } = setup(
+      { body: { data: [{ name: 'PE-1', docstatus: 0 }, { name: 'PE-2', docstatus: 1 }] } },
+      { body: { data: [{ name: 'JV-1', docstatus: 0 }] } },
+    );
+    expect(await findDraftsByUtr(c, 'U1')).toEqual([
+      { doctype: 'Payment Entry', name: 'PE-1', docstatus: 0 },
+      { doctype: 'Payment Entry', name: 'PE-2', docstatus: 1 },
+      { doctype: 'Journal Entry', name: 'JV-1', docstatus: 0 },
+    ]);
+    expect(calls.map((x) => x.url)).toEqual([
+      `${BASE}/api/resource/Payment%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['reference_no', '=', 'U1'], ['docstatus', '!=', 2]], order_by: 'creation asc', limit_page_length: 20 })}`,
+      `${BASE}/api/resource/Journal%20Entry?${q({ fields: ['name', 'docstatus'], filters: [['cheque_no', '=', 'U1'], ['docstatus', '!=', 2]], order_by: 'creation asc', limit_page_length: 20 })}`,
+    ]);
+  });
+
+  it('[] when neither has it', async () => {
+    const { c } = setup({ body: { data: [] } });
+    expect(await findDraftsByUtr(c, 'U3')).toEqual([]);
+  });
+
+  it('a malformed reply is an error, not "no hits"', async () => {
+    const { c } = setup({ body: { nope: 1 } });
+    await expect(findDraftsByUtr(c, 'U3')).rejects.toThrow();
+  });
+});
+
+describe('getDraftSummary', () => {
+  it('reads one Payment Entry and maps the compared fields (amounts in minor units)', async () => {
+    const { c, calls } = setup({ body: { data: { name: 'ACC PAY/1', docstatus: 0, company: 'Atom', payment_type: 'Internal Transfer', paid_from: 'A - AL', paid_to: 'B - AL', paid_amount: 12345.5, party_type: '', party: null } } });
+    expect(await getDraftSummary(c, 'Payment Entry', 'ACC PAY/1')).toEqual({
+      doctype: 'Payment Entry', name: 'ACC PAY/1', docstatus: 0, company: 'Atom', paymentType: 'Internal Transfer', paidFrom: 'A - AL', paidTo: 'B - AL',
+      paidAmountMinor: 1234550, partyType: null, party: null, totalDebitMinor: null,
+    });
+    expect(calls[0].url).toBe(`${BASE}/api/resource/Payment%20Entry/ACC%20PAY%2F1`);
+  });
+
+  it('a Journal Entry gives its total debit; string amounts parse', async () => {
+    const { c } = setup({ body: { data: { name: 'JV-1', docstatus: 1, total_debit: '500.00' } } });
+    expect(await getDraftSummary(c, 'Journal Entry', 'JV-1')).toMatchObject({ docstatus: 1, totalDebitMinor: 50000, paymentType: null });
+  });
+
+  it('a reply without docstatus is unexpected', async () => {
+    const { c } = setup({ body: { data: { name: 'X' } } });
+    await expect(getDraftSummary(c, 'Payment Entry', 'X')).rejects.toThrow();
   });
 });
 

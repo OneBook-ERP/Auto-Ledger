@@ -18,8 +18,10 @@
 // - The runner's txn writes (re-read then upsert) are not atomic with mergeInto; an enrichment landing
 //   between the two can be overwritten by the runner's write of the pre-enrichment fields. Rare (foreground
 //   only), and the next SMS for that txn is not affected.
-// - Real UTRs can be shared across txns (KL1/KL2); correlation and the runner's reference lookup can then
-//   pick the wrong partner/document. Tracked for Task 20.
+// - Real UTRs can be shared across txns (reversals, refunds, both legs of an own-account transfer). The
+//   runner handles it (KL1/KL2, Task 20A): it adopts another txn's document only when it is the same Internal
+//   Transfer, and cleanup never deletes a document another txn lists. Correlation can still pick the wrong
+//   partner SMS for a shared UTR.
 // - The `merged_sms:<hash>` markers in settings grow by one row per merged SMS and are never pruned.
 // - unrecognised_count can over-count if the process dies between its write and the ack (display only).
 // - Two genuinely identical SMS (same sender and same normalised text) collapse into one txn by design
