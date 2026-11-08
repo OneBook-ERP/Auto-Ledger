@@ -59,7 +59,7 @@ export default function PartyStep() {
       const errs = validateNewParty(newName, extra, required.data ?? []);
       setErrors(errs);
       if (Object.keys(errs).length) return;
-      const np = buildNewParty(doctype, newName, extra);
+      const np = buildNewParty(doctype, newName, extra, required.data ?? []);
       proceed({ party: np.ref, newParty: np, invoices: undefined });
       return;
     }

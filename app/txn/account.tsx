@@ -21,6 +21,12 @@ export default function AccountStep() {
   const [picked, setPicked] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
 
+  const transferIn = action === 'transfer' && txn?.direction === 'in';
+  const banks = useQuery({
+    queryKey: ['bank-accounts', siteUrl, f.settings.company],
+    queryFn: () => erp!.listBankAccounts(f.settings.company),
+    enabled: !!erp && transferIn && !!f.settings.company,
+  });
   const q = useQuery({
     queryKey: ['ledger-accounts', siteUrl, f.settings.company, rootType],
     queryFn: () => erp!.listLedgerAccounts(f.settings.company, { rootType }),
@@ -36,6 +42,37 @@ export default function AccountStep() {
     f.patch(patch);
     router.push(stepHref(nextStep(txn, { ...f.draft, ...patch }), txn.id));
   };
+
+  if (action === 'transfer' && txn.direction === 'in') {
+    // Any of the company's ERPNext Bank Accounts can be the source, read by AutoLedger or not (R52b).
+    const sources = (banks.data ?? []).filter((b) => b.isCompanyAccount && b.name !== mapping?.bankAccount && b.glAccount !== mapping?.glAccount);
+    const chosen = picked ?? f.draft.fromAccount?.bankAccount ?? null;
+    const readBy = (name: string) => f.mappings.find((m) => m.bankAccount === name);
+    return (
+      <Screen
+        top={<BackLink label="Back" onPress={() => router.back()} />}
+        title="Which account did the money come from?"
+        subtitle="Your bank accounts in ERPNext. The transfer is booked from that account into this one."
+        footer={<Button label="Continue" disabled={!banks.data} onPress={() => {
+          const b = sources.find((x) => x.name === chosen);
+          if (!b) return setMissing(true);
+          const m = readBy(b.name);
+          go({ fromAccount: m ? { bankAccount: b.name, glAccount: b.glAccount, modeOfPayment: m.modeOfPayment } : { bankAccount: b.name, glAccount: b.glAccount } });
+        }} />}>
+        {!f.settings.company ? <Banner tone="error" message="Choose your company in Settings first (Run setup again)." /> : null}
+        {missing ? <Banner tone="error" message="Choose the account the money came from." /> : null}
+        {banks.isLoading ? <Banner message="Loading your bank accounts..." /> : null}
+        {banks.isError ? <Banner tone="error" message="Could not load your bank accounts. Check your connection." actionLabel="Try again" onAction={() => banks.refetch()} /> : null}
+        {banks.data && sources.length === 0 ? (
+          <Banner tone="warn" title="No other bank account" message="ERPNext has no other bank account for this company. Add it as a Bank Account in ERPNext first." />
+        ) : null}
+        {sources.map((b) => (
+          <ChoiceRow key={b.name} title={shortAccount(b.name)} subtitle={readBy(b.name) ? `${b.glAccount}. AutoLedger reads its messages.` : b.glAccount}
+            selected={chosen === b.name} onPress={() => { setPicked(b.name); setMissing(false); }} />
+        ))}
+      </Screen>
+    );
+  }
 
   if (action === 'transfer') {
     const others = f.mappings.filter((m) => m.glAccount !== mapping?.glAccount);

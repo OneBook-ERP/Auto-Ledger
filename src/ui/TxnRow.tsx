@@ -28,7 +28,7 @@ export function TxnRow({ title, subtitle, amountText, amountA11y, direction, chi
         <Text className={`text-base font-bold ${incoming ? 'text-ok dark:text-ok-dark' : 'text-ink dark:text-ink-dark'}`}>{incoming ? '↙' : '↗'}</Text>
       </View>
       <View className="mr-3 flex-1 gap-1.5">
-        <Text numberOfLines={1} className="text-[15px] font-semibold text-ink dark:text-ink-dark">{title}</Text>
+        <Text className="text-[15px] font-semibold text-ink dark:text-ink-dark">{title}</Text>
         <Text className="text-[13px] leading-[18px] text-muted dark:text-muted-dark">{subtitle}</Text>
         <Pill text={chip.text} tone={chip.tone} />
       </View>

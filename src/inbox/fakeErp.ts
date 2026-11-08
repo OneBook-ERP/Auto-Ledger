@@ -16,6 +16,7 @@ export function fakeInboxErp() {
     getRequiredFields: jest.fn<ReturnType<InboxErp['getRequiredFields']>, Parameters<InboxErp['getRequiredFields']>>(async () => []),
     listOpenInvoices: jest.fn<ReturnType<InboxErp['listOpenInvoices']>, Parameters<InboxErp['listOpenInvoices']>>(async () => []),
     listLedgerAccounts: jest.fn<ReturnType<InboxErp['listLedgerAccounts']>, Parameters<InboxErp['listLedgerAccounts']>>(async () => []),
+    listBankAccounts: jest.fn<ReturnType<InboxErp['listBankAccounts']>, Parameters<InboxErp['listBankAccounts']>>(async () => []),
   } satisfies InboxErp;
 }
 export type FakeInboxErp = ReturnType<typeof fakeInboxErp>;

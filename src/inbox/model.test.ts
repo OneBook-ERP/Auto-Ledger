@@ -32,6 +32,16 @@ describe('buildInboxModel', () => {
     expect(rc.amountText).toBe('−USD 100.00');
     expect(m.sections.map((s) => [s.title, s.rows.length])).toEqual([['Today', 1], ['Earlier', 2]]);
   });
+  it('groups every row of a day together, newest first inside the group, whatever the received order', () => {
+    const todayOld = txnFrom('idfc-006', { id: 'a', occurredOn: '2026-11-08', receivedAt: 1 });
+    const earlierNew = txnFrom('idfc-010', { id: 'b', occurredOn: '2026-11-01', receivedAt: 3 });
+    const todayNew = txnFrom('idfc-011', { id: 'c', occurredOn: '2026-11-08', receivedAt: 2 });
+    const yest = txnFrom('idfc-012', { id: 'd', occurredOn: '2026-11-07', receivedAt: 4 });
+    const m = buildInboxModel(base({ pending: [todayOld, earlierNew, todayNew, yest] }));
+    expect(m.sections.map((s) => [s.title, s.rows.map((r) => r.id)])).toEqual([['Today', ['c', 'a']], ['Yesterday', ['d']], ['Earlier', ['b']]]);
+    expect(m.rows.map((r) => r.id)).toEqual(['c', 'a', 'd', 'b']);
+    expect(new Set(m.sections.map((s) => s.title)).size).toBe(m.sections.length);
+  });
   it('one draft: singular', () => {
     expect(buildInboxModel(base({ createdCount: 1, lastSyncedAt: NOW })).trustLine).toBe('Synced just now · 1 draft waiting for your accountant');
   });

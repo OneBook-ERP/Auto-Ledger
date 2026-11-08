@@ -1,12 +1,12 @@
 import { actionsFor, nextStep, partyDoctypeFor, rememberDefault, rememberShown } from './actions';
-import { txnFrom } from './testData';
+import { CARD, txnFrom } from './testData';
 
 const labels = (dir: 'in' | 'out', kind: 'bank' | 'card') => actionsFor(dir, kind).map((a) => a.label);
 
 describe('actionsFor (spec section 8 / 9)', () => {
   it('credit: customer advance, against invoice, other income, transfer, personal, ignore', () => {
     expect(labels('in', 'bank')).toEqual([
-      'Customer advance', 'Payment against an invoice', 'Other income', 'Transfer between my accounts', 'Personal', 'Ignore this message',
+      'Customer advance', 'Payment against an invoice', 'Other income', 'Transfer from my other account', 'Personal', 'Ignore this message',
     ]);
   });
   it('debit on a bank account', () => {
@@ -64,8 +64,12 @@ describe('nextStep', () => {
     expect(nextStep(credit, { action: 'other_income' })).toBe('account');
     expect(nextStep(debit, { action: 'transfer' })).toBe('account');
   });
-  it('a credit transfer needs no further answer; personal and ignore go straight to confirm', () => {
-    expect(nextStep(credit, { action: 'transfer' })).toBe('confirm');
+  it('a credit transfer asks for the source account; personal and ignore go straight to confirm', () => {
+    expect(nextStep(credit, { action: 'transfer' })).toBe('account');
+    expect(nextStep(credit, { action: 'transfer', toAccount: CARD })).toBe('account');
+    expect(nextStep(credit, { action: 'transfer', fromAccount: { bankAccount: 'ICICI', glAccount: 'ICICI - ZP' } })).toBe('confirm');
+    expect(nextStep(debit, { action: 'transfer', fromAccount: { bankAccount: 'ICICI', glAccount: 'ICICI - ZP' } })).toBe('account');
+    expect(nextStep(debit, { action: 'transfer', toAccount: CARD })).toBe('confirm');
     expect(nextStep(debit, { action: 'personal' })).toBe('confirm');
     expect(nextStep(debit, { action: 'ignore' })).toBe('confirm');
   });

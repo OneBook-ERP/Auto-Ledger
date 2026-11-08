@@ -4,6 +4,9 @@ import type { ActionPlan } from '../core/types';
 import { encodeSegment } from '../erp/client';
 import type { RunResult } from '../outbox/runner';
 
+export const UNKNOWN_FAILURE =
+  'Something went wrong. Your answer may not have been saved; check the Inbox and Activity before trying again.';
+export const GONE_MESSAGE = 'This message is no longer in your Inbox.';
 export const OFFLINE_MESSAGE = 'No connection. Your answer is saved and will be sent when you are back online.';
 
 const PLAN_MESSAGES: Record<string, string> = {
@@ -33,7 +36,21 @@ export type Outcome =
   | { kind: 'login' }
   | { kind: 'offline'; message: string }
   | { kind: 'error'; message: string; missingFields: string[]; doctype: string | null; closedPeriod: boolean }
-  | { kind: 'busy' };
+  | { kind: 'busy' }
+  /** The txn row disappeared (Undo, a site switch): nothing to show here any more. */
+  | { kind: 'gone' };
+
+/**
+ * The runner's plain-language note on the txn, when it describes THIS failure (it writes one for a rejected
+ * step, including notes on drafts it could not remove); else null. Not keyed on the note changing: a repeated
+ * identical failure still gets it. A stale note from an earlier, different failure is not used.
+ */
+export function readableFailure(error: { message: string; missingFields?: string[]; closedPeriod?: boolean }, txnError: string | null): string | null {
+  if (!txnError) return null;
+  if (error.missingFields?.length) return txnError.includes(error.missingFields.join(', ')) ? txnError : null;
+  if (error.closedPeriod) return txnError.includes('accounting period is closed') ? txnError : null;
+  return txnError.includes(error.message) ? txnError : null;
+}
 
 /** The document type a failure is about: the step the runner's message names, else the plan's main document. */
 export function failedDoctype(message: string, plan: ActionPlan): string | null {

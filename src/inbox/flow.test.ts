@@ -1,6 +1,6 @@
 import { PlanError } from '../core/plan';
 import {
-  TRANSFER_IN_NOTE, buildNewParty, defaultAllocation, effectiveAmountMinor, parseRupees, planFor, toPaise, validateAllocations, validateNewParty,
+  RATE_MAX_PAISE, RATE_MIN_PAISE, buildNewParty, foreignAmountCheck, defaultAllocation, effectiveAmountMinor, parseRupees, planFor, toPaise, validateAllocations, validateNewParty,
 } from './flow';
 import { BANK, CARD, txnFrom } from './testData';
 
@@ -43,6 +43,12 @@ describe('planFor', () => {
     expect(plan.steps[0].body).toEqual({ customer_name: 'Acme Test Traders', customer_group: 'Commercial' });
     expect(plan.summary[0]).toBe('New Customer will be created: Acme Test Traders');
   });
+  it('keeps the ERPNext labels of the extra fields for the confirm screen (not sent)', () => {
+    const np = buildNewParty('Customer', 'Acme', { customer_group: 'Commercial' }, [{ fieldname: 'customer_group', label: 'Customer Group', fieldtype: 'Link' }]);
+    expect(np.labels).toEqual({ customer_group: 'Customer Group' });
+    const { plan } = planFor(credit, { mapping: BANK, action: 'customer_advance', party: np.ref, newParty: np }, settings);
+    expect(plan.steps[0].body).toEqual({ customer_name: 'Acme', customer_group: 'Commercial' });
+  });
   it('new employee: first_name carries the name', () => {
     expect(buildNewParty('Employee', ' Ravi Kumar ', { gender: 'Male' })).toEqual({
       ref: { doctype: 'Employee', name: 'Ravi Kumar' }, fields: { first_name: 'Ravi Kumar', gender: 'Male' },
@@ -58,11 +64,18 @@ describe('planFor', () => {
     const { plan } = planFor(debit, { mapping: BANK, action: 'transfer', toAccount: CARD }, settings);
     expect(plan.steps[0].body).toMatchObject({ payment_type: 'Internal Transfer', paid_from: 'IDFC First - ZP', paid_to: 'IDFC Credit Card - ZP' });
   });
-  it('a credit marked as a transfer creates nothing and says why', () => {
-    const { plan, choice } = planFor(credit, { mapping: BANK, action: 'transfer' }, settings);
+  it('a credit transfer comes from the chosen bank account (R52b)', () => {
+    const from = { bankAccount: 'ICICI Savings', glAccount: 'ICICI - ZP' };
+    const { plan, choice } = planFor(credit, { mapping: BANK, action: 'transfer', fromAccount: from }, settings);
+    expect(choice).toEqual({ type: 'transfer', fromAccount: from });
+    expect(plan.steps[0].body).toMatchObject({ payment_type: 'Internal Transfer', paid_from: 'ICICI - ZP', paid_to: 'IDFC First - ZP', mode_of_payment: 'Wire Transfer' });
+    expect(plan.summary[0]).toMatch(/^Internal transfer: ₹30,000.00 from ICICI - ZP into IDFC First - ZP/);
+    expect(code(() => planFor(credit, { mapping: BANK, action: 'transfer' }, settings))).toBe('missing_choice');
+  });
+  it('ignore needs no account, company or rupee amount', () => {
+    const { plan, choice } = planFor(txnFrom('idfc-040'), { action: 'ignore' }, { company: '', drawingsAccount: '', today: '2026-11-08' });
     expect(choice).toEqual({ type: 'ignore' });
     expect(plan.steps).toEqual([]);
-    expect(plan.summary).toEqual([TRANSFER_IN_NOTE]);
   });
   it('ignore: the empty plan with a plain summary', () => {
     const { plan } = planFor(debit, { mapping: BANK, action: 'ignore' }, settings);
@@ -116,5 +129,21 @@ describe('validateNewParty', () => {
     expect(validateNewParty('Ravi', { gender: ' ', date_of_birth: '31/01/1990' }, req)).toEqual({
       gender: 'ERPNext needs Gender.', date_of_birth: 'Enter the date as YYYY-MM-DD, for example 1990-01-31.',
     });
+  });
+});
+
+describe('foreignAmountCheck', () => {
+  const usd = txnFrom('idfc-040'); // USD 100.00
+  it('shows the entered rupee value and the implied rate', () => {
+    expect(foreignAmountCheck(usd, 850000)).toEqual({ text: 'USD 100.00, entered as ₹8,500.00 (₹85.00 per USD)', warning: null });
+  });
+  it('warns softly only for an obvious slip: below ₹1 or above ₹1,000 per unit', () => {
+    expect(RATE_MIN_PAISE).toBe(100);
+    expect(RATE_MAX_PAISE).toBe(100000);
+    expect(foreignAmountCheck(usd, 10000).warning).toBeNull(); // ₹1.00 per USD: allowed edge
+    expect(foreignAmountCheck(usd, 9999).warning).toBeNull(); // rounds to ₹1.00
+    expect(foreignAmountCheck(usd, 8500).warning).toBe('That is ₹0.85 per USD, which looks unusual. Check the rupee amount on your card statement before creating.');
+    expect(foreignAmountCheck(usd, 10000000).warning).toBeNull(); // ₹1,000 per USD: allowed edge
+    expect(foreignAmountCheck(usd, 85000000).warning).toMatch(/^That is ₹8,500.00 per USD/); // typed 8,50,000 for 8,500
   });
 });

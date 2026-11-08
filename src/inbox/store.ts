@@ -7,6 +7,9 @@ type FlowState = {
   drafts: Record<string, FlowDraft>;
   /** Shown once at the top of the Inbox (e.g. "No connection. Your answer is saved..."). */
   flash: string | null;
+  /** Txns whose answer is being sent right now (the flow screens show "Still sending..." and lock the answers). */
+  sending: Record<string, boolean>;
+  setSending(txnId: string, v: boolean): void;
   start(txnId: string, d: FlowDraft): void;
   patch(txnId: string, p: Partial<FlowDraft>): void;
   clear(txnId: string): void;
@@ -16,6 +19,11 @@ type FlowState = {
 export const useFlowStore = create<FlowState>((set) => ({
   drafts: {},
   flash: null,
+  sending: {},
+  setSending: (id, v) => set((s) => {
+    const { [id]: _was, ...rest } = s.sending;
+    return { sending: v ? { ...rest, [id]: true } : rest };
+  }),
   start: (id, d) => set((s) => ({ drafts: { ...s.drafts, [id]: d } })),
   patch: (id, p) => set((s) => ({ drafts: { ...s.drafts, [id]: { ...s.drafts[id], ...p } } })),
   clear: (id) => set((s) => {

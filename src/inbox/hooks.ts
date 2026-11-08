@@ -9,6 +9,7 @@ import { useInboxDeps } from './deps';
 import type { FlowDraft } from './flow';
 import { LAST_SYNCED_KEY, buildInboxModel, newestFirst, type InboxModel } from './model';
 import { useFlowStore } from './store';
+import { createTapGuard } from './tapGuard';
 
 const UNKNOWN_PREFIX = unrecognisedAccountKey('');
 const EMPTY: FlowDraft = {};
@@ -17,12 +18,11 @@ export function useInboxData() {
   const { repo, now } = useInboxDeps();
   const [model, setModel] = useState<InboxModel | null>(null);
   const reload = useCallback(async () => {
-    const [pending, created, rules, mappings, unread, flags, synced] = await Promise.all([
+    const [pending, created, rules, mappings, unread, flags, synced, queuedIds] = await Promise.all([
       repo.listPending('new'), repo.listPending('created'), repo.listRules(), repo.listMappings(),
       repo.getSetting(UNRECOGNISED_COUNT_KEY), repo.listSettings(UNKNOWN_PREFIX), repo.getSetting(LAST_SYNCED_KEY),
+      repo.listQueuedTxnIds(),
     ]);
-    const queuedIds: string[] = [];
-    for (const t of pending) if ((await repo.listOutbox(t.id)).some((o) => o.status === 'pending')) queuedIds.push(t.id);
     setModel(buildInboxModel({
       pending, mappings, rules, createdCount: created.length, unreadCount: Number(unread) || 0,
       unknownAccounts: flags.filter((f) => f.value !== '').map((f) => f.key.slice(UNKNOWN_PREFIX.length)),
@@ -138,4 +138,10 @@ export function useTxnSuggestions(txn: PendingTxn | null, rules: Rule[]) {
     };
   }, [txn, rules, erp]);
   return out;
+}
+
+/** One guard per screen instance: wrap every navigation a tap starts. */
+export function useTapGuard() {
+  const [guard] = useState(() => createTapGuard(Date.now));
+  return guard;
 }

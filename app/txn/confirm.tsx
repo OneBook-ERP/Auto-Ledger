@@ -6,10 +6,10 @@ import { rememberDefault, rememberShown } from '../../src/inbox/actions';
 import { useInboxDeps } from '../../src/inbox/deps';
 import { describeStep, stepTitle } from '../../src/inbox/describe';
 import { FlowAnswered, FlowGone, FlowLoading } from '../../src/inbox/FlowStates';
-import { planFor } from '../../src/inbox/flow';
+import { foreignAmountCheck, planFor } from '../../src/inbox/flow';
 import { istToday, titleOf } from '../../src/inbox/format';
 import { useTxnFlow } from '../../src/inbox/hooks';
-import { erpNewDocUrl, planErrorMessage, type Outcome } from '../../src/inbox/outcome';
+import { GONE_MESSAGE, UNKNOWN_FAILURE, erpNewDocUrl, planErrorMessage, type Outcome } from '../../src/inbox/outcome';
 import { useFlowStore } from '../../src/inbox/store';
 import { submitAnswer } from '../../src/inbox/submit';
 import { BackLink, Banner, Button, DetailCard, Pill, Screen, Stack, ToggleRow, Txt, confirmDialog, openExternal } from '../../src/ui';
@@ -32,6 +32,14 @@ export default function ConfirmStep() {
   const busyRef = useRef(false);
   const [failure, setFailure] = useState<Extract<Outcome, { kind: 'error' }> | null>(null);
   const [remember, setRemember] = useState(action ? rememberDefault(action) : false);
+  const sending = useFlowStore((st) => (id ? !!st.sending[id] : false));
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const prepared = useMemo<Prepared | null>(() => {
     if (!txn || !action) return null;
@@ -61,52 +69,78 @@ export default function ConfirmStep() {
     busyRef.current = true;
     setBusy(true);
     setFailure(null);
+    const store = useFlowStore.getState;
+    // The answers this run was started with: a finished run never clears a NEWER draft for the txn.
+    const used = store().drafts[txn.id];
+    const clearOwnDraft = () => {
+      if (store().drafts[txn.id] === used) store().clear(txn.id);
+    };
     try {
       if (nothing && !(await confirmDialog({ title: IGNORE_TITLE, message: IGNORE_MESSAGE, confirmLabel: 'Ignore' }))) return;
       if (!deps.erp) {
         router.push('/(auth)/login');
         return;
       }
-      const o = await submitAnswer(
-        { repo: deps.repo, erp: deps.erp, runPlan: deps.runPlan },
-        { txn, plan: ok.plan, choice: ok.choice, remember: learnable && remember },
-      );
+      store().setSending(txn.id, true);
+      let o: Outcome;
+      try {
+        o = await submitAnswer(
+          { repo: deps.repo, erp: deps.erp, runPlan: deps.runPlan },
+          { txn, plan: ok.plan, choice: ok.choice, remember: learnable && remember },
+        );
+      } catch {
+        o = { kind: 'error', message: UNKNOWN_FAILURE, missingFields: [], doctype: null, closedPeriod: false };
+      } finally {
+        store().setSending(txn.id, false);
+      }
+      // Notices that belong to the Inbox are kept even when this screen is gone; navigation is not.
       switch (o.kind) {
-        case 'created':
-          useFlowStore.getState().clear(txn.id);
+        case 'created': {
+          clearOwnDraft();
+          if (!mounted.current) return;
+          const inr = txn.currency !== 'INR' && f.draft.inrAmountMinor !== undefined ? { inr: String(f.draft.inrAmountMinor) } : {};
           router.dismissAll();
-          router.push({ pathname: '/txn/result', params: { id: txn.id } });
+          router.push({ pathname: '/txn/result', params: { id: txn.id, ...inr } });
           return;
+        }
         case 'login':
-          router.push('/(auth)/login');
+          if (mounted.current) router.push('/(auth)/login');
           return;
         case 'offline':
-          useFlowStore.getState().clear(txn.id);
-          useFlowStore.getState().setFlash(o.message);
-          router.dismissTo('/(tabs)/inbox');
+          clearOwnDraft();
+          store().setFlash(o.message);
+          if (mounted.current) router.dismissTo('/(tabs)/inbox');
+          return;
+        case 'gone':
+          clearOwnDraft();
+          store().setFlash(GONE_MESSAGE);
+          if (mounted.current) router.dismissTo('/(tabs)/inbox');
           return;
         case 'error':
-          setFailure(o);
+          if (mounted.current) setFailure(o);
           return;
         default:
           return; // busy: another submit for this txn is running
       }
+    } catch {
+      if (mounted.current) setFailure({ kind: 'error', message: UNKNOWN_FAILURE, missingFields: [], doctype: null, closedPeriod: false });
     } finally {
       busyRef.current = false;
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
 
+  const foreign = txn.currency !== 'INR' && f.draft.inrAmountMinor !== undefined ? foreignAmountCheck(txn, f.draft.inrAmountMinor) : null;
   const primary = nothing ? 'Ignore this message' : 'Create draft';
   return (
     <Screen
-      top={<BackLink label="Back" onPress={() => router.back()} />}
+      top={<BackLink label="Back" disabled={busy} onPress={() => router.back()} />}
       title={nothing ? 'Nothing will be created' : 'Check before creating'}
       subtitle={nothing ? undefined : 'This is what will be added to ERPNext.'}
       footer={
         <Stack gap={2}>
           <Button label={primary} onPress={create} loading={busy} disabled={!ok || !shown} testID="create" />
-          <Button variant="quiet" label="Change my answer" onPress={() => router.dismissTo({ pathname: '/txn/[id]', params: { id: txn.id } })} />
+          <Button variant="quiet" label="Change my answer" disabled={busy} onPress={() => router.dismissTo({ pathname: '/txn/[id]', params: { id: txn.id } })} />
         </Stack>
       }>
       {prepared && 'error' in prepared ? <Banner tone="error" title="This cannot be created yet" message={prepared.error} /> : null}
@@ -125,10 +159,17 @@ export default function ConfirmStep() {
         />
       ) : null}
       {ok && nothing ? <Banner tone="info" message={ok.plan.summary.join('\n')} testID="summary" /> : null}
+      {sending ? <Banner tone="info" message="Sending your answer to ERPNext. Stay on this screen until it finishes." testID="sending" /> : null}
+      {ok && !nothing && foreign ? (
+        <>
+          <DetailCard rows={[{ label: 'Card amount', value: foreign.text }]} testID="foreign" />
+          {foreign.warning ? <Banner tone="warn" message={foreign.warning} testID="rate-warning" /> : null}
+        </>
+      ) : null}
       {ok && !nothing ? (
         <Stack gap={1}>
           {ok.plan.steps.map((s, i) => (
-            <DetailCard key={`${s.kind}-${i}`} title={stepTitle(s)} badge={<Pill text="Draft" tone="warn" />} rows={describeStep(s)} testID={`summary-${i}`}>
+            <DetailCard key={`${s.kind}-${i}`} title={stepTitle(s)} badge={<Pill text="Draft" tone="warn" />} rows={describeStep(s, s.kind === 'create_party' ? f.draft.newParty?.labels : undefined)} testID={`summary-${i}`}>
               <Txt variant="muted">{ok.plan.summary[i]}</Txt>
             </DetailCard>
           ))}

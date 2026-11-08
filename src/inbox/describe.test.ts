@@ -51,6 +51,7 @@ describe('describeStep (confirm screen rows)', () => {
     const p = planAction(t, { type: 'customer_advance', party: { doctype: 'Customer', name: 'Acme' } },
       { ...ctx(), newParty: { ref: { doctype: 'Customer', name: 'Acme' }, fields: { customer_name: 'Acme', customer_group: 'Commercial' } } });
     expect(stepTitle(p.steps[0])).toBe('New Customer');
-    expect(describeStep(p.steps[0])).toEqual([{ label: 'Name', value: 'Acme' }, { label: 'customer_group', value: 'Commercial' }]);
+    expect(describeStep(p.steps[0], { customer_group: 'Customer Group' })).toEqual([{ label: 'Name', value: 'Acme' }, { label: 'Customer Group', value: 'Commercial' }]);
+    expect(describeStep(p.steps[0])).toEqual([{ label: 'Name', value: 'Acme' }, { label: 'Customer group', value: 'Commercial' }]);
   });
 });

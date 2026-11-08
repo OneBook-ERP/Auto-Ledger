@@ -5,8 +5,8 @@ import { resolveMapping } from '../ingest/pipeline';
 import { amountA11y, accountLabel, istToday, kindLabel, relativeAgo, signedAmount, titleOf, whenLabel } from './format';
 import { chipFor, type ChipView } from './suggestions';
 
-/** Same key as Task 19's LAST_SYNCED_KEY (written by the provider after a fully successful cycle). */
-export const LAST_SYNCED_KEY = 'last_synced_at';
+/** Written by the provider after a fully successful cycle (Task 19). */
+export { LAST_SYNCED_KEY } from '../home/viewModel';
 
 export type InboxInputs = {
   /** Txns in state 'new'. */
@@ -42,9 +42,14 @@ export const newestFirst = (xs: PendingTxn[]) => [...xs].sort((a, b) => b.receiv
 
 export function buildInboxModel(i: InboxInputs): InboxModel {
   const today = istToday(i.now);
+  const yesterday = istToday(i.now - 86_400_000);
   const queued = new Set(i.queuedIds);
-  const ordered = newestFirst(i.pending);
-  const rows: InboxRow[] = ordered.map((t) => {
+  const TITLES = ['Today', 'Yesterday', 'Earlier'] as const;
+  const bucket = (t: PendingTxn) => (t.occurredOn === today ? 0 : t.occurredOn === yesterday ? 1 : 2);
+  // Newest first within a day group; every row of a group sits together (no "Today / Earlier / Today").
+  const groups: PendingTxn[][] = [[], [], []];
+  for (const t of newestFirst(i.pending)) groups[bucket(t)].push(t);
+  const toRow = (t: PendingTxn): InboxRow => {
     const mapping = resolveMapping(i.mappings, t);
     const chip: ChipView = queued.has(t.id)
       ? { text: 'Answer saved, waiting to send', tone: 'plain' }
@@ -58,16 +63,9 @@ export function buildInboxModel(i: InboxInputs): InboxModel {
       direction: t.direction,
       chip,
     };
-  });
-  const yesterday = istToday(i.now - 86_400_000);
-  const bucket = (t: PendingTxn) => (t.occurredOn === today ? 'Today' : t.occurredOn === yesterday ? 'Yesterday' : 'Earlier');
-  const sections: InboxModel['sections'] = [];
-  ordered.forEach((t, k) => {
-    const title = bucket(t);
-    const last = sections[sections.length - 1];
-    if (last && last.title === title) last.rows.push(rows[k]);
-    else sections.push({ title, rows: [rows[k]] });
-  });
+  };
+  const sections = groups.map((g, k) => ({ title: TITLES[k] as string, rows: g.map(toRow) })).filter((s) => s.rows.length > 0);
+  const rows = sections.flatMap((s) => s.rows);
   const n = rows.length;
   const drafts = `${i.createdCount} draft${i.createdCount === 1 ? '' : 's'} waiting for your accountant`;
   const synced = i.lastSyncedAt === null ? 'Not synced yet' : `Synced ${relativeAgo(i.now, i.lastSyncedAt)}`;

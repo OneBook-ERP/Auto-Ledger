@@ -1,12 +1,14 @@
 // The answers collected across the action flow (FlowDraft) and how they become an ActionChoice, a PlanContext
 // and an ActionPlan. Pure: the screens only collect answers; everything that decides money lives here.
 import { PlanError, planAction, type PlanContext } from '../core/plan';
-import type { AccountMapping, ActionChoice, ActionPlan, PartyRef, PendingTxn } from '../core/types';
+import type { AccountMapping, ActionChoice, ActionPlan, PartyRef, PendingTxn, TransferSource } from '../core/types';
 import { formatInr } from '../ui/format';
+import { plainAmount } from './format';
 import type { ActionType } from './actions';
 
 export type InvoicePick = { doctype: 'Sales Invoice' | 'Purchase Invoice'; name: string; allocatedMinor: number };
-export type NewParty = { ref: PartyRef; fields: Record<string, unknown> };
+/** `labels`: field name -> ERPNext label, for the confirm screen only (never sent). */
+export type NewParty = { ref: PartyRef; fields: Record<string, unknown>; labels?: Record<string, string> };
 
 export type FlowDraft = {
   /** The saved account the message belongs to (resolved, or picked by the user). */
@@ -18,7 +20,10 @@ export type FlowDraft = {
   invoices?: InvoicePick[];
   /** Expense or income ledger account. */
   account?: string;
+  /** Debit transfer: the mapped account the money went to. */
   toAccount?: AccountMapping;
+  /** Credit transfer: the ERPNext Bank Account the money came from. */
+  fromAccount?: TransferSource;
   /** Pre-selection for the account step (a learned rule's account); never used as the answer itself. */
   suggestedAccount?: string;
   /** Rupee value of a foreign-currency spend, in paise. */
@@ -28,9 +33,6 @@ export type FlowDraft = {
 export type FlowSettings = { company: string; drawingsAccount: string; today: string };
 
 export const IGNORE_NOTE = 'Nothing will be added to ERPNext. AutoLedger will not ask about this message again.';
-/** A credit cannot be booked as the Internal Transfer (the planner books a transfer from the account the money left). */
-export const TRANSFER_IN_NOTE =
-  'Nothing will be added to ERPNext for this message. A transfer is booked once, from the account the money left: answer that account\'s message as "Transfer between my accounts". If that account does not send messages to AutoLedger, your accountant books the transfer from its statement.';
 
 /** "8,500.50" -> 850050 paise. Null for anything that is not a positive amount with at most 2 decimals. */
 export function parseRupees(text: string): number | null {
@@ -64,11 +66,17 @@ export function extraFields(required: RequiredField[]): RequiredField[] {
   return required.filter((f) => !HIDDEN_FIELDS.has(f.fieldname) && !LAYOUT_TYPES.has(f.fieldtype));
 }
 
-export function buildNewParty(doctype: PartyRef['doctype'], name: string, extra: Record<string, string>): NewParty {
+export function buildNewParty(doctype: PartyRef['doctype'], name: string, extra: Record<string, string>, required: RequiredField[] = []): NewParty {
   const n = name.trim();
   const fields: Record<string, unknown> = { [NAME_FIELD[doctype]]: n };
-  for (const [k, v] of Object.entries(extra)) if (v.trim()) fields[k] = v.trim();
-  return { ref: { doctype, name: n }, fields };
+  const labels: Record<string, string> = {};
+  for (const [k, v] of Object.entries(extra)) {
+    if (!v.trim()) continue;
+    fields[k] = v.trim();
+    const label = required.find((f) => f.fieldname === k)?.label;
+    if (label) labels[k] = label;
+  }
+  return Object.keys(labels).length ? { ref: { doctype, name: n }, fields, labels } : { ref: { doctype, name: n }, fields };
 }
 
 /** Client-side checks for the new-party form: field name -> message ('name' for the name). */
@@ -105,7 +113,10 @@ export function buildChoice(txn: PendingTxn, d: FlowDraft): ActionChoice {
       if (!d.account) throw missing();
       return { type: 'other_income', incomeAccount: d.account };
     case 'transfer':
-      if (txn.direction === 'in') return { type: 'ignore' };
+      if (txn.direction === 'in') {
+        if (!d.fromAccount) throw missing();
+        return { type: 'transfer', fromAccount: { ...d.fromAccount } };
+      }
       if (!d.toAccount) throw missing();
       return { type: 'transfer', toAccount: d.toAccount };
     case 'personal': return { type: 'personal' };
@@ -125,11 +136,10 @@ export function buildContext(txn: PendingTxn, d: FlowDraft, s: FlowSettings): Pl
 
 /** The plan the confirm screen shows and the runner executes. Throws PlanError with a code for the UI. */
 export function planFor(txn: PendingTxn, d: FlowDraft, s: FlowSettings): { plan: ActionPlan; choice: ActionChoice } {
+  // Ignore needs no account, company or amount: the runner sends nothing to ERPNext for it.
+  if (d.action === 'ignore') return { choice: { type: 'ignore' }, plan: { steps: [], summary: [IGNORE_NOTE], needsInrAmount: false } };
   const ctx = buildContext(txn, d, s);
   const choice = buildChoice(txn, d);
-  if (choice.type === 'ignore') {
-    return { choice, plan: { steps: [], summary: [d.action === 'transfer' ? TRANSFER_IN_NOTE : IGNORE_NOTE], needsInrAmount: false } };
-  }
   if (choice.type === 'personal' && !s.drawingsAccount) throw new PlanError('missing_drawings');
   const plan = planAction(txn, choice, ctx);
   // The runner refuses a plan that still needs the INR amount; the flow asks for it before confirm.
@@ -162,4 +172,24 @@ export function validateAllocations(amountMinor: number, rows: { name: string; o
   }
   out.ok = !out.total && Object.keys(errors).length === 0;
   return out;
+}
+
+// ---------- foreign-currency spends ----------
+
+/** Below ₹1 or above ₹1,000 per unit of foreign currency is treated as an obvious typing slip. */
+export const RATE_MIN_PAISE = 100;
+export const RATE_MAX_PAISE = 100_000;
+
+/**
+ * "USD 100.00, entered as ₹8,500.00 (₹85.00 per USD)" plus a soft warning for an obvious slip.
+ * There is no reference exchange rate in the app, so only these wide bounds are checked.
+ */
+export function foreignAmountCheck(txn: Pick<PendingTxn, 'amountMinor' | 'currency'>, inrMinor: number): { text: string; warning: string | null } {
+  const ratePaise = Math.round((inrMinor * 100) / txn.amountMinor);
+  const text = `${plainAmount(txn)}, entered as ${formatInr(inrMinor)} (${formatInr(ratePaise)} per ${txn.currency})`;
+  const slip = ratePaise < RATE_MIN_PAISE || ratePaise > RATE_MAX_PAISE;
+  return {
+    text,
+    warning: slip ? `That is ${formatInr(ratePaise)} per ${txn.currency}, which looks unusual. Check the rupee amount on your card statement before creating.` : null,
+  };
 }

@@ -1,6 +1,6 @@
 // Which answers a transaction can have (spec section 8 / 9) and the order of the questions that follow.
-// Pure. The planner throws PlanError('bad_direction') for an impossible pair; these lists never offer one,
-// with one deliberate exception: "Transfer between my accounts" on a credit (see flow.ts TRANSFER_IN_NOTE).
+// Pure. The planner throws PlanError('bad_direction') for an impossible pair; these lists never offer one.
+// A credit's transfer uses `fromAccount` (any ERPNext Bank Account), a debit's uses `toAccount` (a mapping).
 import type { ActionChoice, PartyRef, PendingTxn } from '../core/types';
 import type { FlowDraft } from './flow';
 
@@ -14,7 +14,7 @@ const CREDIT: ActionItem[] = [
   { type: 'customer_advance', label: 'Customer advance', hint: `Money from a customer before an invoice. ${PE}` },
   { type: 'against_invoice', label: 'Payment against an invoice', hint: `A customer paid one or more open invoices. ${PE}` },
   { type: 'other_income', label: 'Other income', hint: `Interest, refunds and other income. ${JE}` },
-  { type: 'transfer', label: 'Transfer between my accounts', hint: 'Money moved in from another of your accounts.' },
+  { type: 'transfer', label: 'Transfer from my other account', hint: `Money moved in from another of your accounts. ${PE}` },
   { type: 'personal', label: 'Personal', hint: `Your own money put into the business. ${JE}` },
   { type: 'ignore', label: 'Ignore this message', hint: 'Nothing is added to ERPNext.' },
 ];
@@ -59,8 +59,7 @@ export type Step = 'choose' | 'amount' | 'party' | 'invoices' | 'account' | 'con
 export function nextStep(txn: PendingTxn, d: FlowDraft): Step {
   const a = d.action;
   if (!a) return 'choose';
-  const transferIn = a === 'transfer' && txn.direction === 'in';
-  if (a !== 'ignore' && !transferIn && txn.currency !== 'INR' && d.inrAmountMinor === undefined) return 'amount';
+  if (a !== 'ignore' && txn.currency !== 'INR' && d.inrAmountMinor === undefined) return 'amount';
   switch (a) {
     case 'customer_advance': case 'supplier_payment': case 'salary':
       return d.party ? 'confirm' : 'party';
@@ -70,7 +69,7 @@ export function nextStep(txn: PendingTxn, d: FlowDraft): Step {
     case 'expense': case 'other_income':
       return d.account ? 'confirm' : 'account';
     case 'transfer':
-      return transferIn || d.toAccount ? 'confirm' : 'account';
+      return (txn.direction === 'in' ? d.fromAccount : d.toAccount) ? 'confirm' : 'account';
     default:
       return 'confirm';
   }

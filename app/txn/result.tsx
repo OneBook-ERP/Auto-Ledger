@@ -6,12 +6,12 @@ import { FlowGone, FlowLoading } from '../../src/inbox/FlowStates';
 import { plainAmount, titleOf } from '../../src/inbox/format';
 import { newestFirst } from '../../src/inbox/hooks';
 import { erpDocUrl } from '../../src/inbox/outcome';
-import { Button, DetailCard, Gap, Row, Screen, Stack, Txt, openExternal } from '../../src/ui';
+import { Button, DetailCard, Gap, Row, Screen, Stack, Txt, formatInr, openExternal } from '../../src/ui';
 
 export const WAITING = 'Waiting for your accountant';
 
 export default function ResultScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, inr } = useLocalSearchParams<{ id: string; inr?: string }>();
   const router = useRouter();
   const { repo, siteUrl } = useInboxDeps();
   const [data, setData] = useState<{ txn: PendingTxn | null; next: PendingTxn | null; left: number } | null>(null);
@@ -20,7 +20,9 @@ export default function ResultScreen() {
     let live = true;
     (async () => {
       const txn = id ? await repo.getPending(id) : null;
-      const rest = newestFirst((await repo.listPending('new')).filter((t) => t.id !== id));
+      // "Next" skips answers already queued for sending (they are answered, only waiting for the network).
+      const queued = new Set(await repo.listQueuedTxnIds());
+      const rest = newestFirst((await repo.listPending('new')).filter((t) => t.id !== id && !queued.has(t.id)));
       if (live) setData({ txn, next: rest[0] ?? null, left: rest.length });
     })().catch(() => live && setData({ txn: null, next: null, left: 0 }));
     return () => {
@@ -62,7 +64,7 @@ export default function ResultScreen() {
 
   return (
     <Screen title={docs.length > 1 ? 'Drafts created' : 'Draft created'} footer={footer}>
-      <Txt>{`${plainAmount(txn)}${who ? ` ${txn.direction === 'in' ? 'from' : 'to'} ${who}` : ''} is now in ERPNext as a draft.`}</Txt>
+      <Txt>{`${txn.currency !== 'INR' && inr && Number(inr) > 0 ? `${formatInr(Number(inr))} (${plainAmount(txn)})` : plainAmount(txn)}${who ? ` ${txn.direction === 'in' ? 'from' : 'to'} ${who}` : ''} is now in ERPNext as a draft.`}</Txt>
       <Gap size={4} />
       <DetailCard
         rows={[...docs.map((d) => ({ label: d.doctype, value: d.name, mono: true })), { label: 'Status', value: WAITING }]}

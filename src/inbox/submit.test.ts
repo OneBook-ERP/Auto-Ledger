@@ -5,6 +5,7 @@ import { runPlan } from '../outbox/runner';
 import { planFor } from './flow';
 import { fakeInboxErp } from './fakeErp';
 import { isSubmitting, submitAnswer } from './submit';
+import { UNKNOWN_FAILURE } from './outcome';
 import { BANK, txnFrom } from './testData';
 
 const settings = { company: 'ZP', drawingsAccount: 'Drawings - ZP', today: '2026-11-08' };
@@ -93,4 +94,39 @@ describe('submitAnswer', () => {
     expect((await repo.getPending(txn.id))?.state).toBe('ignored');
     expect((await repo.listRules())[0]).toMatchObject({ matchKey: 'cp:in:company11', action: 'ignore' });
   });
+  it('a repeated identical failure still gets the readable runner message', async () => {
+    const { repo, txn, erp, run, plan, choice } = await setup();
+    erp.createDraft.mockRejectedValue(new ErpValidationError('Value missing', 417, ['Gender']));
+    const first = await submitAnswer({ repo, erp, runPlan: run }, { txn, plan, choice, remember: false });
+    const second = await submitAnswer({ repo, erp, runPlan: run }, { txn, plan, choice, remember: false });
+    expect(first.kind === 'error' && first.message).toContain('ERPNext needs these fields: Gender');
+    expect(second).toEqual(first);
+  });
+
+  describe('runPlan throws (not an ERP result)', () => {
+    it('txn still new: a plain "may not have been saved" error', async () => {
+      const { repo, txn, erp, plan, choice } = await setup();
+      const run = jest.fn(async () => { throw new Error('SQLITE_BUSY'); });
+      const o = await submitAnswer({ repo, erp, runPlan: run as never }, { txn, plan, choice, remember: true });
+      expect(o).toEqual({ kind: 'error', message: UNKNOWN_FAILURE, missingFields: [], doctype: null, closedPeriod: false });
+      expect(isSubmitting(txn.id)).toBe(false);
+      expect(await repo.listRules()).toEqual([]);
+    });
+    it('txn already created (the work finished): reported as created with its documents', async () => {
+      const { repo, txn, erp, plan, choice } = await setup();
+      const run = jest.fn(async () => {
+        await repo.upsertPending({ ...txn, state: 'created', createdDocs: [{ doctype: 'Payment Entry', name: 'PE-7', docstatus: 0 }] });
+        throw new Error('lost');
+      });
+      expect(await submitAnswer({ repo, erp, runPlan: run as never }, { txn, plan, choice, remember: false })).toEqual({ kind: 'created', docs: [{ doctype: 'Payment Entry', name: 'PE-7' }] });
+    });
+    it('txn gone (Undo / site switch): gone; the real runner throws "not found"', async () => {
+      const { txn, erp, run, plan, choice } = await setup();
+      const repo2 = await createRepo(createTestDriver()); // the row is not there
+      expect(await submitAnswer({ repo: repo2, erp, runPlan: run }, { txn, plan, choice, remember: false })).toEqual({ kind: 'gone' });
+      expect(run).toHaveBeenCalledTimes(1);
+      await expect(run.mock.results[0].value).rejects.toThrow(/not found/);
+    });
+  });
 });
+

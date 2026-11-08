@@ -16,3 +16,15 @@ it('listSettings matches a literal prefix; deleteSetting removes one key', async
   expect((await repo.listSettings('unrecognised_account:')).map((s) => s.key)).toEqual(['unrecognised_account:9999']);
   expect(await repo.getSetting('unrecognised_count')).toBe('5');
 });
+
+it('listQueuedTxnIds: txns with a pending outbox item, one query', async () => {
+  const repo = await createRepo(createTestDriver());
+  const plan = { steps: [], summary: [], needsInrAmount: false };
+  const op = (id: string, txnId: string) => ({ id, txnId, plan, progress: { stepIndex: 0, created: [] }, attempts: 0, status: 'pending' as const });
+  await repo.enqueue(op('o1', 't1'));
+  await repo.enqueue(op('o2', 't2'));
+  await repo.enqueue(op('o3', 't2'));
+  await repo.enqueue(op('o4', 't3'));
+  await repo.markOutbox('o4', { status: 'done' });
+  expect(await repo.listQueuedTxnIds()).toEqual(['t1', 't2']);
+});

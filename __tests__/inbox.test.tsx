@@ -159,7 +159,7 @@ describe('Transaction screen', () => {
   it('credit: the credit answers', async () => {
     await open(txnFrom('idfc-006'));
     expect(buttonNames(screen.getByTestId('action-sheet'))).toEqual([
-      'Customer advance', 'Payment against an invoice', 'Other income', 'Transfer between my accounts', 'Personal', 'Ignore this message',
+      'Customer advance', 'Payment against an invoice', 'Other income', 'Transfer from my other account', 'Personal', 'Ignore this message',
     ]);
     expect(screen.getByText('₹30,000.00').props.accessibilityLabel).toBe('₹30,000.00 received');
     expect(screen.getByText('SBIN32974781')).toBeTruthy();
@@ -221,11 +221,13 @@ describe('Transaction screen', () => {
     mockParams = { id: t.id };
     await render(<s.Wrap><TransactionScreen /></s.Wrap>);
     expect(await screen.findByText('Which account is this?')).toBeTruthy();
-    expect(screen.queryByTestId('action-sheet')).toBeNull();
+    expect(screen.getByText('The message does not say which of your bank accounts this was. Choose one.')).toBeTruthy();
+    // Only Ignore is offered before the account is known (it needs none).
+    expect(buttonNames(screen.getByTestId('action-sheet'))).toEqual(['Ignore this message']);
     const radios = screen.getAllByRole('radio');
     expect(radios.map((r) => r.props.accessibilityLabel)).toEqual(['IDFC First. Ending 6507', 'IDFC Savings. Ending 1111']);
     await fireEvent.press(radios[1]);
-    expect(await screen.findByTestId('action-sheet')).toBeTruthy();
+    await waitFor(() => expect(buttonNames(screen.getByTestId('action-sheet'))).toContain('Personal'));
     await fireEvent.press(screen.getByRole('button', { name: 'Personal' }));
     expect(useFlowStore.getState().drafts[t.id]).toEqual({ mapping: BANK2, action: 'personal' });
     expect(lastPush()).toEqual({ pathname: '/txn/confirm', params: { id: t.id } });
@@ -305,12 +307,15 @@ describe('party step', () => {
     expect(lastPush()).toEqual({ pathname: '/txn/confirm', params: { id: t.id } });
     expect(useFlowStore.getState().drafts[t.id].newParty).toEqual({
       ref: { doctype: 'Customer', name: 'Company Eleven Pvt Ltd' }, fields: { customer_name: 'Company Eleven Pvt Ltd', customer_group: 'Commercial' },
+      labels: { customer_group: 'Customer Group' },
     });
     await r.unmount();
 
     await render(<s.Wrap><ConfirmStep /></s.Wrap>);
     expect(await screen.findByText('New Customer')).toBeTruthy();
     expect(screen.getByText('New Customer will be created: Company Eleven Pvt Ltd')).toBeTruthy();
+    expect(screen.getByLabelText('Customer Group: Commercial')).toBeTruthy(); // human label, not customer_group
+    expect(screen.queryByLabelText('customer_group: Commercial')).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Create draft' }));
     await waitFor(() => expect(mockRouter.push).toHaveBeenLastCalledWith({ pathname: '/txn/result', params: { id: t.id } }));
     expect(erp.createParty).toHaveBeenCalledWith('Customer', { customer_name: 'Company Eleven Pvt Ltd', customer_group: 'Commercial' });
@@ -455,9 +460,9 @@ describe('Confirm', () => {
     await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false));
     const btn = screen.getByTestId('create');
     await act(async () => {
-      btn.props.onPress?.();
-      btn.props.onPress?.();
-      fireEvent.press(btn);
+      void fireEvent.press(btn);
+      void fireEvent.press(btn);
+      void fireEvent.press(btn);
     });
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     await act(async () => release());
@@ -528,11 +533,6 @@ describe('Confirm', () => {
     expect((await repo.listRules())[0]).toMatchObject({ action: 'ignore' });
   });
 
-  it('a credit answered as a transfer creates nothing and says why', async () => {
-    await openConfirm({ mapping: BANK, action: 'transfer' });
-    expect(await screen.findByText(/A transfer is booked once, from the account the money left/)).toBeTruthy();
-    expect(screen.queryByRole('switch')).toBeNull();
-  });
 
   it('Change my answer returns to the transaction', async () => {
     const { t } = await openConfirm();
@@ -570,5 +570,230 @@ describe('Result', () => {
     expect(await screen.findByText('Message ignored')).toBeTruthy();
     await fireEvent.press(screen.getByRole('button', { name: 'Back to Inbox' }));
     expect(mockRouter.navigate).toHaveBeenCalledWith('/(tabs)/inbox');
+  });
+});
+
+// ---------------------------------------------------------------- Fix round 1 (R53)
+
+describe('credit transfer from another own account (R52b)', () => {
+  it('transaction -> account step (company Bank Accounts) -> confirm summary -> runPlan with fromAccount and userAction', async () => {
+    const t = txnFrom('idfc-006');
+    const erp = fakeInboxErp();
+    erp.listBankAccounts.mockResolvedValue([
+      { name: 'IDFC First - ZP', glAccount: 'IDFC First - ZP', isCompanyAccount: true }, // this account
+      { name: 'ICICI Savings - ZP', glAccount: 'ICICI - ZP', isCompanyAccount: true },
+      { name: 'IDFC Credit Card - ZP', glAccount: 'IDFC Credit Card - ZP', isCompanyAccount: true },
+      { name: 'Acme - HDFC', glAccount: 'Debtors - ZP', isCompanyAccount: false }, // a customer's bank account
+    ]);
+    const s = await setup({ txns: [t], erp });
+    mockParams = { id: t.id };
+    const a = await render(<s.Wrap><TransactionScreen /></s.Wrap>);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Transfer from my other account' }));
+    expect(lastPush()).toEqual({ pathname: '/txn/account', params: { id: t.id } });
+    await a.unmount();
+
+    const b = await render(<s.Wrap><AccountStep /></s.Wrap>);
+    expect(await screen.findByText('Which account did the money come from?')).toBeTruthy();
+    const radios = await screen.findAllByRole('radio');
+    expect(radios.map((x) => x.props.accessibilityLabel)).toEqual([
+      'ICICI Savings. ICICI - ZP', 'IDFC Credit Card. IDFC Credit Card - ZP. AutoLedger reads its messages.',
+    ]);
+    expect(erp.listBankAccounts).toHaveBeenCalledWith('ZP');
+    await fireEvent.press(radios[0]);
+    await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
+    expect(useFlowStore.getState().drafts[t.id].fromAccount).toEqual({ bankAccount: 'ICICI Savings - ZP', glAccount: 'ICICI - ZP' });
+    expect(lastPush()).toEqual({ pathname: '/txn/confirm', params: { id: t.id } });
+    await b.unmount();
+
+    await render(<s.Wrap><ConfirmStep /></s.Wrap>);
+    expect(await screen.findByText(/^Internal transfer: ₹30,000.00 from ICICI - ZP into IDFC First - ZP/)).toBeTruthy();
+    expect(screen.queryByRole('switch')).toBeNull(); // transfers are never remembered
+    await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false));
+    await fireEvent.press(screen.getByTestId('create'));
+    await waitFor(() => expect(mockRouter.push).toHaveBeenLastCalledWith({ pathname: '/txn/result', params: { id: t.id } }));
+    const [, plan, , opts] = s.run.mock.calls[0];
+    expect(opts).toEqual({ userAction: true });
+    expect(plan.steps[0].body).toMatchObject({ payment_type: 'Internal Transfer', paid_from: 'ICICI - ZP', paid_to: 'IDFC First - ZP', mode_of_payment: 'Wire Transfer', reference_no: 'SBIN32974781' });
+    expect(await s.repo.listRules()).toEqual([]);
+  });
+});
+
+describe('thrown errors on the submit path (R53 I1)', () => {
+  const acme = { doctype: 'Customer' as const, name: 'Acme Test Traders' };
+  async function ready(t = txnFrom('idfc-006')) {
+    const s = await setup({ txns: [t] });
+    draft(t.id, { mapping: BANK, action: 'customer_advance', party: acme });
+    mockParams = { id: t.id };
+    await render(<s.Wrap><ConfirmStep /></s.Wrap>);
+    await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false));
+    return { ...s, t };
+  }
+  it('runPlan rejects, txn still new: a readable error, the button works again', async () => {
+    const { run, repo, t } = await ready();
+    run.mockImplementationOnce(async () => { throw new Error('SQLITE_IOERR'); });
+    await fireEvent.press(screen.getByTestId('create'));
+    const panel = await screen.findByTestId('failure');
+    expect(within(panel).getByText(/Your answer may not have been saved; check the Inbox and Activity before trying again/)).toBeTruthy();
+    expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false);
+    expect((await repo.getPending(t.id))?.state).toBe('new');
+    expect(mockRouter.push).not.toHaveBeenCalled();
+  });
+  it('runPlan rejects after the txn became created: goes to Result', async () => {
+    const { run, repo, t } = await ready();
+    run.mockImplementationOnce(async () => {
+      await repo.upsertPending({ ...t, state: 'created', createdDocs: [{ doctype: 'Payment Entry', name: 'PE-5', docstatus: 0 }] });
+      throw new Error('write lost');
+    });
+    await fireEvent.press(screen.getByTestId('create'));
+    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/txn/result', params: { id: t.id } }));
+  });
+  it('runPlan rejects because the txn is gone: notice and back to the Inbox', async () => {
+    const { run, repo, t } = await ready();
+    run.mockImplementationOnce(async (...args: Parameters<typeof runPlan>) => {
+      await repo.resetForNewSite();
+      return runPlan(...args); // the real runner: "Transaction ... not found"
+    });
+    await fireEvent.press(screen.getByTestId('create'));
+    await waitFor(() => expect(mockRouter.dismissTo).toHaveBeenCalledWith('/(tabs)/inbox'));
+    expect(useFlowStore.getState().flash).toBe('This message is no longer in your Inbox.');
+    expect(useFlowStore.getState().drafts[t.id]).toBeUndefined();
+  });
+});
+
+describe('while a submit runs (R53 3b)', () => {
+  const acme = { doctype: 'Customer' as const, name: 'Acme Test Traders' };
+  it('Back and Change my answer are disabled, the transaction screen says it is still sending', async () => {
+    const t = txnFrom('idfc-006');
+    const erp = fakeInboxErp();
+    let release!: () => void;
+    erp.findDraftByUtr.mockImplementationOnce(() => new Promise((r) => { release = () => r(null); }));
+    const s = await setup({ txns: [t], erp });
+    draft(t.id, { mapping: BANK, action: 'customer_advance', party: acme });
+    mockParams = { id: t.id };
+    await render(<s.Wrap><ConfirmStep /><TransactionScreen /></s.Wrap>);
+    await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false));
+    await act(async () => { void fireEvent.press(screen.getByTestId('create')); }); // the handler is still running
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Back to Back' }).props.accessibilityState.disabled).toBe(true));
+    expect(screen.getByRole('button', { name: 'Change my answer' }).props.accessibilityState.disabled).toBe(true);
+    expect(screen.getAllByTestId('sending').length).toBe(2); // confirm + transaction screen
+    expect(within(screen.getByTestId('action-sheet')).getByRole('button', { name: 'Customer advance' }).props.accessibilityState.disabled).toBe(true);
+    await act(async () => release());
+    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/txn/result', params: { id: t.id } }));
+    expect(screen.queryAllByTestId('sending')).toHaveLength(0);
+  });
+  it('a run that finishes after its screen is gone neither navigates nor clears a newer draft', async () => {
+    const t = txnFrom('idfc-006');
+    const erp = fakeInboxErp();
+    let release!: () => void;
+    erp.findDraftByUtr.mockImplementationOnce(() => new Promise((r) => { release = () => r(null); }));
+    erp.createDraft.mockRejectedValueOnce(new ErpNetworkError('offline'));
+    const s = await setup({ txns: [t], erp });
+    draft(t.id, { mapping: BANK, action: 'customer_advance', party: acme });
+    mockParams = { id: t.id };
+    const r = await render(<s.Wrap><ConfirmStep /></s.Wrap>);
+    await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false));
+    await act(async () => { void fireEvent.press(screen.getByTestId('create')); }); // the handler is still running
+    await waitFor(() => expect(erp.findDraftByUtr).toHaveBeenCalled());
+    await r.unmount();
+    draft(t.id, { mapping: BANK, action: 'personal' }); // the user started a newer answer meanwhile
+    await act(async () => release());
+    await waitFor(() => expect(useFlowStore.getState().flash).not.toBeNull());
+    expect(mockRouter.dismissTo).not.toHaveBeenCalled();
+    expect(mockRouter.push).not.toHaveBeenCalled();
+    expect(useFlowStore.getState().drafts[t.id]).toEqual({ mapping: BANK, action: 'personal' });
+  });
+});
+
+describe('foreign-currency confirm and result (R53 3a)', () => {
+  it('shows the rupee value with the implied rate; warns only on an obvious slip', async () => {
+    const t = txnFrom('idfc-040'); // USD 100.00
+    const s = await setup({ txns: [t] });
+    draft(t.id, { mapping: CARD, action: 'expense', account: 'Software - ZP', inrAmountMinor: 850000 });
+    mockParams = { id: t.id };
+    const r = await render(<s.Wrap><ConfirmStep /></s.Wrap>);
+    expect(await screen.findByLabelText('Card amount: USD 100.00, entered as ₹8,500.00 (₹85.00 per USD)')).toBeTruthy();
+    expect(screen.queryByTestId('rate-warning')).toBeNull();
+    await r.unmount();
+    draft(t.id, { mapping: CARD, action: 'expense', account: 'Software - ZP', inrAmountMinor: 85000000 }); // 8,50,000 typed for 8,500
+    await render(<s.Wrap><ConfirmStep /></s.Wrap>);
+    expect(await screen.findByTestId('rate-warning')).toHaveTextContent(/₹8,500.00 per USD, which looks unusual/);
+    await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false)); // soft: still allowed
+  });
+  it('the result sentence leads with the rupee value', async () => {
+    const t = txnFrom('idfc-040', { state: 'created', createdDocs: [{ doctype: 'Journal Entry', name: 'JV-1', docstatus: 0 }] });
+    const s = await setup({ txns: [t] });
+    mockParams = { id: t.id, inr: '850000' };
+    await render(<s.Wrap><ResultScreen /></s.Wrap>);
+    expect(await screen.findByText('₹8,500.00 (USD 100.00) to ANTHROPIC* CLAUDE SUB is now in ERPNext as a draft.')).toBeTruthy();
+  });
+});
+
+describe('ignore without an account or company (R53 3d)', () => {
+  it('an unmapped message can be ignored straight away', async () => {
+    const t = txnFrom('idfc-016');
+    const s = await setup({ txns: [t], mappings: [BANK, BANK2], settings: { company: '' } });
+    mockParams = { id: t.id };
+    const a = await render(<s.Wrap><TransactionScreen /></s.Wrap>);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Ignore this message' }));
+    expect(useFlowStore.getState().drafts[t.id]).toEqual({ action: 'ignore' });
+    expect(lastPush()).toEqual({ pathname: '/txn/confirm', params: { id: t.id } });
+    await a.unmount();
+    jest.spyOn(Alert, 'alert').mockImplementationOnce((_t, _m, buttons) => buttons?.find((x) => x.text === 'Ignore')?.onPress?.());
+    await render(<s.Wrap><ConfirmStep /></s.Wrap>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Ignore this message' }).props.accessibilityState.disabled).toBe(false));
+    await fireEvent.press(screen.getByRole('button', { name: 'Ignore this message' }));
+    await waitFor(() => expect(mockRouter.push).toHaveBeenLastCalledWith({ pathname: '/txn/result', params: { id: t.id } }));
+    expect((await s.repo.getPending(t.id))?.state).toBe('ignored');
+  });
+  it('a last-4 that no longer resolves gets honest copy', async () => {
+    const t = txnFrom('idfc-006'); // ends 6507
+    const s = await setup({ txns: [t], mappings: [BANK2] });
+    mockParams = { id: t.id };
+    await render(<s.Wrap><TransactionScreen /></s.Wrap>);
+    expect(await screen.findByText('No saved account ends in 6507 any more. Choose the one this message belongs to.')).toBeTruthy();
+  });
+});
+
+describe('navigation guards and robustness (R53 3f-3h)', () => {
+  it('a double tap on an Inbox row pushes once', async () => {
+    const t = txnFrom('idfc-006');
+    const { Wrap } = await setup({ txns: [t] });
+    await render(<Wrap><Inbox /></Wrap>);
+    const row = await screen.findByTestId(`row-${t.id}`);
+    await act(async () => {
+      void fireEvent.press(row);
+      void fireEvent.press(row);
+    });
+    expect(mockRouter.push).toHaveBeenCalledTimes(1);
+  });
+  it('a double tap on an answer pushes once', async () => {
+    const t = txnFrom('idfc-006');
+    const s = await setup({ txns: [t] });
+    mockParams = { id: t.id };
+    await render(<s.Wrap><TransactionScreen /></s.Wrap>);
+    const btn = await screen.findByRole('button', { name: 'Customer advance' });
+    await act(async () => {
+      void fireEvent.press(btn);
+      void fireEvent.press(btn);
+    });
+    expect(mockRouter.push).toHaveBeenCalledTimes(1);
+  });
+  it('pull to refresh survives a rejecting cycle', async () => {
+    const { Wrap, runCycle } = await setup();
+    runCycle.mockRejectedValueOnce(new Error('boom'));
+    await render(<Wrap><Inbox /></Wrap>);
+    await screen.findByText(EMPTY_TITLE);
+    await act(async () => { await screen.getByTestId('inbox-list').props.refreshControl.props.onRefresh(); });
+    expect(screen.getByTestId('inbox-list').props.refreshControl.props.refreshing).toBe(false);
+  });
+  it('Result "Next" skips a txn whose answer is already queued', async () => {
+    const done = txnFrom('idfc-006', { state: 'created', createdDocs: [{ doctype: 'Payment Entry', name: 'PE-1', docstatus: 0 }] });
+    const queued = txnFrom('idfc-040'); // newest
+    const plain = txnFrom('idfc-034');
+    const s = await setup({ txns: [done, queued, plain] });
+    await s.repo.enqueue({ id: 'q1', txnId: queued.id, plan: { steps: [], summary: [], needsInrAmount: false }, progress: { stepIndex: 0, created: [] }, attempts: 0, status: 'pending' });
+    mockParams = { id: done.id };
+    await render(<s.Wrap><ResultScreen /></s.Wrap>);
+    expect(await screen.findByRole('button', { name: 'Next: GOOGLESERVIS, 1 left' })).toBeTruthy();
   });
 });

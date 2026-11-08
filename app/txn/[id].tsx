@@ -4,7 +4,8 @@ import { actionsFor, nextStep, type ActionType } from '../../src/inbox/actions';
 import { FlowAnswered, FlowGone, FlowLoading } from '../../src/inbox/FlowStates';
 import type { FlowDraft } from '../../src/inbox/flow';
 import { accountLabel, amountA11y, dateTimeLabel, kindLabel, plainAmount, shortAccount } from '../../src/inbox/format';
-import { stepHref, useTxnFlow, useTxnSuggestions } from '../../src/inbox/hooks';
+import { stepHref, useTapGuard, useTxnFlow, useTxnSuggestions } from '../../src/inbox/hooks';
+import { useFlowStore } from '../../src/inbox/store';
 import { draftFromSuggestion, suggestionCard, usableSuggestions } from '../../src/inbox/suggestions';
 import { ActionSheet, BackLink, Banner, ChoiceRow, DetailCard, Gap, Screen, Stack, SuggestionCard, Txt, type Detail } from '../../src/ui';
 
@@ -15,6 +16,8 @@ export default function TransactionScreen() {
   const router = useRouter();
   const f = useTxnFlow(id);
   const { suggestions, invoiceParty } = useTxnSuggestions(f.txn, f.rules);
+  const tap = useTapGuard();
+  const sending = useFlowStore((st) => (id ? !!st.sending[id] : false));
   const toInbox = () => router.navigate('/(tabs)/inbox');
 
   if (f.status === 'loading') return <FlowLoading />;
@@ -28,10 +31,11 @@ export default function TransactionScreen() {
   const candidates = f.mappings.filter((m) => m.kind === txn.accountType);
   const top = mapping ? usableSuggestions(txn, suggestions, { drawings: hasDrawings })[0] : undefined;
 
-  const go = (d: FlowDraft) => {
-    f.start(d);
-    router.push(stepHref(nextStep(txn, d), txn.id));
-  };
+  const go = (d: FlowDraft) =>
+    tap(() => {
+      f.start(d);
+      router.push(stepHref(nextStep(txn, d), txn.id));
+    });
   const choose = (type: string) => {
     const t = type as ActionType;
     const d: FlowDraft = { mapping: mapping ?? undefined, action: t };
@@ -54,9 +58,14 @@ export default function TransactionScreen() {
     key: a.type,
     label: a.label,
     hint: a.hint,
-    disabled: a.type === 'personal' && !hasDrawings,
+    disabled: sending || (a.type === 'personal' && !hasDrawings),
     disabledReason: a.type === 'personal' && !hasDrawings ? DRAWINGS_MISSING : undefined,
   }));
+  // Ignore needs no account: it is offered even while the account is unknown.
+  const ignoreOnly = items.filter((a) => a.key === 'ignore');
+  const pickerText = txn.accountLast4
+    ? `No saved ${txn.accountType === 'card' ? 'card' : 'account'} ends in ${txn.accountLast4} any more. Choose the one this message belongs to.`
+    : `The message does not say which of your ${txn.accountType === 'card' ? 'cards' : 'bank accounts'} this was. Choose one.`;
 
   return (
     <Screen top={<BackLink label="Inbox" onPress={() => (router.canGoBack() ? router.back() : toInbox())} />}>
@@ -67,12 +76,13 @@ export default function TransactionScreen() {
       </Stack>
       <Gap size={4} />
       <DetailCard rows={rows} />
+      {sending ? <Banner tone="info" message="Still sending your previous answer. Wait for it to finish." testID="sending" /> : null}
       {txn.error ? <Banner tone="error" title="The last attempt did not work" message={txn.error} /> : null}
 
       {!f.resolved ? (
         <>
           <Txt variant="heading" header>Which account is this?</Txt>
-          <Txt variant="muted">{`The message does not say which of your ${txn.accountType === 'card' ? 'cards' : 'bank accounts'} this was. Choose one.`}</Txt>
+          <Txt variant="muted">{pickerText}</Txt>
           <Gap size={3} />
           <Stack gap={1}>
             {candidates.map((m) => (
@@ -88,6 +98,13 @@ export default function TransactionScreen() {
           {candidates.length === 0 ? (
             <Banner tone="warn" title="No matching account" message={`No ${txn.accountType === 'card' ? 'card' : 'bank account'} is set up in AutoLedger. Run setup again in Settings to add it.`} actionLabel="Open Settings" onAction={() => router.navigate('/(tabs)/settings')} />
           ) : null}
+          {!mapping ? (
+            <>
+              <Txt variant="muted">Or, if this message is not a business transaction:</Txt>
+              <Gap size={2} />
+              <ActionSheet items={ignoreOnly} onSelect={choose} />
+            </>
+          ) : null}
         </>
       ) : null}
 
@@ -96,7 +113,7 @@ export default function TransactionScreen() {
           <Txt variant="heading" header>What was this?</Txt>
           <Gap size={3} />
           {top ? (
-            <SuggestionCard {...suggestionCard(top, invoiceParty)} onPress={() => go({ mapping, ...draftFromSuggestion(top, invoiceParty) })} />
+            <SuggestionCard {...suggestionCard(top, invoiceParty)} onPress={() => !sending && go({ mapping, ...draftFromSuggestion(top, invoiceParty) })} />
           ) : null}
           <ActionSheet items={items} onSelect={choose} />
           {!hasDrawings ? <Banner tone="info" message={`${DRAWINGS_MISSING} to use Personal.`} actionLabel="Open Settings" onAction={() => router.navigate('/(tabs)/settings')} /> : null}

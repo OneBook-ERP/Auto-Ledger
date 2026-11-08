@@ -1,7 +1,7 @@
 import { PlanError } from '../core/plan';
 import type { ActionPlan } from '../core/types';
 import { ErpNetworkError, ErpValidationError } from '../erp/client';
-import { OFFLINE_MESSAGE, erpDocUrl, erpNewDocUrl, failedDoctype, outcomeOf, planErrorMessage } from './outcome';
+import { OFFLINE_MESSAGE, erpDocUrl, readableFailure, erpNewDocUrl, failedDoctype, outcomeOf, planErrorMessage } from './outcome';
 
 const plan: ActionPlan = {
   steps: [
@@ -64,5 +64,20 @@ describe('ERPNext links', () => {
     expect(erpDocUrl('https://x.example', 'Payment Entry', 'ACC-PAY-2026-00041')).toBe('https://x.example/app/payment-entry/ACC-PAY-2026-00041');
     expect(erpDocUrl('https://x.example', 'Journal Entry', 'JV/1 #2')).toBe('https://x.example/app/journal-entry/JV%2F1%20%232');
     expect(erpNewDocUrl('https://x.example', 'Employee')).toBe('https://x.example/app/employee/new');
+  });
+});
+
+describe('readableFailure', () => {
+  it('uses the runner note when it describes this error (also when identical to the previous one)', () => {
+    const note = 'Could not create the Payment Entry. ERPNext needs these fields: Gender. Fill them in ERPNext, or complete this entry in ERPNext.';
+    expect(readableFailure(new ErpValidationError('Value missing', 417, ['Gender']), note)).toBe(note);
+    const plain = 'Could not create the Payment Entry. Party is disabled. The draft X was not removed.';
+    expect(readableFailure(new ErpValidationError('Party is disabled', 417), plain)).toBe(plain);
+    expect(readableFailure(new ErpValidationError('closed', 417, undefined, true), 'Could not create the Payment Entry. The accounting period is closed for this date.')).toContain('closed');
+  });
+  it('ignores a stale note from a different failure', () => {
+    expect(readableFailure(new ErpValidationError('Already processed', 0), 'Could not create the Payment Entry. ERPNext needs these fields: Gender.')).toBeNull();
+    expect(readableFailure(new ErpValidationError('x', 417, ['Gender']), 'Could not create the Payment Entry. Party is disabled.')).toBeNull();
+    expect(readableFailure(new ErpValidationError('x', 417), null)).toBeNull();
   });
 });

@@ -8,16 +8,20 @@ const str = (v: unknown) => (typeof v === 'string' ? v : v === undefined || v ==
 const money = (major: unknown) => formatInr(Math.round(Number(major) * 100));
 const NAME_FIELDS = ['customer_name', 'supplier_name', 'first_name', 'employee_name'];
 
+/** customer_group -> "Customer group" (fallback when ERPNext gave no label). */
+const humanize = (f: string) => (f.charAt(0).toUpperCase() + f.slice(1)).replace(/_/g, ' ');
+
 export function stepTitle(s: PlanStep): string {
   return s.kind === 'create_party' ? `New ${s.doctype}` : s.doctype;
 }
 
-export function describeStep(s: PlanStep): Detail[] {
+/** `labels`: human labels of a new party's fields (from getRequiredFields); raw field names are never shown. */
+export function describeStep(s: PlanStep, labels: Record<string, string> = {}): Detail[] {
   const b = s.body;
   if (s.kind === 'create_party') {
     const nameKey = NAME_FIELDS.find((k) => str(b[k]));
     const rows: Detail[] = [{ label: 'Name', value: nameKey ? str(b[nameKey]) : '' }];
-    for (const [k, v] of Object.entries(b)) if (k !== nameKey) rows.push({ label: k, value: str(v) });
+    for (const [k, v] of Object.entries(b)) if (k !== nameKey) rows.push({ label: labels[k] ?? humanize(k), value: str(v) });
     return rows;
   }
   const rows: Detail[] = [];

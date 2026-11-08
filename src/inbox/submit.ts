@@ -5,7 +5,7 @@ import type { ActionChoice, ActionPlan, PendingTxn, Rule } from '../core/types';
 import type { Repo } from '../data/repo';
 import { PERMISSION_DENIED_MESSAGE, type runPlan as RunPlan } from '../outbox/runner';
 import type { InboxErp } from './erp';
-import { outcomeOf, type Outcome } from './outcome';
+import { UNKNOWN_FAILURE, outcomeOf, readableFailure, type Outcome } from './outcome';
 
 const running = new Set<string>();
 export const isSubmitting = (txnId: string) => running.has(txnId);
@@ -21,6 +21,19 @@ async function remember(repo: Repo, txn: PendingTxn, choice: ActionChoice): Prom
   }
 }
 
+async function afterThrow(repo: Repo, id: string): Promise<Outcome> {
+  try {
+    const t = await repo.getPending(id);
+    if (!t) return { kind: 'gone' };
+    if (t.state === 'created' || t.state === 'submitted' || t.state === 'ignored') {
+      return { kind: 'created', docs: t.createdDocs.map(({ doctype, name }) => ({ doctype, name })) };
+    }
+  } catch {
+    // the repo itself is failing: say so plainly below
+  }
+  return { kind: 'error', message: UNKNOWN_FAILURE, missingFields: [], doctype: null, closedPeriod: false };
+}
+
 export async function submitAnswer(
   deps: SubmitDeps,
   a: { txn: PendingTxn; plan: ActionPlan; choice: ActionChoice; remember: boolean },
@@ -30,8 +43,13 @@ export async function submitAnswer(
   if (running.has(id)) return { kind: 'busy' };
   running.add(id);
   try {
-    const before = (await repo.getPending(id))?.error ?? null;
-    const r = await deps.runPlan(id, a.plan, { repo, erp }, { userAction: true });
+    let r: Awaited<ReturnType<typeof RunPlan>>;
+    try {
+      r = await deps.runPlan(id, a.plan, { repo, erp }, { userAction: true });
+    } catch {
+      // runPlan throws for a missing txn or a local storage failure: report what the repo really holds.
+      return await afterThrow(repo, id);
+    }
     if (r.status === 'created') {
       if (a.remember) {
         try {
@@ -53,8 +71,14 @@ export async function submitAnswer(
       if (valid) return { kind: 'error', message: `${PERMISSION_DENIED_MESSAGE}.`, missingFields: [], doctype: null, closedPeriod: false };
       return { kind: 'login' };
     }
-    const after = (await repo.getPending(id))?.error ?? null;
-    return outcomeOf(r, after && after !== before ? after : null, a.plan);
+    if (r.retryable) return outcomeOf(r, null, a.plan);
+    let note: string | null = null;
+    try {
+      note = (await repo.getPending(id))?.error ?? null;
+    } catch {
+      note = null;
+    }
+    return outcomeOf(r, readableFailure(r.error, note), a.plan);
   } finally {
     running.delete(id);
   }
