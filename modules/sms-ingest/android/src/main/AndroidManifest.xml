@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Live capture of configured bank senders only. -->
   <uses-permission android:name="android.permission.RECEIVE_SMS"/>
+  <!-- 7-day backfill of configured bank senders (spec 7.3). -->
+  <uses-permission android:name="android.permission.READ_SMS"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
   <application>

@@ -12,6 +12,8 @@ ios/
 .env.*.local
 !.env.example
 !/modules/**/android/
+/modules/**/android/.gradle/
+/modules/**/android/.cxx/
 
 # copied from /templates by the sms-ingest copyTemplates Gradle task
 /modules/sms-ingest/android/src/main/assets/templates/

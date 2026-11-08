@@ -17,7 +17,8 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "app.onebook.autoledger"
+      "package": "app.onebook.autoledger",
+      "allowBackup": false
     },
     "web": {
       "bundler": "metro"
