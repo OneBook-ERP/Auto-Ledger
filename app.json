@@ -18,7 +18,8 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "app.onebook.autoledger",
-      "allowBackup": false
+      "allowBackup": false,
+      "versionCode": 1
     },
     "web": {
       "bundler": "metro"
@@ -27,6 +28,7 @@
     "plugins": [
       "expo-router",
       ["expo-build-properties", { "android": { "minSdkVersion": 26 } }]
-    ]
+    ],
+    "runtimeVersion": { "policy": "appVersion" }
   }
 }
