@@ -132,22 +132,97 @@ export async function createDraft(c: ErpClient, doctype: 'Payment Entry' | 'Jour
   return { name };
 }
 
+export type UtrHit = { doctype: string; name: string; docstatus: number };
+
+const UTR_FIELDS = [['Payment Entry', 'reference_no'], ['Journal Entry', 'cheque_no']] as const;
+/** Per doctype: more than this many documents with one reference is not something this app relies on. */
+export const UTR_HITS_PER_DOCTYPE = 20;
+
 /**
- * Exact match (idempotency for the app's own documents). Cancelled documents (docstatus 2) are ignored so
- * they never block a new draft. The hit may be docstatus 0 (draft) OR 1 (submitted by the accountant):
- * callers must read `docstatus`. Earliest by creation wins when several match.
+ * Every non-cancelled Payment Entry (reference_no) and Journal Entry (cheque_no) carrying `reference`, Payment
+ * Entries first, each doctype oldest first (creation asc), up to 20 per doctype. A real UTR can be shared by
+ * several txns (a reversal or refund, both legs of an own-account transfer), so callers choose among the hits.
+ * A hit may be docstatus 0 (draft) OR 1 (submitted by the accountant): callers must read `docstatus`.
  */
-export async function findDraftByUtr(c: ErpClient, reference: string): Promise<{ doctype: string; name: string; docstatus: number } | null> {
-  for (const [doctype, field] of [['Payment Entry', 'reference_no'], ['Journal Entry', 'cheque_no']] as const) {
+export async function findDraftsByUtr(c: ErpClient, reference: string): Promise<UtrHit[]> {
+  const out: UtrHit[] = [];
+  for (const [doctype, field] of UTR_FIELDS) {
     const rows = await list<{ name: string; docstatus: number }>(c, doctype, {
       fields: ['name', 'docstatus'],
       filters: [[field, '=', reference], ['docstatus', '!=', 2]],
       order_by: 'creation asc',
-      limit_page_length: 1,
+      limit_page_length: UTR_HITS_PER_DOCTYPE,
     });
-    if (rows.length > 0) return { doctype, name: rows[0].name, docstatus: rows[0].docstatus };
+    for (const r of rows) out.push({ doctype, name: r.name, docstatus: r.docstatus });
   }
+  return out;
+}
+
+/**
+ * Exact match (idempotency for the app's own documents): the first of findDraftsByUtr, or null. Cancelled
+ * documents (docstatus 2) are ignored so they never block a new draft.
+ */
+export async function findDraftByUtr(c: ErpClient, reference: string): Promise<UtrHit | null> {
+  return (await findDraftsByUtr(c, reference))[0] ?? null;
+}
+
+/** The fields of a Payment Entry / Journal Entry the runner compares with a planned document (KL1). */
+export type DraftSummary = {
+  doctype: string;
+  name: string;
+  docstatus: number;
+  company: string | null;
+  paymentType: string | null;
+  paidFrom: string | null;
+  paidTo: string | null;
+  /** Minor units (paise). */
+  paidAmountMinor: number | null;
+  partyType: string | null;
+  party: string | null;
+  /** Journal Entry: total debit in minor units. */
+  totalDebitMinor: number | null;
+  /** Journal Entry: the account rows (debit/credit in minor units, account currency); [] when there are none. */
+  accounts: DraftAccountRow[];
+};
+
+export type DraftAccountRow = { account: string | null; debitMinor: number; creditMinor: number; partyType: string | null; party: string | null };
+
+const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : null);
+const minorOf = (v: unknown): number | null => {
+  if (typeof v === 'number' && Number.isFinite(v)) return toMinor(v);
+  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return toMinor(v);
   return null;
+};
+
+function accountRow(r: Record<string, unknown>): DraftAccountRow {
+  return {
+    account: str(r.account),
+    debitMinor: minorOf(r.debit_in_account_currency) ?? minorOf(r.debit) ?? 0,
+    creditMinor: minorOf(r.credit_in_account_currency) ?? minorOf(r.credit) ?? 0,
+    partyType: str(r.party_type),
+    party: str(r.party),
+  };
+}
+
+/** Reads one document (GET /api/resource/{doctype}/{name}) and returns the fields of DraftSummary. */
+export async function getDraftSummary(c: ErpClient, doctype: string, name: string): Promise<DraftSummary> {
+  const r = await c.get<{ data?: Record<string, unknown> }>(`${resource(doctype)}/${encodeSegment(name)}`);
+  const d = r?.data;
+  if (!d || typeof d !== 'object' || typeof d.docstatus !== 'number') throw unexpectedResponse();
+  return {
+    doctype,
+    name,
+    docstatus: d.docstatus,
+    company: str(d.company),
+    paymentType: str(d.payment_type),
+    paidFrom: str(d.paid_from),
+    paidTo: str(d.paid_to),
+    paidAmountMinor: minorOf(d.paid_amount),
+    partyType: str(d.party_type),
+    party: str(d.party),
+    totalDebitMinor: minorOf(d.total_debit),
+    accounts: Array.isArray(d.accounts) ? (d.accounts as unknown[]).filter((r): r is Record<string, unknown> => !!r && typeof r === 'object').map(accountRow) : [],
+  };
 }
 
 export async function deleteDraft(c: ErpClient, doctype: string, name: string): Promise<void> {

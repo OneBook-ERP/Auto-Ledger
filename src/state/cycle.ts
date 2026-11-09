@@ -1,4 +1,6 @@
 import type { AppStateStatus } from 'react-native';
+import type { Repo } from '../data/repo';
+import { cycleCountsAsSynced, LAST_SYNCED_KEY } from '../home/viewModel';
 import type { CycleSummary } from '../ingest/pipeline';
 
 export type CycleRunner = { trigger(): Promise<void> };
@@ -43,4 +45,36 @@ export function attachAppStateCycle(runner: CycleRunner, appState: AppStateLike)
     if (s === 'active') void runner.trigger();
   });
   return () => sub.remove();
+}
+
+export type AfterCycleDeps = {
+  repo: Pick<Repo, 'setSetting'> | null;
+  now: () => number;
+  refreshBanners: () => Promise<void>;
+  /** Re-reads Home (drafts, answers, sync time). Runs whatever happened before it (finally). */
+  invalidateHome: () => unknown;
+};
+
+/**
+ * End of a foreground cycle: records Home's "last synced" when the cycle counts as synced (spec section 14,
+ * R50), refreshes the banners, and ALWAYS invalidates Home, even when the banner refresh rejects.
+ */
+export async function afterCycle(summary: CycleOutcome | null, d: AfterCycleDeps): Promise<void> {
+  try {
+    if (d.repo && cycleCountsAsSynced(summary)) {
+      try {
+        await d.repo.setSetting(LAST_SYNCED_KEY, String(d.now()));
+      } catch {
+        // best effort
+      }
+    }
+    await d.refreshBanners();
+  } finally {
+    try {
+      const r = d.invalidateHome();
+      if (r && typeof (r as Promise<unknown>).then === 'function') (r as Promise<unknown>).catch(() => undefined);
+    } catch {
+      // best effort
+    }
+  }
 }

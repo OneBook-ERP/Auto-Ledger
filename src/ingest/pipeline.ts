@@ -18,8 +18,10 @@
 // - The runner's txn writes (re-read then upsert) are not atomic with mergeInto; an enrichment landing
 //   between the two can be overwritten by the runner's write of the pre-enrichment fields. Rare (foreground
 //   only), and the next SMS for that txn is not affected.
-// - Real UTRs can be shared across txns (KL1/KL2); correlation and the runner's reference lookup can then
-//   pick the wrong partner/document. Tracked for Task 20.
+// - Real UTRs can be shared across txns (reversals, refunds, both legs of an own-account transfer). The
+//   runner handles it (KL1/KL2, Task 20A): it adopts another txn's document only when it is the same Internal
+//   Transfer, and cleanup never deletes a document another txn lists. Correlation can still pick the wrong
+//   partner SMS for a shared UTR.
 // - The `merged_sms:<hash>` markers in settings grow by one row per merged SMS and are never pruned.
 // - unrecognised_count can over-count if the process dies between its write and the ack (display only).
 // - Two genuinely identical SMS (same sender and same normalised text) collapse into one txn by design
@@ -305,7 +307,35 @@ export type CycleSummary = {
   drain?: DrainResult;
   poll?: PollResult;
   failedSteps: CycleStep[];
+  /**
+   * R50: true only when ERPNext actually answered during this cycle: some ERPNext call made by the drain or the
+   * status poll succeeded, or (when none was made, e.g. an empty outbox) a final checkSession() returned true.
+   * Not asked (false) when a step failed or the drain did not finish, since such a cycle never counts as synced.
+   */
+  erpReached?: boolean;
 };
+
+/**
+ * Wraps `erp` so that `onAnswer` runs whenever one of its async calls resolves (ERPNext answered).
+ * checkSession counts only when it returns true (false means the server refused the credentials).
+ */
+function watchAnswers<T extends object>(erp: T, onAnswer: () => void): T {
+  return new Proxy(erp, {
+    get(target, prop, receiver) {
+      const v = Reflect.get(target, prop, receiver);
+      if (typeof v !== 'function') return v;
+      return (...args: unknown[]) => {
+        const r = (v as (...a: unknown[]) => unknown).apply(target, args);
+        if (r && typeof (r as Promise<unknown>).then === 'function') {
+          (r as Promise<unknown>).then((x) => {
+            if (prop !== 'checkSession' || x === true) onAnswer();
+          }, () => undefined);
+        }
+        return r;
+      };
+    },
+  });
+}
 
 /**
  * What the app runs on foreground and after setup: syncSenderPatterns -> ingest -> ensureBackfill ->
@@ -321,10 +351,23 @@ export async function runForegroundCycle(deps: PipelineDeps): Promise<CycleSumma
       return undefined;
     }
   };
+  let answered = false;
+  const erp = watchAnswers(deps.erp, () => {
+    answered = true;
+  });
   out.senderPatterns = await step('syncSenderPatterns', () => syncSenderPatterns(deps));
   out.ingest = await step('ingest', () => ingest(deps));
   out.backfill = await step('ensureBackfill', () => ensureBackfill(deps));
-  out.drain = await step('drainOutbox', () => drainOutbox(deps));
-  out.poll = await step('pollStatuses', () => pollStatuses(deps));
+  out.drain = await step('drainOutbox', () => drainOutbox({ ...deps, erp }));
+  out.poll = await step('pollStatuses', () => pollStatuses({ ...deps, erp }));
+  const finished = out.drain?.stoppedBecause === 'empty' || out.drain?.stoppedBecause === 'limit';
+  if (!answered && out.failedSteps.length === 0 && finished && !out.poll?.needsLogin) {
+    try {
+      answered = (await deps.erp.checkSession()) === true;
+    } catch {
+      answered = false; // offline: not synced, but not a failed step either
+    }
+  }
+  out.erpReached = answered;
   return out;
 }

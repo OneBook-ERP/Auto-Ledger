@@ -3,20 +3,20 @@
 import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState, Text, View } from 'react-native';
-import type { Session } from '../erp/auth';
+import { logoutSession, type Session } from '../erp/auth';
 import type { ErpClient } from '../erp/client';
 import type { Repo, SqlDriver } from '../data/repo';
 import { NEEDS_LOGIN_SINCE_KEY } from '../ingest/drain';
 import { runForegroundCycle, type CycleSummary } from '../ingest/pipeline';
 import { getAppRepo } from './appRepo';
 import { TEMPLATES_URL } from './config';
-import { attachAppStateCycle, createCycleRunner } from './cycle';
+import { afterCycle, attachAppStateCycle, createCycleRunner } from './cycle';
 import { buildErp } from './erp';
 import { getNative, type SmsNative } from './native';
 import { clearSession, persistSession, restoreSession, summarize } from './session';
 import { useUiStore } from './store';
-import { cycleCountsAsSynced, LAST_SYNCED_KEY } from '../home/viewModel';
 import { maybeRefreshTemplates } from './templatesSchedule';
+import { setCrashReportSite } from './sentry';
 
 export const SETUP_DONE_KEY = 'setupDone';
 export const SITE_URL_KEY = 'site_url';
@@ -138,20 +138,14 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
           const { erp } = buildErp(s, { fetchImpl });
           return runForegroundCycle({ repo: r, native, erp, now, fetchImpl });
         },
-        after: async (summary) => {
-          // Home's "last synced": only a cycle where every step worked counts (spec section 14).
-          const r = repoRef.current;
-          if (r && cycleCountsAsSynced(summary)) {
-            try {
-              await r.setSetting(LAST_SYNCED_KEY, String(now()));
-            } catch {
-              // best effort
-            }
-          }
-          await refreshBanners();
-          // Whatever the cycle changed (drafts, answers, sync time) must reach Home.
-          void queryClient.invalidateQueries({ queryKey: ['home'] });
-        },
+        // Home's "last synced" only after an ERPNext round-trip (R50); Home is invalidated whatever happens.
+        after: (summary) =>
+          afterCycle(summary, {
+            repo: repoRef.current,
+            now,
+            refreshBanners,
+            invalidateHome: () => queryClient.invalidateQueries({ queryKey: ['home'] }),
+          }),
       }),
     [native, fetchImpl, now, refreshBanners, queryClient],
   );
@@ -174,6 +168,8 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
   }, [ready, signedIn, setupDone, runner, startCycle, native, templatesUrl, now, fetchImpl]);
 
   const client = useMemo(() => (full ? buildErp(full, { fetchImpl }).client : null), [full, fetchImpl]);
+  // Crash reports never name the ERPNext site (the scrubber replaces this host).
+  useEffect(() => setCrashReportSite(full?.siteUrl ?? null), [full]);
 
   const value = useMemo<AppContextValue | null>(() => {
     if (!repo) return null;
@@ -208,6 +204,9 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
         if (useUiStore.getState().setupDone) void startCycle();
       },
       async signOut() {
+        // Best effort, not awaited: end the server session behind the login's sid cookie (Task 16 minor).
+        const was = sessionRef.current;
+        if (was) void logoutSession({ siteUrl: was.siteUrl, fetchImpl, allowHttp: __DEV__ });
         await clearSession();
         sessionRef.current = null;
         queryClient.clear();
@@ -224,7 +223,7 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
       },
       runCycle: () => startCycle(),
     };
-  }, [repo, native, client, startCycle, queryClient]);
+  }, [repo, native, client, startCycle, queryClient, fetchImpl]);
 
   if (failed) {
     return (

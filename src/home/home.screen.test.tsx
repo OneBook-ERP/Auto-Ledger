@@ -214,6 +214,25 @@ describe('freshness', () => {
     }
   });
 
+  it('returning to the foreground does not fetch the figures from ERPNext again (the cycle end invalidates them)', async () => {
+    const client = fakeClient();
+    try {
+      await setup({ client });
+      await waitFor(() => screen.getByLabelText(/^To pay/));
+      const gets = client.get.mock.calls.length;
+      const calls = client.call.mock.calls.length;
+      await act(async () => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+      await act(async () => undefined);
+      expect(client.get.mock.calls.length).toBe(gets);
+      expect(client.call.mock.calls.length).toBe(calls);
+    } finally {
+      await act(async () => focusManager.setFocused(undefined));
+    }
+  });
+
   it('a minute tick re-evaluates the clock without any refetch', async () => {
     let clock = Date.now();
     const spy = jest.spyOn(Date, 'now').mockImplementation(() => clock);

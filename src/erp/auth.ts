@@ -136,6 +136,23 @@ export async function loginWithKeys(args: {
   return { siteUrl, apiKey: args.apiKey, apiSecret: args.apiSecret, user, roles };
 }
 
+export const LOGOUT_TIMEOUT_MS = 5000;
+
+/**
+ * Best effort: asks the site to end the Frappe session behind the `sid` cookie that the password login left in
+ * the platform cookie jar (POST /api/method/logout with that cookie and NO token, so it is the cookie's session
+ * that ends). Short timeout; never throws; resolves whatever happens. Callers must not wait for it.
+ */
+export async function logoutSession(args: { siteUrl: string; fetchImpl?: typeof fetch; allowHttp?: boolean; timeoutMs?: number }): Promise<void> {
+  try {
+    const f = args.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
+    const base = normalizeSiteUrl(args.siteUrl, { allowHttp: args.allowHttp ?? false });
+    await erpFetch(f, `${base}/api/method/logout`, { method: 'POST', headers: JSON_HEADERS, credentials: 'include', body: '{}' }, args.timeoutMs ?? LOGOUT_TIMEOUT_MS);
+  } catch {
+    // offline, already logged out, http in release, anything: signing out on the phone goes ahead regardless
+  }
+}
+
 const SESSION_KEY = 'autoledger.session';
 
 export async function saveSession(session: Session, store: { setItem(key: string, value: string): Promise<void> }): Promise<void> {

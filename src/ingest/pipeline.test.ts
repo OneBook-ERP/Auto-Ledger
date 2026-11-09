@@ -1,3 +1,5 @@
+import { ErpNetworkError } from '../erp/client';
+import { outboxIdFor } from '../outbox/runner';
 import fixtures from '../../fixtures/sms/idfc.json';
 import idfc from '../../templates/idfc.json';
 import { createRepo, type Repo } from '../data/repo';
@@ -521,7 +523,8 @@ describe('ensureBackfill', () => {
 // ---------- foreground cycle ----------
 
 class NoErp implements DrainErp {
-  async findDraftByUtr() { return null; }
+  async findDraftsByUtr(_ref: string): Promise<{ doctype: string; name: string; docstatus: number }[]> { return []; }
+  async getDraftSummary(): Promise<never> { throw new Error('unused'); }
   async createDraft(): Promise<{ name: string }> { throw new Error('unused'); }
   async deleteDraft() { /* unused */ }
   async searchParties() { return []; }
@@ -544,6 +547,7 @@ describe('runForegroundCycle', () => {
       drain: { ran: 0, stoppedBecause: 'empty' },
       poll: { checked: 0, submitted: 0, cancelled: 0, missing: 0 },
       failedSteps: [],
+      erpReached: true,
     });
   });
 
@@ -566,5 +570,75 @@ describe('runForegroundCycle', () => {
     const r = await runForegroundCycle({ ...deps, repo: { ...repo, nextOutbox: async () => { throw new Error('db'); } }, native, erp: new NoErp() });
     expect(r.failedSteps).toEqual(['ensureBackfill', 'drainOutbox']);
     expect(r.ingest).toEqual(empty);
+  });
+});
+
+describe('runForegroundCycle: ERPNext round-trip (R50)', () => {
+  const offline = () => { const e = new NoErp(); e.checkSession = async () => { throw new Error('offline'); }; return e; };
+
+  it('offline with an empty outbox: no round-trip, erpReached false', async () => {
+    const { deps } = await setup();
+    const r = await runForegroundCycle({ ...deps, erp: offline() });
+    expect(r.drain).toEqual({ ran: 0, stoppedBecause: 'empty' });
+    expect(r.failedSteps).toEqual([]);
+    expect(r.erpReached).toBe(false);
+  });
+
+  it('logged out with an empty outbox (checkSession false): erpReached false', async () => {
+    const { deps } = await setup();
+    const erp = new NoErp();
+    erp.checkSession = async () => false;
+    expect((await runForegroundCycle({ ...deps, erp })).erpReached).toBe(false);
+  });
+
+  it('online with an empty outbox: a final checkSession proves the round-trip', async () => {
+    const { deps } = await setup();
+    const erp = new NoErp();
+    const spy = jest.spyOn(erp, 'checkSession');
+    expect((await runForegroundCycle({ ...deps, erp })).erpReached).toBe(true);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a successful ERPNext call during the cycle counts; no extra checkSession', async () => {
+    const { deps, repo } = await setup();
+    await repo.upsertPending({
+      id: 't-created', mergedCount: 1, state: 'created', createdDocs: [{ doctype: 'Payment Entry', name: 'PE-1', docstatus: 0 }], error: null,
+      kind: 'ca_credit', direction: 'in', amountMinor: 100, currency: 'INR', occurredOn: '2026-01-02', occurredTime: null, accountType: 'bank',
+      accountLast4: '6507', counterparty: null, utr: null, merchant: null, balanceMinor: null, sender: 'AX-IDFCFB', receivedAt: 1, rawHash: 'h-created',
+    });
+    const erp = offline();
+    erp.getDocStatuses = async () => ({ 'Payment Entry:PE-1': 0 });
+    const r = await runForegroundCycle({ ...deps, erp });
+    expect(r.failedSteps).toEqual([]);
+    expect(r.erpReached).toBe(true);
+  });
+
+  it('drain stopped on retry_later: erpReached false, checkSession not asked', async () => {
+    const { deps, repo } = await setup();
+    await repo.upsertPending({
+      id: 't-q', mergedCount: 1, state: 'new', createdDocs: [], error: null,
+      kind: 'ca_credit', direction: 'in', amountMinor: 100, currency: 'INR', occurredOn: '2026-01-02', occurredTime: null, accountType: 'bank',
+      accountLast4: '6507', counterparty: null, utr: null, merchant: null, balanceMinor: null, sender: 'AX-IDFCFB', receivedAt: 1, rawHash: 'h-q',
+    });
+    const plan = { steps: [{ kind: 'create_doc' as const, doctype: 'Payment Entry', body: { reference_no: 'AL-q' } }], summary: [], needsInrAmount: false };
+    await repo.enqueue({ id: outboxIdFor('t-q', plan), txnId: 't-q', plan, progress: { stepIndex: 0, created: [] }, attempts: 0, status: 'pending' });
+    const erp = new NoErp();
+    erp.findDraftsByUtr = async () => { throw new ErpNetworkError('offline'); };
+    const spy = jest.spyOn(erp, 'checkSession');
+    const r = await runForegroundCycle({ ...deps, erp });
+    expect(r.drain).toEqual({ ran: 1, stoppedBecause: 'retry_later' });
+    expect(r.erpReached).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('a cycle with failed steps does not ask checkSession', async () => {
+    const { deps, native } = await setup();
+    native.peek = async () => { throw new Error('bridge'); };
+    const erp = new NoErp();
+    const spy = jest.spyOn(erp, 'checkSession');
+    const r = await runForegroundCycle({ ...deps, native, erp });
+    expect(r.failedSteps).toEqual(['ingest']);
+    expect(r.erpReached).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
   });
 });

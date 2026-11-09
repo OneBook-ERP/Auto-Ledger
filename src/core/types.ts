@@ -54,8 +54,9 @@ export type Suggestion = {
 export type OutboxOp = {
   id: string; txnId: string; plan: ActionPlan;
   // `attempting`: index of a step whose server write (createParty/createDraft) was started but not yet
-  // recorded as done (write-ahead marker; a lost reply leaves it set).
-  progress: { stepIndex: number; created: { doctype: string; name: string }[]; attempting?: number };
+  // recorded as done (write-ahead marker; a lost reply leaves it set). `adopted` on a created entry: the step
+  // reused a document found by reference that this app did not create (never deleted by cleanup).
+  progress: { stepIndex: number; created: { doctype: string; name: string; adopted?: boolean }[]; attempting?: number };
   attempts: number; status: 'pending'|'done'|'failed'|'superseded';
 };
 

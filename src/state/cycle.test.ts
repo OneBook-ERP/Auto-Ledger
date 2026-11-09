@@ -1,4 +1,5 @@
-import { createCycleRunner } from './cycle';
+import { afterCycle, createCycleRunner } from './cycle';
+import { LAST_SYNCED_KEY } from '../home/viewModel';
 
 const deferred = () => {
   let resolve!: (v: unknown) => void;
@@ -50,5 +51,56 @@ describe('attachAppStateCycle', () => {
     expect(run).toHaveBeenCalledTimes(1);
     d.resolve({ failedSteps: [] });
     detach();
+  });
+});
+
+describe('afterCycle (R50)', () => {
+  const synced = { failedSteps: [], drain: { ran: 0, stoppedBecause: 'empty' as const }, erpReached: true };
+  const deps = () => {
+    const settings = new Map<string, string>();
+    return {
+      settings,
+      repo: { setSetting: jest.fn(async (k: string, v: string) => void settings.set(k, v)) },
+      now: () => 1234,
+      refreshBanners: jest.fn(async () => undefined),
+      invalidateHome: jest.fn(),
+    };
+  };
+
+  it('records last_synced_at only for a cycle that reached ERPNext', async () => {
+    const d = deps();
+    await afterCycle(synced, d);
+    expect(d.settings.get(LAST_SYNCED_KEY)).toBe('1234');
+    const off = deps();
+    await afterCycle({ ...synced, erpReached: false }, off);
+    expect(off.settings.has(LAST_SYNCED_KEY)).toBe(false);
+    expect(off.invalidateHome).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates Home even when refreshBanners rejects', async () => {
+    const d = deps();
+    d.refreshBanners.mockRejectedValueOnce(new Error('db'));
+    await expect(afterCycle(synced, d)).rejects.toThrow('db');
+    expect(d.invalidateHome).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates Home when the sync-time write fails, and a failed cycle (null) too', async () => {
+    const d = deps();
+    d.repo.setSetting.mockRejectedValueOnce(new Error('disk'));
+    await afterCycle(synced, d);
+    expect(d.refreshBanners).toHaveBeenCalled();
+    expect(d.invalidateHome).toHaveBeenCalledTimes(1);
+    const n = deps();
+    await afterCycle(null, n);
+    expect(n.repo.setSetting).not.toHaveBeenCalled();
+    expect(n.invalidateHome).toHaveBeenCalledTimes(1);
+  });
+
+  it('through the runner: a rejecting refreshBanners still invalidates Home and the trigger resolves', async () => {
+    const d = deps();
+    d.refreshBanners.mockRejectedValue(new Error('db'));
+    const r = createCycleRunner({ run: async () => synced, after: (s) => afterCycle(s, d) });
+    await expect(r.trigger()).resolves.toBeUndefined();
+    expect(d.invalidateHome).toHaveBeenCalledTimes(1);
   });
 });

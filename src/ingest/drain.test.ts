@@ -34,10 +34,10 @@ class FakeErp implements DrainErp {
   checkSession = jest.fn(async () => this.session);
   private seq = 0;
 
-  async findDraftByUtr(reference: string) {
-    const d = this.docs.find((x) => x.ref === reference);
-    return d ? { doctype: d.doctype, name: d.name, docstatus: d.docstatus } : null;
+  async findDraftsByUtr(reference: string) {
+    return this.docs.filter((x) => x.ref === reference).map((d) => ({ doctype: d.doctype, name: d.name, docstatus: d.docstatus }));
   }
+  async getDraftSummary(): Promise<never> { throw new Error('unused'); }
   async createDraft(doctype: string, body: Record<string, unknown>) {
     const ref = String(body.cheque_no ?? body.reference_no);
     const f = this.failFor[ref];
