@@ -10,7 +10,8 @@ import type { AccountMapping, ParsedTxn, PendingTxn, TemplateSet } from '../core
 import type { PermissionState, QueuedSms, RawSms } from '../../modules/sms-ingest/src';
 import type { DrainErp } from './drain';
 import {
-  ensureBackfill, ingest, resolveMapping, runForegroundCycle, syncSenderPatterns, type NativeBridge,
+  BACKFILL_CHOICES, BACKFILL_DAYS_KEY, DEFAULT_BACKFILL_DAYS, ensureBackfill, ingest, resolveMapping, runForegroundCycle,
+  syncSenderPatterns, type NativeBridge,
 } from './pipeline';
 
 type Fixture = { id: string; sender: string; body: string; receivedAt: number; expected: any };
@@ -469,6 +470,36 @@ describe('ensureBackfill', () => {
     // Every app open runs it again; the overlap is harmless.
     expect(await ensureBackfill({ ...deps, now: () => NOW + HOUR })).toEqual({ ...empty, duplicates: 2, ignored: 1 });
     expect(await repo.getSetting('backfill_done_at')).toBe(String(NOW + HOUR));
+  });
+
+  it('reads the window from the backfill_days setting; unknown or missing values fall back to 7', async () => {
+    const { deps, native, repo } = await setup();
+    await repo.setSetting('backfill_days', '90');
+    await ensureBackfill(deps);
+    await repo.setSetting('backfill_days', 'abc');
+    await ensureBackfill(deps);
+    await repo.setSetting('backfill_days', '45');
+    await ensureBackfill(deps);
+    await repo.setSetting('backfill_days', '180');
+    await ensureBackfill(deps);
+    expect(native.backfillCalls.map((c) => c[0])).toEqual([90, 7, 7, 180]);
+    expect(BACKFILL_CHOICES).toEqual([7, 30, 90, 180]);
+    expect(DEFAULT_BACKFILL_DAYS).toBe(7);
+    expect(BACKFILL_DAYS_KEY).toBe('backfill_days');
+  });
+
+  it('a larger window after items were answered creates no duplicates and reopens nothing', async () => {
+    const { deps, native, repo } = await setup();
+    native.inbox = [fx('idfc-001')];
+    await ensureBackfill(deps);
+    const [t] = await repo.listPending();
+    await repo.upsertPending({ ...t, state: 'created' });
+    await repo.setSetting('backfill_days', '180');
+    native.inbox = [fx('idfc-001'), fx('idfc-002')];
+    expect(await ensureBackfill(deps)).toEqual({ ...empty, inserted: 1, duplicates: 1 });
+    const rows = await repo.listPending();
+    expect(rows.length).toBe(2);
+    expect(rows.find((r) => r.id === t.id)?.state).toBe('created');
   });
 
   it('the same SMS delivered live and via backfill is one txn (either order)', async () => {
