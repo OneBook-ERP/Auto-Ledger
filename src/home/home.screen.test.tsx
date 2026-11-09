@@ -295,3 +295,13 @@ describe('freshness', () => {
     expect(screen.getByText(/^Figures shown as of/)).toBeTruthy();
   });
 });
+
+it('shows a trust line under the balance and the bank name only once', async () => {
+  await setup({
+    mappings: [mapping('IDFC First - Zen Pivot - IDFC First')],
+    pending: [txn({ state: 'submitted', balanceMinor: 51293276, receivedAt: 5, accountLast4: '6507' })],
+  });
+  await waitFor(() => screen.getByTestId('trust-line'));
+  expect(screen.getByText('Matches the balance in the latest bank message')).toBeTruthy();
+  expect(screen.getByLabelText(/^Bank balance · IDFC First, Zen Pivot ₹5,12,932.76/)).toBeTruthy();
+});

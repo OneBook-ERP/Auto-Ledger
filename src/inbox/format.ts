@@ -1,9 +1,8 @@
 // Display text for transactions: amounts, dates, account and kind labels. Pure; the clock is passed in.
 import type { AccountMapping, ParsedTxn, TxnKind } from '../core/types';
-import { formatInr } from '../ui/format';
+import { MONTHS, formatInr } from '../ui/format';
 
 const IST_OFFSET_MS = 330 * 60_000;
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /** Today's date in Asia/Kolkata (no DST) as YYYY-MM-DD. */
 export function istToday(nowMs: number): string {
