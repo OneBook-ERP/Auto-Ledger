@@ -115,6 +115,13 @@ export function filterActivity(items: PendingTxn[], f: ActivityFilter, today: st
   });
 }
 
+/** Drafts waiting for the accountant among the entries matching every filter EXCEPT status; cancelled or missing drafts are not counted (as in `totalsOf`). */
+export function waitingCount(items: PendingTxn[], f: ActivityFilter, today: string): number {
+  return filterActivity(items, { ...f, status: undefined }, today).filter(
+    (t) => t.state === 'created' && !t.createdDocs.some((d) => d.docstatus === 2 || d.docstatus === DOC_MISSING),
+  ).length;
+}
+
 /** Rupee totals in paise, for entries that count (not ignored, not cancelled or missing). Items in another currency are not added; they are counted in `foreignCount`. */
 export function totalsOf(items: PendingTxn[]): { inMinor: number; outMinor: number; netMinor: number; foreignCount: number } {
   let inMinor = 0;

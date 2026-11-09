@@ -7,7 +7,7 @@ import { bringBack, pollStatuses } from '../../src/ingest/statusPoller';
 import { undoTxn, type UndoResult } from '../../src/outbox/runner';
 import {
   PAGE_SIZE, UNDO_CONFIRM_MESSAGE, canPutBack, canUndo, confirmText, docUrl, filterActivity, groupByRecency, isoToday, removalPlan, sortActivity,
-  statusOf, titleOf, totalsOf, type ActivityPeriod,
+  statusOf, titleOf, totalsOf, waitingCount, type ActivityPeriod,
 } from '../../src/state/activityModel';
 import { siteMatches, useApp } from '../../src/state/AppProvider';
 import { useUiStore } from '../../src/state/store';
@@ -204,8 +204,9 @@ export default function Activity() {
 
   const processed = (items ?? []).filter((t) => t.state === 'created' || t.state === 'submitted' || t.state === 'ignored');
   const accounts = [...new Set(processed.map((t) => t.accountLast4).filter((x): x is string => !!x))].sort();
-  const waiting = processed.filter((t) => t.state === 'created').length;
-  const matching = sortActivity(filterActivity(processed, { query, period, direction: filters.direction, accountLast4: accounts.length > 1 ? filters.accountLast4 : undefined, status: filters.status }, isoToday(Date.now())), filters.sort);
+  const baseFilter = { query, period, direction: filters.direction, accountLast4: accounts.length > 1 ? filters.accountLast4 : undefined };
+  const waiting = waitingCount(processed, baseFilter, isoToday(Date.now()));
+  const matching = sortActivity(filterActivity(processed, { ...baseFilter, status: filters.status }, isoToday(Date.now())), filters.sort);
   const shown = matching.slice(0, limit);
   const totals = totalsOf(matching);
   // Headings by recency only make sense newest first; any other order is one plain list.
@@ -245,7 +246,7 @@ export default function Activity() {
           </View>
           {waiting && filters.status !== 'waiting' ? (
             <Pressable
-              onPress={() => setFilters({ ...filters, status: 'waiting' })}
+              onPress={() => setFilters({ ...filters, status: 'waiting' })} // only the status; period and search stay as they are
               accessibilityRole="button"
               accessibilityLabel={`${waiting} waiting for your accountant`}
               className="mb-1 min-h-[48px] justify-center self-start">
