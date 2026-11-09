@@ -16,6 +16,7 @@ import {
   listLedgerAccounts,
   listModesOfPayment,
   listOpenInvoices,
+  listOpenSalesOrders,
   searchParties,
   toMinor,
 } from './docs';
@@ -237,6 +238,81 @@ describe('listOpenInvoices', () => {
     expect(r).toEqual([{ doctype: 'Purchase Invoice', name: 'PINV-1', outstandingMinor: 1000, dueDate: '' }]);
     expect(calls[0].url).toContain('/api/resource/Purchase%20Invoice?');
     expect(calls[0].url).toContain(encodeURIComponent('["supplier","=","Bharti"]'));
+  });
+});
+
+describe('listOpenSalesOrders', () => {
+  const row = (o: Record<string, unknown>) => ({
+    docstatus: 1, status: 'To Deliver and Bill', transaction_date: '2026-10-01', delivery_date: '2026-11-30', advance_paid: 0, ...o,
+  });
+
+  it('queries open submitted orders of the customer and maps money in minor units', async () => {
+    const { c, calls } = setup({
+      body: { data: [row({ name: 'SAL-ORD-2026-2027-00004', grand_total: 25000.1, advance_paid: 1131.5, delivery_date: null })] },
+    });
+    expect(await listOpenSalesOrders(c, 'Acme #1')).toEqual([
+      { name: 'SAL-ORD-2026-2027-00004', totalMinor: 2500010, advanceMinor: 113150, remainingMinor: 2386860, deliveryDate: null },
+    ]);
+    expect(calls[0].url).toBe(
+      `${BASE}/api/resource/Sales%20Order?${q({
+        fields: ['name', 'grand_total', 'advance_paid', 'delivery_date', 'status', 'docstatus', 'transaction_date'],
+        filters: [['customer', '=', 'Acme #1'], ['docstatus', '=', 1], ['status', 'in', ['To Deliver and Bill', 'To Bill', 'To Deliver']]],
+        order_by: 'transaction_date asc, creation asc',
+        limit_page_length: 0,
+      })}`,
+    );
+  });
+
+  it('keeps only docstatus 1 orders that are not Closed, Cancelled or Completed', async () => {
+    const { c } = setup({
+      body: {
+        data: [
+          row({ name: 'SO-OK1', grand_total: 100, status: 'To Bill' }),
+          row({ name: 'SO-DRAFT', grand_total: 100, docstatus: 0, status: 'Draft' }),
+          row({ name: 'SO-CLOSED', grand_total: 100, status: 'Closed' }),
+          row({ name: 'SO-CANC', grand_total: 100, docstatus: 2, status: 'Cancelled' }),
+          row({ name: 'SO-DONE', grand_total: 100, status: 'Completed' }),
+          row({ name: 'SO-OK2', grand_total: 100, status: 'To Deliver' }),
+        ],
+      },
+    });
+    expect((await listOpenSalesOrders(c, 'Acme')).map((o) => o.name)).toEqual(['SO-OK1', 'SO-OK2']);
+  });
+
+  it('remaining = total - advance without float drift; fully paid orders are omitted', async () => {
+    const { c } = setup({
+      body: {
+        data: [
+          row({ name: 'SO-1', grand_total: 0.3, advance_paid: 0.1 }),
+          row({ name: 'SO-PAID', grand_total: 500, advance_paid: 500 }),
+          row({ name: 'SO-OVER', grand_total: 500, advance_paid: 600 }),
+          row({ name: 'SO-2', grand_total: '19999.99', advance_paid: null }),
+        ],
+      },
+    });
+    expect(await listOpenSalesOrders(c, 'Acme')).toEqual([
+      { name: 'SO-1', totalMinor: 30, advanceMinor: 10, remainingMinor: 20, deliveryDate: '2026-11-30' },
+      { name: 'SO-2', totalMinor: 1999999, advanceMinor: 0, remainingMinor: 1999999, deliveryDate: '2026-11-30' },
+    ]);
+  });
+
+  it('sorted oldest first (by order date, stable)', async () => {
+    const { c } = setup({
+      body: {
+        data: [
+          row({ name: 'SO-NEW', grand_total: 1, transaction_date: '2026-11-05' }),
+          row({ name: 'SO-OLD', grand_total: 1, transaction_date: '2026-09-01' }),
+          row({ name: 'SO-MID-A', grand_total: 1, transaction_date: '2026-10-01' }),
+          row({ name: 'SO-MID-B', grand_total: 1, transaction_date: '2026-10-01' }),
+        ],
+      },
+    });
+    expect((await listOpenSalesOrders(c, 'Acme')).map((o) => o.name)).toEqual(['SO-OLD', 'SO-MID-A', 'SO-MID-B', 'SO-NEW']);
+  });
+
+  it('rejects a reply without a data array', async () => {
+    const { c } = setup({ body: { message: [] } });
+    await expect(listOpenSalesOrders(c, 'Acme')).rejects.toThrow();
   });
 });
 

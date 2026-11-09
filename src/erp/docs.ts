@@ -123,6 +123,39 @@ export async function listOpenInvoices(c: ErpClient, partyType: 'Customer' | 'Su
   return rows.map((r) => ({ doctype, name: r.name, outstandingMinor: toMinor(r.outstanding_amount), dueDate: r.due_date ?? '' }));
 }
 
+/** A submitted, still-open Sales Order of a customer. Money in minor units (paise). */
+export type OpenOrder = { name: string; totalMinor: number; advanceMinor: number; remainingMinor: number; deliveryDate: string | null };
+
+const OPEN_ORDER_STATUSES = ['To Deliver and Bill', 'To Bill', 'To Deliver'];
+
+/**
+ * Open Sales Orders of `customer` that can still take an advance: docstatus 1, status one of
+ * OPEN_ORDER_STATUSES (never Closed, Cancelled or Completed), remaining (grand_total - advance_paid) above 0.
+ * Oldest first. The server filters are repeated here so an odd reply never offers a closed order.
+ */
+export async function listOpenSalesOrders(c: ErpClient, customer: string): Promise<OpenOrder[]> {
+  const rows = await list<{
+    name: string; grand_total: number | string; advance_paid: number | string | null; delivery_date: string | null;
+    status: string; docstatus: number; transaction_date: string | null;
+  }>(c, 'Sales Order', {
+    fields: ['name', 'grand_total', 'advance_paid', 'delivery_date', 'status', 'docstatus', 'transaction_date'],
+    filters: [['customer', '=', customer], ['docstatus', '=', 1], ['status', 'in', OPEN_ORDER_STATUSES]],
+    order_by: 'transaction_date asc, creation asc',
+    limit_page_length: 0,
+  });
+  const out: { order: OpenOrder; date: string }[] = [];
+  for (const r of rows) {
+    if (r.docstatus !== 1 || !OPEN_ORDER_STATUSES.includes(r.status)) continue;
+    const totalMinor = toMinor(r.grand_total);
+    const advanceMinor = toMinor(r.advance_paid);
+    const remainingMinor = totalMinor - advanceMinor;
+    if (remainingMinor <= 0) continue;
+    out.push({ order: { name: r.name, totalMinor, advanceMinor, remainingMinor, deliveryDate: r.delivery_date ?? null }, date: r.transaction_date ?? '' });
+  }
+  // Array.prototype.sort is stable: equal dates keep the server's creation order.
+  return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).map((x) => x.order);
+}
+
 /** Creates a DRAFT only (never submits). Any 2xx is success. */
 export async function createDraft(c: ErpClient, doctype: 'Payment Entry' | 'Journal Entry', body: Record<string, unknown>): Promise<{ name: string }> {
   // docstatus is forced to 0: this app never submits, whatever the caller passed.
