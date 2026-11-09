@@ -76,6 +76,12 @@ describe('runDupCheck', () => {
     expect(await runDupCheck((await setup([txn('a')], [], null)).deps)).toBe(false);
   });
 
+  it('reports false (not checked) when no waiting item has a readable date, and reads nothing', async () => {
+    const s = await setup([txn('a', { occurredOn: '' }), txn('b', { occurredOn: 'not a date' })], [entry()]);
+    await expect(runDupCheck(s.deps)).resolves.toBe(false);
+    expect(s.listBookedEntries).not.toHaveBeenCalled();
+  });
+
   it('a flag is removed when the entry is no longer returned (cancelled in ERPNext)', async () => {
     const s = await setup([txn('a')], []);
     await s.repo.setSetting(dupKey('a'), JSON.stringify({ doctype: 'Payment Entry', name: 'PE-1', strength: 'strong', why: 'details' }));
