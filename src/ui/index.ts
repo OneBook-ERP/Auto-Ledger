@@ -32,3 +32,5 @@ export { confirmDialog, openExternal } from './dialogs';
 export { Icon, ICONS } from './Icon';
 export type { IconName } from './Icon';
 export { SearchField } from './SearchField';
+export { FilterSheet, activeFilterCount, DEFAULT_FILTERS } from './FilterSheet';
+export type { ActivityFilters, FilterSheetProps } from './FilterSheet';

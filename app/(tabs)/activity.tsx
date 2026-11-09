@@ -1,6 +1,6 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Linking, Text, View } from 'react-native';
+import { Alert, Linking, Pressable, Text, View, useColorScheme } from 'react-native';
 import type { PendingTxn } from '../../src/core/types';
 import { NEEDS_LOGIN_SINCE_KEY } from '../../src/ingest/drain';
 import { bringBack, pollStatuses } from '../../src/ingest/statusPoller';
@@ -13,8 +13,8 @@ import { siteMatches, useApp } from '../../src/state/AppProvider';
 import { useUiStore } from '../../src/state/store';
 import { useErpOps } from '../../src/state/useErpOps';
 import {
-  ActivityRow, Banner, Button, Chip, EmptyState, Figure, Screen, SearchField, SectionHeader, formatDate, formatInr, friendlyDoctype, signedMoney,
-  type ActivityAction,
+  ActivityRow, Banner, Button, Chip, DEFAULT_FILTERS, EmptyState, Figure, FilterSheet, Icon, Screen, SearchField, SectionHeader, formatDate, formatInr, friendlyDoctype, signedMoney,
+  activeFilterCount, type ActivityAction, type ActivityFilters,
 } from '../../src/ui';
 
 export { UNDO_CONFIRM_MESSAGE };
@@ -44,6 +44,9 @@ export default function Activity() {
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState('');
   const [period, setPeriod] = useState<ActivityPeriod>('all');
+  const [filters, setFilters] = useState<ActivityFilters>(DEFAULT_FILTERS);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const dark = useColorScheme() === 'dark';
   const alive = useRef(true);
   const busyRef = useRef<Set<string>>(new Set());
   useEffect(() => () => { alive.current = false; }, []);
@@ -200,10 +203,14 @@ export default function Activity() {
   };
 
   const processed = (items ?? []).filter((t) => t.state === 'created' || t.state === 'submitted' || t.state === 'ignored');
-  const matching = sortActivity(filterActivity(processed, { query, period }, isoToday(Date.now())), 'newest');
+  const matching = sortActivity(filterActivity(processed, { query, period, direction: filters.direction, accountLast4: filters.accountLast4 }, isoToday(Date.now())), filters.sort);
   const shown = matching.slice(0, limit);
   const totals = totalsOf(matching);
-  const groups = groupByRecency(shown, isoToday(Date.now()));
+  // Headings by recency only make sense newest first; any other order is one plain list.
+  const groups = filters.sort === 'newest' ? groupByRecency(shown, isoToday(Date.now())) : [{ title: null, rows: shown }];
+  const accounts = [...new Set(processed.map((t) => t.accountLast4).filter((x): x is string => !!x))].sort();
+  const nFilters = activeFilterCount(filters);
+  const filtersLabel = nFilters ? `Filters (${nFilters})` : 'Filters';
 
   return (
     <Screen
@@ -217,6 +224,14 @@ export default function Activity() {
       {processed.length ? (
         <>
           <SearchField value={query} onChange={setQuery} placeholder="Search by name or reference" testID="activity-search" />
+          <Pressable
+            onPress={() => setSheetOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel={filtersLabel}
+            className="mb-2 min-h-[48px] flex-row items-center self-start">
+            <Icon name="filter" size={18} color={dark ? '#8EA6FF' : '#2447D1'} />
+            <Text className="ml-2 text-base font-semibold text-accent dark:text-accent-dark">{filtersLabel}</Text>
+          </Pressable>
           <View className="flex-row flex-wrap">
             {PERIODS.map((p) => (
               <Chip key={p.key} label={p.label} selected={period === p.key} onPress={() => setPeriod(p.key)} />
@@ -236,14 +251,22 @@ export default function Activity() {
         </>
       ) : null}
       {groups.map((g) => (
-        <View key={g.title}>
-          <SectionHeader title={g.title} count={g.rows.length} />
+        <View key={g.title ?? 'all'}>
+          {g.title ? <SectionHeader title={g.title} count={g.rows.length} /> : null}
           {g.rows.map(row)}
         </View>
       ))}
       {matching.length > shown.length ? (
         <Button variant="secondary" label={`Show older (${matching.length - shown.length} more)`} onPress={() => setLimit((n) => n + PAGE_SIZE)} />
       ) : null}
+      <FilterSheet
+        visible={sheetOpen}
+        value={filters}
+        accounts={accounts}
+        onApply={(f) => { setFilters(f); setSheetOpen(false); }}
+        onReset={() => { setFilters(DEFAULT_FILTERS); setSheetOpen(false); }}
+        onClose={() => setSheetOpen(false)}
+      />
     </Screen>
   );
 }

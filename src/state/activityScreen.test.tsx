@@ -309,3 +309,42 @@ describe('Activity search, period and totals', () => {
   });
 });
 
+describe('Activity filter and sort sheet', () => {
+  const data = () => [
+    txn('1', { counterparty: 'Alpha', amountMinor: 100, accountLast4: '3455' }),
+    txn('2', { counterparty: 'Bravo', direction: 'out', amountMinor: 900, accountLast4: '3455' }),
+    txn('3', { counterparty: 'Charlie', direction: 'out', amountMinor: 500, accountLast4: '9999' }),
+  ];
+  const docs = { 'Payment Entry:PE-1': 0, 'Payment Entry:PE-2': 0, 'Payment Entry:PE-3': 0 };
+  const order = () => screen.getAllByTestId(/^activity-row-/).map((n) => n.props.testID);
+
+  it('shows direction, account and sort; Apply updates the list and the count; Reset clears', async () => {
+    await open(data(), docs);
+    await screen.findByTestId('activity-row-1');
+    await fireEvent.press(screen.getByRole('button', { name: 'Filters' }));
+    for (const name of ['All', 'Money in', 'Money out', 'Account ending 3455', 'Account ending 9999', 'Highest amount', 'Name A to Z']) {
+      expect(screen.getByRole('radio', { name })).toBeTruthy();
+    }
+    await fireEvent.press(screen.getByRole('radio', { name: 'Money out' }));
+    await fireEvent.press(screen.getByRole('radio', { name: 'Highest amount' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.queryByTestId('activity-row-1')).toBeNull();
+    expect(order()).toEqual(['activity-row-2', 'activity-row-3']);
+    expect(screen.getByRole('button', { name: 'Filters (2)' })).toBeTruthy();
+    await fireEvent.press(screen.getByRole('button', { name: 'Filters (2)' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Reset' }));
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
+    expect(screen.getByTestId('activity-row-1')).toBeTruthy();
+  });
+
+  it('filters by account', async () => {
+    await open(data(), docs);
+    await screen.findByTestId('activity-row-1');
+    await fireEvent.press(screen.getByRole('button', { name: 'Filters' }));
+    await fireEvent.press(screen.getByRole('radio', { name: 'Account ending 9999' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Apply' }));
+    expect(order()).toEqual(['activity-row-3']);
+    expect(screen.getByRole('button', { name: 'Filters (1)' })).toBeTruthy();
+  });
+});
+
