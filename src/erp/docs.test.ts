@@ -327,14 +327,28 @@ describe('getDraftSummary', () => {
     const { c, calls } = setup({ body: { data: { name: 'ACC PAY/1', docstatus: 0, company: 'Atom', payment_type: 'Internal Transfer', paid_from: 'A - AL', paid_to: 'B - AL', paid_amount: 12345.5, party_type: '', party: null } } });
     expect(await getDraftSummary(c, 'Payment Entry', 'ACC PAY/1')).toEqual({
       doctype: 'Payment Entry', name: 'ACC PAY/1', docstatus: 0, company: 'Atom', paymentType: 'Internal Transfer', paidFrom: 'A - AL', paidTo: 'B - AL',
-      paidAmountMinor: 1234550, partyType: null, party: null, totalDebitMinor: null,
+      paidAmountMinor: 1234550, partyType: null, party: null, totalDebitMinor: null, accounts: [],
     });
     expect(calls[0].url).toBe(`${BASE}/api/resource/Payment%20Entry/ACC%20PAY%2F1`);
   });
 
   it('a Journal Entry gives its total debit; string amounts parse', async () => {
     const { c } = setup({ body: { data: { name: 'JV-1', docstatus: 1, total_debit: '500.00' } } });
-    expect(await getDraftSummary(c, 'Journal Entry', 'JV-1')).toMatchObject({ docstatus: 1, totalDebitMinor: 50000, paymentType: null });
+    expect(await getDraftSummary(c, 'Journal Entry', 'JV-1')).toMatchObject({ docstatus: 1, totalDebitMinor: 50000, paymentType: null, accounts: [] });
+  });
+
+  it('a Journal Entry gives its account rows (debit/credit in minor units, party when set)', async () => {
+    const { c } = setup({ body: { data: { name: 'JV-2', docstatus: 0, total_debit: 500, accounts: [
+      { account: 'Drawings - AL', debit_in_account_currency: 500, credit_in_account_currency: 0, party_type: '', party: null },
+      { account: 'IDFC CA - AL', debit: '0', credit: '500.00' },
+      { account: 'Rent - AL', debit_in_account_currency: 1.5, party_type: 'Supplier', party: 'Sup' },
+      null,
+    ] } } });
+    expect((await getDraftSummary(c, 'Journal Entry', 'JV-2')).accounts).toEqual([
+      { account: 'Drawings - AL', debitMinor: 50000, creditMinor: 0, partyType: null, party: null },
+      { account: 'IDFC CA - AL', debitMinor: 0, creditMinor: 50000, partyType: null, party: null },
+      { account: 'Rent - AL', debitMinor: 150, creditMinor: 0, partyType: 'Supplier', party: 'Sup' },
+    ]);
   });
 
   it('a reply without docstatus is unexpected', async () => {

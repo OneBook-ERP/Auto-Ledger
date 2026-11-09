@@ -110,6 +110,10 @@ class FakeErp implements ErpOps {
       doctype, name, docstatus: d.docstatus, company: str(b.company), paymentType: str(b.payment_type), paidFrom: str(b.paid_from), paidTo: str(b.paid_to),
       paidAmountMinor: minor(b.paid_amount), partyType: str(b.party_type), party: str(b.party),
       totalDebitMinor: rows.length ? rows.reduce((t, r) => t + (minor(r.debit_in_account_currency) ?? 0), 0) : null,
+      accounts: rows.map((r) => ({
+        account: str(r.account), debitMinor: minor(r.debit_in_account_currency) ?? 0, creditMinor: minor(r.credit_in_account_currency) ?? 0,
+        partyType: str(r.party_type), party: str(r.party),
+      })),
     };
   }
   async createDraft(doctype: string, body: Record<string, unknown>) {

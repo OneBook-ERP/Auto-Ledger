@@ -181,7 +181,11 @@ export type DraftSummary = {
   party: string | null;
   /** Journal Entry: total debit in minor units. */
   totalDebitMinor: number | null;
+  /** Journal Entry: the account rows (debit/credit in minor units, account currency); [] when there are none. */
+  accounts: DraftAccountRow[];
 };
+
+export type DraftAccountRow = { account: string | null; debitMinor: number; creditMinor: number; partyType: string | null; party: string | null };
 
 const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : null);
 const minorOf = (v: unknown): number | null => {
@@ -189,6 +193,16 @@ const minorOf = (v: unknown): number | null => {
   if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return toMinor(v);
   return null;
 };
+
+function accountRow(r: Record<string, unknown>): DraftAccountRow {
+  return {
+    account: str(r.account),
+    debitMinor: minorOf(r.debit_in_account_currency) ?? minorOf(r.debit) ?? 0,
+    creditMinor: minorOf(r.credit_in_account_currency) ?? minorOf(r.credit) ?? 0,
+    partyType: str(r.party_type),
+    party: str(r.party),
+  };
+}
 
 /** Reads one document (GET /api/resource/{doctype}/{name}) and returns the fields of DraftSummary. */
 export async function getDraftSummary(c: ErpClient, doctype: string, name: string): Promise<DraftSummary> {
@@ -207,6 +221,7 @@ export async function getDraftSummary(c: ErpClient, doctype: string, name: strin
     partyType: str(d.party_type),
     party: str(d.party),
     totalDebitMinor: minorOf(d.total_debit),
+    accounts: Array.isArray(d.accounts) ? (d.accounts as unknown[]).filter((r): r is Record<string, unknown> => !!r && typeof r === 'object').map(accountRow) : [],
   };
 }
 

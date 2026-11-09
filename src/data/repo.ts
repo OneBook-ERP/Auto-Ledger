@@ -35,6 +35,8 @@ export interface Repo {
   reopenOutbox(id: string): Promise<void>;
   /** Every readable outbox item of `txnId`, oldest first. */
   listOutbox(txnId: string): Promise<OutboxOp[]>;
+  /** Every readable outbox item that is still open ('pending' or 'failed'), of any txn, oldest first. One query. */
+  listOpenOutbox(): Promise<OutboxOp[]>;
   markOutbox(id: string, patch: Partial<Pick<OutboxOp, 'progress' | 'attempts' | 'status'>>): Promise<void>;
   /** One statement: writes `progress` and sets status 'done' unless the item is already 'superseded'. */
   finishOutbox(id: string, progress: OutboxOp['progress']): Promise<void>;
@@ -224,6 +226,11 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
     },
     async listOutbox(txnId) {
       const rows = await d.all<OutboxRow>('SELECT id, txn_id, plan, progress, attempts, status FROM outbox WHERE txn_id = ? ORDER BY seq', [txnId]);
+      return rows.map(toOutbox).filter((o): o is OutboxOp => o !== null);
+    },
+    async listOpenOutbox() {
+      const rows = await d.all<OutboxRow>(
+        `SELECT id, txn_id, plan, progress, attempts, status FROM outbox WHERE status IN ('pending', 'failed') ORDER BY seq`);
       return rows.map(toOutbox).filter((o): o is OutboxOp => o !== null);
     },
     async getOutbox(id) {

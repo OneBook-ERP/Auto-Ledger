@@ -242,6 +242,17 @@ describe('mappings, rules, outbox, settings', () => {
     expect((await r.listOutbox('t1')).map((o) => o.id)).toEqual(['a', 'b']);
     expect(await r.listOutbox('nope')).toEqual([]);
   });
+  it('listOpenOutbox returns the pending and failed items of every txn, oldest first, in one query', async () => {
+    const r = await mk();
+    await r.enqueue(op({ id: 'a' }));
+    await r.markOutbox('a', { status: 'failed' });
+    await r.enqueue(op({ id: 'x', txnId: 't2' }));
+    await r.enqueue(op({ id: 'y', txnId: 't3' }));
+    await r.finishOutbox('y', { stepIndex: 0, created: [] });
+    await r.enqueue(op({ id: 'b' })); // supersedes nothing open except t1's pending items ('a' is failed)
+    await r.enqueue(op({ id: 'c' })); // supersedes 'b'
+    expect((await r.listOpenOutbox()).map((o) => [o.id, o.status])).toEqual([['a', 'failed'], ['x', 'pending'], ['c', 'pending']]);
+  });
   it('supersedePending marks only other pending items of the txn, and nextOutbox skips them', async () => {
     const r = await mk();
     await r.enqueue(op({ id: 'a' }));
