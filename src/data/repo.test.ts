@@ -36,6 +36,37 @@ describe('pending txns', () => {
     expect((await r.listPending()).length).toBe(2);
     expect((await r.listPending('submitted')).map((x) => x.id)).toEqual(['t2']);
   });
+  it('counts rows per state without loading them', async () => {
+    const r = await mk();
+    expect(await r.countPending('new')).toBe(0);
+    await r.upsertPending(txn({ id: 'a', rawHash: 'ha', state: 'new' }));
+    await r.upsertPending(txn({ id: 'b', rawHash: 'hb', state: 'new' }));
+    await r.upsertPending(txn({ id: 'c', rawHash: 'hc', state: 'created' }));
+    await r.upsertPending(txn({ id: 'd', rawHash: 'hd', state: 'failed' }));
+    expect(await r.countPending('new')).toBe(2);
+    expect(await r.countPending('created')).toBe(1);
+    expect(await r.countPending('failed')).toBe(1);
+    expect(await r.countPending('submitted')).toBe(0);
+  });
+  it('lists several states at once, and the distinct sources of unanswered rows', async () => {
+    const r = await mk();
+    await r.upsertPending(txn({ id: 'a', rawHash: 'ha', state: 'new', accountLast4: '1111' }));
+    await r.upsertPending(txn({ id: 'b', rawHash: 'hb', state: 'new', accountLast4: '1111' }));
+    await r.upsertPending(txn({ id: 'c', rawHash: 'hc', state: 'created' }));
+    await r.upsertPending(txn({ id: 'd', rawHash: 'hd', state: 'submitted' }));
+    await r.upsertPending(txn({ id: 'e', rawHash: 'he', state: 'ignored' }));
+    expect((await r.listPending(['created', 'submitted'])).map((x) => x.id)).toEqual(['c', 'd']);
+    expect(await r.listPending([])).toEqual([]);
+    expect(await r.listNewSources()).toEqual([{ sender: 'AX-IDFCFB', accountType: 'bank', accountLast4: '1111' }]);
+  });
+  it('lists the merged SMS hashes in one query', async () => {
+    const r = await mk();
+    await r.upsertPending(txn());
+    expect(await r.mergeInto('t1', {}, 'src1')).toMatchObject({ status: 'merged' });
+    expect(await r.mergeInto('t1', {}, 'src2')).toMatchObject({ status: 'merged' });
+    expect([...(await r.listMergedSmsHashes())].sort()).toEqual(['src1', 'src2']);
+    expect(await r.isMergedSms('src1')).toBe(true);
+  });
   it('upsert with same id updates in place', async () => {
     const r = await mk();
     await r.upsertPending(txn());

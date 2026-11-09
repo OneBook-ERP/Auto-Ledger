@@ -3,16 +3,19 @@ import { useFocusEffect } from 'expo-router';
 import { focusManager, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AccountMapping, PendingTxn } from '../core/types';
+import type { PendingState } from '../data/repo';
 import { getBankBalance, getReceivablesPayables } from '../erp/docs';
 import { ErpAuthError, type ErpClient } from '../erp/client';
 import { useApp } from '../state/AppProvider';
 import { COMPANY_KEY } from '../state/useSetting';
 import { useUiStore } from '../state/store';
-import { buildHomeModel, HOME_CACHE_KEY, LAST_SYNCED_KEY, parseHomeCache, serializeHomeCache, type HomeFigures, type HomeModel } from './viewModel';
+import { buildHomeModel, HOME_CACHE_KEY, LAST_SYNCED_KEY, parseHomeCache, serializeHomeCache, type HomeFigures, type HomeInputs, type HomeModel } from './viewModel';
 
-type Local = { mappings: AccountMapping[]; pending: PendingTxn[]; lastSyncedAt: number | null; company: string | null };
+type Local = { mappings: AccountMapping[]; pending: PendingTxn[]; unanswered: NonNullable<HomeInputs['unanswered']>; lastSyncedAt: number | null; company: string | null };
 export type AuthProblem = { status: number; deniedDoctype?: string };
 type Fetched = { figures: HomeFigures; at: number; stale: boolean; auth: AuthProblem | null };
+
+const HOME_STATES: PendingState[] = ['created', 'submitted', 'ignored', 'failed'];
 
 export const homeKey = (siteUrl: string | null) => ['home', siteUrl] as const;
 
@@ -92,9 +95,13 @@ export function useHome(now: () => number = Date.now, tickMs = 60_000): HomeStat
     enabled: siteUrl !== null,
     staleTime: 0,
     queryFn: async (): Promise<Local> => {
-      const [mappings, pending, synced, company] = await Promise.all([repo.listMappings(), repo.listPending(), repo.getSetting(LAST_SYNCED_KEY), repo.getSetting(COMPANY_KEY)]);
+      // Unanswered ('new') rows can be thousands: only their count and distinct accounts are read, never the rows.
+      const [mappings, pending, newCount, sources, synced, company] = await Promise.all([
+        repo.listMappings(), repo.listPending(HOME_STATES), repo.countPending('new'), repo.listNewSources(),
+        repo.getSetting(LAST_SYNCED_KEY), repo.getSetting(COMPANY_KEY),
+      ]);
       const n = synced ? Number(synced) : NaN;
-      return { mappings, pending, lastSyncedAt: Number.isFinite(n) ? n : null, company };
+      return { mappings, pending, unanswered: { count: newCount, sources }, lastSyncedAt: Number.isFinite(n) ? n : null, company };
     },
   });
   const l = local.data;
@@ -150,6 +157,7 @@ export function useHome(now: () => number = Date.now, tickMs = 60_000): HomeStat
         ? buildHomeModel({
             mappings: l.mappings,
             pending: l.pending,
+            unanswered: l.unanswered,
             figures: f?.figures ?? null,
             figuresAt: f?.at ?? null,
             figuresStale: (f?.stale ?? false) || refetchFailed,

@@ -1,6 +1,7 @@
 import { focusManager } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { ErpAuthError, ErpNetworkError, type ErpClient } from '../erp/client';
+import type { Repo } from '../data/repo';
 import type { AccountMapping, PendingTxn } from '../core/types';
 import { fakeApp } from '../state/testUtils';
 import { useUiStore } from '../state/store';
@@ -35,7 +36,8 @@ function fakeClient(opts: { balance?: number; fail?: unknown } = {}): ErpClient 
   return { get, call } as never;
 }
 
-async function setup(o: { mappings?: AccountMapping[]; pending?: PendingTxn[]; synced?: number | null; client?: ReturnType<typeof fakeClient>; cache?: object; site?: string } = {}) {
+type SetupOpts = { mappings?: AccountMapping[]; pending?: PendingTxn[]; synced?: number | null; client?: ReturnType<typeof fakeClient>; cache?: object; site?: string; onRepo?: (repo: Repo) => void };
+async function setup(o: SetupOpts = {}) {
   const app = await fakeApp({ client: (o.client ?? fakeClient()) as never });
   for (const m of o.mappings ?? [mapping('IDFC')]) await app.repo.saveMapping(m);
   for (const t of o.pending ?? []) await app.repo.upsertPending(t);
@@ -43,6 +45,7 @@ async function setup(o: { mappings?: AccountMapping[]; pending?: PendingTxn[]; s
   if (o.synced !== null) await app.repo.setSetting(LAST_SYNCED_KEY, String(o.synced ?? Date.now() - 120_000));
   if (o.cache) await app.repo.setSetting(HOME_CACHE_KEY, serializeHomeCache(o.cache as never));
   useUiStore.getState().setBoot({ session: { siteUrl: o.site ?? SITE, user: 'u' }, setupDone: true });
+  o.onRepo?.(app.repo);
   const utils = await render(<app.Wrap><Home /></app.Wrap>);
   return { app, ...utils };
 }
@@ -304,4 +307,25 @@ it('shows a trust line under the balance and the bank name only once', async () 
   await waitFor(() => screen.getByTestId('trust-line'));
   expect(screen.getByText('Matches the balance in the latest bank message')).toBeTruthy();
   expect(screen.getByLabelText(/^Bank balance · IDFC First, Zen Pivot ₹5,12,932.76/)).toBeTruthy();
+});
+
+it('never reads the unanswered rows: counts and sources come from SQL, the numbers are the same', async () => {
+  let list!: jest.SpyInstance;
+  let count!: jest.SpyInstance;
+  const news = Array.from({ length: 50 }, () => txn({ state: 'new' }));
+  await setup({
+    pending: [txn({ amountMinor: 13046600 }), ...news],
+    onRepo: (r) => { list = jest.spyOn(r, 'listPending'); count = jest.spyOn(r, 'countPending'); },
+  });
+  await waitFor(() => screen.getByTestId('banner-incomplete'));
+  expect(screen.getByText('50 messages need an answer.')).toBeTruthy();
+  expect(screen.getByText('1 draft. It is not in the figures above yet.')).toBeTruthy();
+  expect(list).toHaveBeenCalled();
+  for (const call of list.mock.calls) {
+    expect(call[0]).toBeDefined();
+    expect([call[0]].flat()).not.toContain('new');
+  }
+  expect(count).toHaveBeenCalledWith('new');
+  // one local read per load, a bounded number of calls (not per row, not per account)
+  expect(list.mock.calls.length).toBeLessThanOrEqual(2);
 });

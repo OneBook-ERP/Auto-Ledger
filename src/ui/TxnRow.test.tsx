@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react-native';
+import { Appearance } from 'react-native';
 import { ActivityRow } from './ActivityRow';
 import { TxnRow } from './TxnRow';
 
@@ -23,6 +24,31 @@ describe('TxnRow', () => {
     await render(<TxnRow {...base} direction="out" />);
     expect(screen.getByText('−₹1,231.92')).toBeTruthy();
     expect(screen.getByRole('button').props.accessibilityLabel).toContain('₹1,231.92 paid');
+  });
+});
+
+describe('TxnRow colour scheme', () => {
+  afterEach(() => jest.restoreAllMocks());
+  it('a whole list shares one Appearance listener instead of one per row', async () => {
+    const remove = jest.fn();
+    const add = jest.spyOn(Appearance, 'addChangeListener').mockReturnValue({ remove });
+    const { unmount } = await render(<>{Array.from({ length: 30 }, (_, i) => <TxnRow key={i} {...base} direction="out" />)}</>);
+    expect(add).toHaveBeenCalledTimes(1);
+    await unmount();
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+  it('follows a scheme change', async () => {
+    let fire: () => void = () => undefined;
+    jest.spyOn(Appearance, 'addChangeListener').mockImplementation((l) => { fire = () => l({ colorScheme: 'dark' }); return { remove: () => undefined }; });
+    const get = jest.spyOn(Appearance, 'getColorScheme').mockReturnValue('light');
+    await render(<TxnRow {...base} direction="out" />);
+    const { act } = require('@testing-library/react-native');
+    const colourOf = () => JSON.stringify(screen.toJSON());
+    expect(colourOf()).toContain('#0E1A2E');
+    get.mockReturnValue('dark');
+    await act(async () => fire());
+    expect(colourOf()).toContain('#EDF1F8');
+    expect(colourOf()).not.toContain('#0E1A2E');
   });
 });
 

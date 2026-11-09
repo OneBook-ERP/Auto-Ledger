@@ -719,3 +719,66 @@ describe('runForegroundCycle: ERPNext round-trip (R50)', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+// ---------- all-time scan cost (perf audit finding 8) ----------
+
+describe('ensureBackfill on a large scan', () => {
+  const N = 2000;
+  const WRITES = new Set(['upsertPending', 'mergeInto', 'setSetting', 'saveMapping']);
+
+  it('reads the repo a bounded number of times, not once or twice per message', async () => {
+    const { deps, native, repo } = await setup();
+    // Distinct amounts and far-apart times: every message becomes its own new row.
+    native.inbox = Array.from({ length: N }, (_, i) => shortDebit(`${100 + i}.00`, NOW - (N - i) * 60_000, '12:30'));
+    const calls: Record<string, number> = {};
+    for (const k of Object.keys(repo) as (keyof Repo)[]) {
+      const fn = repo[k] as unknown as (...a: unknown[]) => unknown;
+      if (typeof fn !== 'function') continue;
+      const orig = fn.bind(repo);
+      (repo as unknown as Record<string, unknown>)[k] = (...a: unknown[]) => { calls[k] = (calls[k] ?? 0) + 1; return orig(...a); };
+    }
+    const r = await ensureBackfill({ ...deps, repo }, { fullWindow: true });
+    expect(r).toMatchObject({ inserted: N, errors: 0 });
+    const reads = Object.entries(calls).filter(([k]) => !WRITES.has(k));
+    const readTotal = reads.reduce((n, [, c]) => n + c, 0);
+    // Stated bound: the whole scan does a fixed set of reads (settings, mappings, templates, the table and the merged-message
+    // index once), independent of the number of messages. Writes are one upsert per new row.
+    expect(readTotal).toBeLessThanOrEqual(15);
+    expect(calls.upsertPending).toBe(N);
+    expect(calls.getPending ?? 0).toBe(0);
+    expect(calls.isMergedSms ?? 0).toBe(0);
+    expect(calls.listPending).toBe(1);
+  });
+
+  it('a second pass over the same 2,000 messages is all duplicates with the same bounded reads', async () => {
+    const { deps, native, repo } = await setup();
+    native.inbox = Array.from({ length: N }, (_, i) => shortDebit(`${100 + i}.00`, NOW - (N - i) * 60_000, '12:30'));
+    await ensureBackfill(deps, { fullWindow: true });
+    const spyGet = jest.spyOn(repo, 'getPending');
+    const spyMerged = jest.spyOn(repo, 'isMergedSms');
+    const r = await ensureBackfill(deps, { fullWindow: true });
+    expect(r).toMatchObject({ duplicates: N, inserted: 0 });
+    expect(spyGet.mock.calls.length + spyMerged.mock.calls.length).toBe(0);
+  });
+});
+
+describe('ensureBackfill duplicates inside one scan', () => {
+  it('a second copy of the same SMS is a duplicate from the in-memory index, with no per-message reads', async () => {
+    const { deps, native, repo } = await setup();
+    const a = shortDebit('250.00', NOW - 5 * HOUR);
+    native.inbox = [a, { ...a }, shortDebit('260.00', NOW - 4 * HOUR)];
+    const merged = jest.spyOn(repo, 'isMergedSms');
+    const get = jest.spyOn(repo, 'getPending');
+    expect(await ensureBackfill(deps, { fullWindow: true })).toMatchObject({ inserted: 2, duplicates: 1, errors: 0 });
+    expect(merged.mock.calls.length + get.mock.calls.length).toBe(0);
+    expect((await repo.listPending()).length).toBe(2);
+  });
+  it('a correlated second message (merge) is recorded in the index so its repeat is a duplicate', async () => {
+    const { deps, native, repo } = await setup();
+    native.inbox = [fx('idfc-018'), shortDebit('250.00', NOW - 5 * HOUR), shortDebit('250.00', NOW - 5 * HOUR)];
+    const merged = jest.spyOn(repo, 'isMergedSms');
+    const r = await ensureBackfill(deps, { fullWindow: true });
+    expect(r.errors).toBe(0);
+    expect(merged.mock.calls.length).toBe(0);
+  });
+});
