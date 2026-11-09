@@ -3,8 +3,15 @@ import { migrate, type SqlDriver } from './schema';
 
 export type { SqlDriver } from './schema';
 
+export type PendingState = PendingTxn['state'];
+
 export interface Repo {
-  listPending(state?: PendingTxn['state']): Promise<PendingTxn[]>;
+  /** All rows, or only those in one state / any of several states (an empty array means none). */
+  listPending(state?: PendingState | PendingState[]): Promise<PendingTxn[]>;
+  /** How many rows are in a state: one COUNT(*), no row is read or parsed. */
+  countPending(state: PendingState): Promise<number>;
+  /** Distinct (sender, account) of the unanswered ('new') rows: enough to resolve their account without loading them. */
+  listNewSources(): Promise<{ sender: string; accountType: 'bank' | 'card'; accountLast4: string | null }[]>;
   /** Same id: the row is replaced (normal update). Different id but an existing
    *  rawHash: the existing row is left completely untouched (re-delivery of an
    *  SMS must not reset state/createdDocs). Single statement, so concurrent
@@ -139,10 +146,22 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
 
   const impl: Repo = {
     async listPending(state) {
-      const rows = state
-        ? await d.all<PendingRow>(`SELECT ${PENDING_COLS} FROM pending_txn WHERE state = ? ORDER BY received_at, id`, [state])
+      const states = state === undefined ? null : Array.isArray(state) ? [...new Set(state)] : [state];
+      if (states && states.length === 0) return [];
+      const rows = states
+        ? await d.all<PendingRow>(
+          `SELECT ${PENDING_COLS} FROM pending_txn WHERE state IN (${states.map(() => '?').join(',')}) ORDER BY received_at, id`, states)
         : await d.all<PendingRow>(`SELECT ${PENDING_COLS} FROM pending_txn ORDER BY received_at, id`);
       return rows.map(toPending);
+    },
+    async countPending(state) {
+      const rows = await d.all<{ n: number }>('SELECT COUNT(*) AS n FROM pending_txn WHERE state = ?', [state]);
+      return Number(rows[0]?.n) || 0;
+    },
+    async listNewSources() {
+      const rows = await d.all<{ sender: string; account_type: 'bank' | 'card'; account_last4: string | null }>(
+        "SELECT DISTINCT sender, account_type, account_last4 FROM pending_txn WHERE state = 'new'");
+      return rows.map((r) => ({ sender: r.sender, accountType: r.account_type, accountLast4: r.account_last4 }));
     },
     async upsertPending(t) {
       await writePending(t);

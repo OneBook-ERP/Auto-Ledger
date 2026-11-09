@@ -22,8 +22,8 @@ export function useInboxData(filter?: InboxFilter) {
   // Suggestions survive a reload: answering one item must not recompute them for all the others.
   const [chips] = useState(createChipCache);
   const reload = useCallback(async () => {
-    const [pending, created, rules, mappings, unread, flags, synced, queuedIds] = await Promise.all([
-      repo.listPending('new'), repo.listPending('created'), repo.listRules(), repo.listMappings(),
+    const [pending, createdCount, rules, mappings, unread, flags, synced, queuedIds] = await Promise.all([
+      repo.listPending('new'), repo.countPending('created'), repo.listRules(), repo.listMappings(),
       repo.getSetting(UNRECOGNISED_COUNT_KEY), repo.listSettings(UNKNOWN_PREFIX), repo.getSetting(LAST_SYNCED_KEY),
       repo.listQueuedTxnIds(),
     ]);
@@ -34,7 +34,7 @@ export function useInboxData(filter?: InboxFilter) {
     const live = flags.filter((f) => !stale.includes(f));
     chips.prune(new Set(pending.map((t) => t.id)));
     setInputs({
-      pending, mappings, rules, createdCount: created.length, unreadCount: Number(unread) || 0,
+      pending, mappings, rules, createdCount, unreadCount: Number(unread) || 0,
       unknownAccounts: live.filter((f) => f.value !== '').map((f) => f.key.slice(UNKNOWN_PREFIX.length)),
       lastSyncedAt: synced ? Number(synced) || null : null, now: now(), queuedIds,
     });
