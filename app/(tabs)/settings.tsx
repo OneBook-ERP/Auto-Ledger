@@ -71,7 +71,7 @@ export default function Settings() {
     setScanning(true);
     try {
       await repo.setSetting(BACKFILL_DAYS_KEY, String(d));
-      const r = await ensureBackfill({ repo, native, now: Date.now });
+      const r = await ensureBackfill({ repo, native, now: Date.now }, { fullWindow: true });
       if (!r.backfillSkipped) setFound(foundMessage(r));
     } catch {
       setFound('Could not read your messages. Try again.');

@@ -85,7 +85,7 @@ export default function PermissionsStep() {
         await syncSenderPatterns({ repo, native });
         await repo.setSetting(BACKFILL_DAYS_KEY, String(days));
         try {
-          const r = await ensureBackfill({ repo, native, now: Date.now });
+          const r = await ensureBackfill({ repo, native, now: Date.now }, { fullWindow: true });
           if (!r.backfillSkipped && r.inserted + r.enriched + r.duplicates > 0) {
             setFound(foundMessage(r));
             return; // show the result; the next press finishes

@@ -475,17 +475,29 @@ describe('ensureBackfill', () => {
   it('reads the window from the backfill_days setting; unknown or missing values fall back to 7', async () => {
     const { deps, native, repo } = await setup();
     await repo.setSetting('backfill_days', '90');
-    await ensureBackfill(deps);
+    await ensureBackfill(deps, { fullWindow: true });
     await repo.setSetting('backfill_days', 'abc');
-    await ensureBackfill(deps);
+    await ensureBackfill(deps, { fullWindow: true });
     await repo.setSetting('backfill_days', '45');
-    await ensureBackfill(deps);
+    await ensureBackfill(deps, { fullWindow: true });
     await repo.setSetting('backfill_days', '180');
-    await ensureBackfill(deps);
+    await ensureBackfill(deps, { fullWindow: true });
     expect(native.backfillCalls.map((c) => c[0])).toEqual([90, 7, 7, 180]);
     expect(BACKFILL_CHOICES).toEqual([7, 30, 90, 180]);
     expect(DEFAULT_BACKFILL_DAYS).toBe(7);
     expect(BACKFILL_DAYS_KEY).toBe('backfill_days');
+  });
+
+  it('routine runs read 7 days after a recent run, more after a long gap, capped at the chosen window; a first run and fullWindow read it all', async () => {
+    const { deps, native, repo } = await setup();
+    const DAY = 86_400_000;
+    await repo.setSetting('backfill_days', '90');
+    await ensureBackfill(deps); // no backfill_done_at yet: full window
+    await ensureBackfill({ ...deps, now: () => NOW + HOUR }); // recent
+    await ensureBackfill({ ...deps, now: () => NOW + HOUR + 20 * DAY + HOUR }); // 20 days and 1h later
+    await ensureBackfill({ ...deps, now: () => NOW + 500 * DAY }); // long gap, capped
+    await ensureBackfill(deps, { fullWindow: true });
+    expect(native.backfillCalls.map((c) => c[0])).toEqual([90, 7, 22, 90, 90]);
   });
 
   it('a larger window after items were answered creates no duplicates and reopens nothing', async () => {
