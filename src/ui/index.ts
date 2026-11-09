@@ -29,3 +29,5 @@ export { RefreshScroll } from './RefreshScroll';
 export { ActionSheet, SuggestionCard } from './ActionSheet';
 export type { ActionSheetItem } from './ActionSheet';
 export { confirmDialog, openExternal } from './dialogs';
+export { Icon, ICONS } from './Icon';
+export type { IconName } from './Icon';
