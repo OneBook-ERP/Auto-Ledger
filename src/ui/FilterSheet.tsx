@@ -8,7 +8,7 @@ import { Chip } from './Chip';
 export type ActivityFilters = { direction?: 'in' | 'out'; accountLast4?: string; status?: ActivityStatus; sort: ActivitySort };
 export const DEFAULT_FILTERS: ActivityFilters = { sort: 'newest' };
 
-/** How many of the three settings differ from the defaults (shown on the Filters button). */
+/** How many of the four settings differ from the defaults (shown on the Filters button). */
 export const activeFilterCount = (f: ActivityFilters) => (f.direction ? 1 : 0) + (f.status ? 1 : 0) + (f.accountLast4 ? 1 : 0) + (f.sort !== 'newest' ? 1 : 0);
 
 const SORTS: { key: ActivitySort; label: string }[] = [

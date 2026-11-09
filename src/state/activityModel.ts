@@ -35,7 +35,6 @@ export const canPutBack = (t: PendingTxn) =>
   t.state === 'created' && t.createdDocs.some((d) => d.docstatus === 2 || d.docstatus === DOC_MISSING) && !t.createdDocs.some((d) => d.docstatus === 1);
 
 export const titleOf = (t: PendingTxn) => t.counterparty?.trim() || t.merchant?.trim() || t.sender;
-export const signedAmount = (t: PendingTxn, fmt: (minor: number, currency: string) => string) => `${t.direction === 'in' ? '+' : '-'}${fmt(t.amountMinor, t.currency)}`;
 export const docLines = (docs: Doc[]) => docs.map((d) => `${d.doctype} ${d.name}`);
 
 export type Groups = { created: PendingTxn[]; submitted: PendingTxn[]; ignored: PendingTxn[]; total: number; shown: number };
