@@ -84,7 +84,7 @@ describe('Automatic rules screen', () => {
     expect((await app.repo.listRules()).find((r) => r.matchKey === KEY)?.auto).toBe(true);
     const erp = fakeInboxErp();
     expect((await runAutoApply({ repo: app.repo, erp, runPlan, now: () => NOW })).done).toEqual([]);
-    await app.repo.upsertPending(txnFrom('idfc-035', { id: 'later', rawHash: 'l1', amountMinor: 100_000, receivedAt: NOW + 1 }));
+    await app.repo.upsertPending(txnFrom('idfc-035', { id: 'later', rawHash: 'l1', amountMinor: 120_000, receivedAt: NOW + 1 })); // not a look-alike of the backlog item
     expect((await runAutoApply({ repo: app.repo, erp, runPlan, now: () => NOW })).done).toEqual(['later']);
     expect((await app.repo.getPending('backlog'))?.state).toBe('new');
   });
