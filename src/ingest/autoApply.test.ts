@@ -306,4 +306,20 @@ describe('runAutoApply', () => {
     expect(erp.createDraft).toHaveBeenCalledTimes(1);
     expect(await state(repo, 'f2')).toBe('new');
   });
+
+  it('a rule with a party (Facebook card charge = expense for Meta) makes the Journal Entry draft with Meta on the expense line', async () => {
+    const meta: Rule = { ...RULE, party: { doctype: 'Supplier', name: 'Meta' } };
+    const { repo, erp, deps } = await setup({ txns: [fb('f1')], rules: [meta] });
+    expect((await runAutoApply(deps)).done).toEqual(['f1']);
+    expect(erp.createDraft).toHaveBeenCalledTimes(1);
+    const [doctype, body] = erp.createDraft.mock.calls[0] as unknown as [string, { docstatus?: number; accounts: Record<string, unknown>[] }];
+    expect(doctype).toBe('Journal Entry');
+    expect(body.docstatus ?? 0).toBe(0);
+    const [expense, card] = body.accounts;
+    expect(expense).toMatchObject({ account: 'Advertising - ZP', party_type: 'Supplier', party: 'Meta', debit_in_account_currency: 500 });
+    expect(card).toMatchObject({ account: CARD.glAccount, credit_in_account_currency: 500 });
+    expect(card).not.toHaveProperty('party');
+    expect(await state(repo, 'f1')).toBe('created');
+  });
 });
+
