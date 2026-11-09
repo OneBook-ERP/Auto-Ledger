@@ -367,6 +367,25 @@ describe('Activity triage and totals honesty', () => {
     expect(screen.getByRole('button', { name: 'Filters (1)' })).toBeTruthy();
   });
 
+  it('the waiting count follows the period chip and the search, and skips cancelled drafts', async () => {
+    const d = [
+      txn('1', { counterparty: 'Alpha' }),
+      txn('2', { counterparty: 'Bravo', occurredOn: '2026-10-20', createdDocs: [doc('PE-2')] }),
+      txn('3', { counterparty: 'Charlie', createdDocs: [doc('PE-3', 2)] }),
+    ];
+    await open(d, { 'Payment Entry:PE-1': 0, 'Payment Entry:PE-2': 0, 'Payment Entry:PE-3': 2 });
+    await screen.findByTestId('activity-row-1');
+    expect(screen.getByRole('button', { name: '2 waiting for your accountant' })).toBeTruthy();
+    await fireEvent.press(screen.getByRole('radio', { name: 'Last month' }));
+    expect(screen.getByRole('button', { name: '1 waiting for your accountant' })).toBeTruthy();
+    await fireEvent.press(screen.getByRole('radio', { name: 'All time' }));
+    await fireEvent.changeText(screen.getByTestId('activity-search'), 'alpha');
+    expect(screen.getByRole('button', { name: '1 waiting for your accountant' })).toBeTruthy();
+    await fireEvent.press(screen.getByRole('button', { name: '1 waiting for your accountant' }));
+    expect(screen.getByRole('button', { name: 'Filters (1)' })).toBeTruthy();
+    expect((screen.getByTestId('activity-search').props as { value: string }).value).toBe('alpha');
+  });
+
   it('the sheet has a status filter', async () => {
     await open(data(), docs);
     await screen.findByTestId('activity-row-1');

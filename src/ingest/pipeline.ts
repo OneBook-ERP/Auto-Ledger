@@ -69,6 +69,7 @@ export type BackfillResult = IngestResult & { backfillSkipped?: 'no_permission' 
 export const BACKFILL_DAYS_KEY = 'backfill_days';
 export const BACKFILL_CHOICES = [7, 30, 90, 180] as const;
 export const DEFAULT_BACKFILL_DAYS = 7;
+const DAY_MS = 86_400_000;
 /** Alias of the default, kept so existing imports compile. */
 export const BACKFILL_DAYS = DEFAULT_BACKFILL_DAYS;
 
@@ -282,18 +283,28 @@ export function ingest(deps: { repo: Repo; native: Pick<NativeBridge, 'peek' | '
 /**
  * Reads the last N days (setting `backfill_days`, default 7) of the inbox for the configured senders and runs every message through the same
  * path as live items (nothing is acked: backfilled SMS are not in the native queue; rawHash dedupe makes the
- * overlap harmless). Runs after setup and on every app open; records `backfill_done_at`. Skips silently
+ * overlap harmless). Runs after setup and on every app open; records `backfill_done_at`. The full chosen window is read only with `fullWindow` (setup, Settings change) or when no
+ * run was recorded yet; routine runs read max(7 days, days since the last run + 1) capped at the chosen window. Skips silently
  * without READ_SMS ('no_permission') or without mappings ('no_mappings').
  */
 export function ensureBackfill(deps: {
   repo: Repo; native: Pick<NativeBridge, 'hasPermission' | 'backfill'>; now: () => number;
-}): Promise<BackfillResult> {
+}, opts?: { fullWindow?: boolean }): Promise<BackfillResult> {
   return serial(deps.repo, async () => {
     const perm = await deps.native.hasPermission();
     if (!perm.read) return { ...emptyResult(), backfillSkipped: 'no_permission' as const };
     const patterns = senderPatternsOf(await deps.repo.listMappings());
     if (!patterns.length) return { ...emptyResult(), backfillSkipped: 'no_mappings' as const };
-    const raws = await deps.native.backfill(await getBackfillDays(deps.repo), patterns);
+    const chosen = await getBackfillDays(deps.repo);
+    let days = chosen;
+    if (!opts?.fullWindow) {
+      const doneAt = Number(await deps.repo.getSetting(BACKFILL_DONE_AT_KEY));
+      if (Number.isFinite(doneAt) && doneAt > 0) {
+        const sinceDone = Math.ceil(Math.max(0, deps.now() - doneAt) / DAY_MS) + 1; // +1 day overlap
+        days = Math.min(chosen, Math.max(DEFAULT_BACKFILL_DAYS, sinceDone));
+      }
+    }
+    const raws = await deps.native.backfill(days, patterns);
     const batch = new Batch(deps.repo, deps.now);
     await batch.load();
     for (const raw of oldestFirst(raws)) {
@@ -367,7 +378,7 @@ export async function runForegroundCycle(deps: PipelineDeps): Promise<CycleSumma
   });
   out.senderPatterns = await step('syncSenderPatterns', () => syncSenderPatterns(deps));
   out.ingest = await step('ingest', () => ingest(deps));
-  out.backfill = await step('ensureBackfill', () => ensureBackfill(deps));
+  out.backfill = await step('ensureBackfill', () => ensureBackfill(deps, { fullWindow: false }));
   out.drain = await step('drainOutbox', () => drainOutbox({ ...deps, erp }));
   out.poll = await step('pollStatuses', () => pollStatuses({ ...deps, erp }));
   const finished = out.drain?.stoppedBecause === 'empty' || out.drain?.stoppedBecause === 'limit';

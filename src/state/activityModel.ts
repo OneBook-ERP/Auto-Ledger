@@ -35,7 +35,6 @@ export const canPutBack = (t: PendingTxn) =>
   t.state === 'created' && t.createdDocs.some((d) => d.docstatus === 2 || d.docstatus === DOC_MISSING) && !t.createdDocs.some((d) => d.docstatus === 1);
 
 export const titleOf = (t: PendingTxn) => t.counterparty?.trim() || t.merchant?.trim() || t.sender;
-export const signedAmount = (t: PendingTxn, fmt: (minor: number, currency: string) => string) => `${t.direction === 'in' ? '+' : '-'}${fmt(t.amountMinor, t.currency)}`;
 export const docLines = (docs: Doc[]) => docs.map((d) => `${d.doctype} ${d.name}`);
 
 export type Groups = { created: PendingTxn[]; submitted: PendingTxn[]; ignored: PendingTxn[]; total: number; shown: number };
@@ -113,6 +112,13 @@ export function filterActivity(items: PendingTxn[], f: ActivityFilter, today: st
     if (f.accountLast4 && t.accountLast4 !== f.accountLast4) return false;
     return !q || searchText(t).includes(q);
   });
+}
+
+/** Drafts waiting for the accountant among the entries matching every filter EXCEPT status; cancelled or missing drafts are not counted (as in `totalsOf`). */
+export function waitingCount(items: PendingTxn[], f: ActivityFilter, today: string): number {
+  return filterActivity(items, { ...f, status: undefined }, today).filter(
+    (t) => t.state === 'created' && !t.createdDocs.some((d) => d.docstatus === 2 || d.docstatus === DOC_MISSING),
+  ).length;
 }
 
 /** Rupee totals in paise, for entries that count (not ignored, not cancelled or missing). Items in another currency are not added; they are counted in `foreignCount`. */
