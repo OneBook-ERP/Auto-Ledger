@@ -1,4 +1,5 @@
 import type { AccountMapping, PendingTxn } from '../core/types';
+import * as pipeline from '../ingest/pipeline';
 import { bankDisplayName, buildHomeModel, cycleCountsAsSynced, wholeText, parseHomeCache, relativeTime, serializeHomeCache, type HomeInputs } from './viewModel';
 
 const acc = (n: string, kind: 'bank' | 'card', last4: string): AccountMapping => ({ bankAccount: n, glAccount: `${n} - GL`, kind, senderIds: ['X'], last4: [last4], modeOfPayment: 'Bank' });
@@ -201,5 +202,32 @@ describe('bank label and trust line', () => {
     const diff = inputs({ pending: [txn({ state: 'submitted', balanceMinor: 100000, receivedAt: 5 })] });
     expect(buildHomeModel(diff).trustLine).toBe('Last bank message shows ₹1,000.00');
     expect(buildHomeModel(inputs()).trustLine).toBeNull();
+  });
+});
+
+describe('Home without the unanswered rows', () => {
+  const maps = [acc('A', 'bank', '1'), acc('B', 'bank', '2'), acc('C', 'bank', '3')];
+  const figures = { balances: { 'A - GL': 100, 'B - GL': 200, 'C - GL': 300 }, receivableMinor: 0, payableMinor: 0 };
+  const settled = (o: Partial<PendingTxn>) => txn({ state: 'submitted', ...o });
+  const handled = [
+    settled({ accountLast4: '1', balanceMinor: 100, receivedAt: 5 }), settled({ accountLast4: '2', balanceMinor: 250, receivedAt: 6 }),
+    txn({ state: 'created', accountLast4: '3', balanceMinor: 300, receivedAt: 7 }), txn({ state: 'failed', accountLast4: '1' }),
+  ];
+  const unanswered = [txn({ state: 'new', accountLast4: '1' }), txn({ state: 'new', accountLast4: '1' }), txn({ state: 'new', accountLast4: '2' })];
+
+  it('gives the same numbers when the unanswered rows are only counted', () => {
+    const full = buildHomeModel(inputs({ mappings: maps, figures, pending: [...handled, ...unanswered] }));
+    const sources = [{ sender: 'X', accountType: 'bank' as const, accountLast4: '1' }, { sender: 'X', accountType: 'bank' as const, accountLast4: '2' }];
+    const lean = buildHomeModel(inputs({ mappings: maps, figures, pending: handled, unanswered: { count: unanswered.length, sources } }));
+    expect(lean).toEqual(full);
+    expect(lean.unclassifiedCount).toBe(4);
+  });
+
+  it('resolves each row to its account once, not once per bank account', () => {
+    const rows = Array.from({ length: 200 }, (_, n) => settled({ accountLast4: String((n % 3) + 1), balanceMinor: 1, receivedAt: n }));
+    const spy = jest.spyOn(pipeline, 'resolveMapping');
+    buildHomeModel(inputs({ mappings: maps, figures, pending: rows }));
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(rows.length);
+    spy.mockRestore();
   });
 });

@@ -1,6 +1,6 @@
 // Home view-model: pure, built from fetched figures + local data. The screen only renders it.
 import { buildTrust, type Trust } from '../core/trust';
-import type { AccountMapping, PendingTxn } from '../core/types';
+import type { AccountMapping, ParsedTxn, PendingTxn } from '../core/types';
 import { resolveMapping } from '../ingest/pipeline';
 import type { CycleSummary } from '../ingest/pipeline';
 import { formatInr } from '../ui/format';
@@ -15,6 +15,11 @@ export type HomeCache = { at: number; site: string; balances: Record<string, num
 export type HomeInputs = {
   mappings: AccountMapping[];
   pending: PendingTxn[];
+  /**
+   * Unanswered ('new') rows that are NOT in `pending`: how many, and the distinct (sender, account) they came from.
+   * Lets Home skip loading thousands of unanswered rows; without it only the 'new' rows inside `pending` count.
+   */
+  unanswered?: { count: number; sources: { sender: string; accountType: 'bank' | 'card'; accountLast4: string | null }[] };
   /** Null when nothing was ever fetched and there is no cache. */
   figures: HomeFigures | null;
   figuresAt: number | null;
@@ -121,18 +126,35 @@ export function buildHomeModel(i: HomeInputs): HomeModel {
   const outMinor = sum(outs);
   const summaryText = [ins.length ? `${formatInr(inMinor)} in` : null, outs.length ? `${formatInr(outMinor)} out` : null].filter(Boolean).join(' · ');
   // 'failed' items also wait for the user, so they count as unanswered.
-  const unclassifiedCount = i.pending.filter((t) => t.state === 'new' || t.state === 'failed').length;
+  const unclassifiedCount = i.pending.filter((t) => t.state === 'new' || t.state === 'failed').length + (i.unanswered?.count ?? 0);
 
   // Newest bank message with a balance, per mapped bank account. A cached (stale) ERP balance is never
   // compared with a fresh message: that would raise a false alarm.
   let pair: { computed: number; sms: number } | null = null;
   if (!i.figuresStale) {
+    // Each row is resolved to its account once (not once per account); 'new' rows only mark an account as not comparable.
+    const rowsOf = new Map<AccountMapping, PendingTxn[]>();
+    const unsettled = new Set<AccountMapping>();
+    for (const t of i.pending) {
+      if (t.accountType !== 'bank') continue;
+      const m = resolveMapping(i.mappings, t);
+      if (!m) continue;
+      const list = rowsOf.get(m);
+      if (list) list.push(t);
+      else rowsOf.set(m, [t]);
+      if (t.state === 'new' || t.state === 'created') unsettled.add(m);
+    }
+    for (const src of i.unanswered?.sources ?? []) {
+      if (src.accountType !== 'bank') continue;
+      const m = resolveMapping(i.mappings, src as ParsedTxn);
+      if (m) unsettled.add(m);
+    }
     for (const [idx, m] of banks.entries()) {
       const computed = accounts[idx].minor;
       if (computed === null) continue;
-      const mine = i.pending.filter((t) => t.accountType === 'bank' && resolveMapping(i.mappings, t) === m);
+      const mine = rowsOf.get(m) ?? [];
       // Items not yet in the ledger make a difference expected: do not compare this account.
-      if (mine.some((t) => t.state === 'new' || t.state === 'created')) continue;
+      if (unsettled.has(m)) continue;
       const newest = mine.filter((t) => t.currency === 'INR' && t.balanceMinor !== null).sort((x, y) => y.receivedAt - x.receivedAt)[0];
       if (!newest || newest.balanceMinor === null) continue;
       const cand = { computed, sms: newest.balanceMinor };

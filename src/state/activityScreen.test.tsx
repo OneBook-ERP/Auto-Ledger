@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { Alert, Linking } from 'react-native';
 import type { PendingTxn } from '../core/types';
+import type { Repo } from '../data/repo';
 import { ErpNetworkError } from '../erp/client';
 import { FakeDocsErp } from '../outbox/fakeErp.testutil';
 import type { ErpOps } from '../outbox/runner';
@@ -22,6 +23,11 @@ jest.mock('expo-router', () => {
 let mockErp: unknown = null;
 jest.mock('./useErpOps', () => ({ useErpOps: () => mockErp }));
 
+jest.mock('./activityModel', () => {
+  const actual = jest.requireActual('./activityModel');
+  return { ...actual, sortActivity: jest.fn(actual.sortActivity), filterActivity: jest.fn(actual.filterActivity) };
+});
+import * as activityModel from './activityModel';
 import Activity, { OFFLINE_MESSAGE, OFFLINE_PUT_BACK_MESSAGE, UNDO_CONFIRM_MESSAGE } from '../../app/(tabs)/activity';
 
 const doc = (name: string, docstatus = 0, doctype = 'Payment Entry') => ({ doctype, name, docstatus });
@@ -34,9 +40,10 @@ const txn = (id: string, over: Partial<PendingTxn> = {}): PendingTxn => ({
 });
 const SUBMITTED_MSG = 'Your accountant already submitted this entry. Cancel it in ERPNext if it is wrong.';
 
-async function open(txns: PendingTxn[], docs: Record<string, number> = {}) {
+async function open(txns: PendingTxn[], docs: Record<string, number> = {}, beforeRender?: (repo: Repo) => void) {
   const app = await fakeApp();
   for (const t of txns) await app.repo.upsertPending(t);
+  beforeRender?.(app.repo);
   await app.repo.setSetting('site_url', 'https://erp.example.com');
   const erp = new FakeDocsErp(docs);
   mockErp = erp as unknown as ErpOps;
@@ -62,6 +69,36 @@ beforeEach(() => {
 afterEach(() => jest.restoreAllMocks());
 
 describe('Activity screen', () => {
+  it('reads only handled rows from the repo and never the whole table', async () => {
+    const news = Array.from({ length: 30 }, (_, i) => txn(`n${i}`, { state: 'new', createdDocs: [] }));
+    let spy!: jest.SpyInstance;
+    await open([txn('1'), ...news], { 'Payment Entry:PE-1': 0 }, (repo) => { spy = jest.spyOn(repo, 'listPending'); });
+    await screen.findByTestId('activity-row-1');
+    expect(spy).toHaveBeenCalled();
+    for (const call of spy.mock.calls) {
+      const states = call[0] as string[] | string | undefined;
+      expect(states).toBeDefined();
+      expect([states].flat()).not.toContain('new');
+    }
+    const returned = await Promise.all(spy.mock.results.map((r) => r.value as Promise<PendingTxn[]>));
+    expect(returned.flat().some((t) => t.state === 'new')).toBe(false);
+  });
+
+  it('typing in search or opening the filters does not re-run the repo read, and unrelated renders do not re-sort', async () => {
+    let spy!: jest.SpyInstance;
+    await open([txn('1'), txn('2')], { 'Payment Entry:PE-1': 0, 'Payment Entry:PE-2': 0 }, (repo) => { spy = jest.spyOn(repo, 'listPending'); });
+    await screen.findByTestId('activity-row-1');
+    const reads = spy.mock.calls.length;
+    const sorts = (activityModel.sortActivity as jest.Mock).mock.calls.length;
+    await fireEvent.press(screen.getByRole('button', { name: 'Filters' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Close filters' }));
+    expect(spy.mock.calls.length).toBe(reads);
+    expect((activityModel.sortActivity as jest.Mock).mock.calls.length).toBe(sorts);
+    await fireEvent.changeText(screen.getByTestId('activity-search'), 'Party 2');
+    expect(spy.mock.calls.length).toBe(reads);
+    expect((activityModel.sortActivity as jest.Mock).mock.calls.length).toBeGreaterThan(sorts);
+  });
+
   it('shows the empty state when there is no activity', async () => {
     await open([txn('1', { state: 'new', createdDocs: [] })]);
     expect(await screen.findByText('Nothing processed yet')).toBeTruthy();

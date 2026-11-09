@@ -1,7 +1,8 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Linking, Pressable, Text, View, useColorScheme } from 'react-native';
 import type { PendingTxn } from '../../src/core/types';
+import type { PendingState } from '../../src/data/repo';
 import { NEEDS_LOGIN_SINCE_KEY } from '../../src/ingest/drain';
 import { bringBack, pollStatuses } from '../../src/ingest/statusPoller';
 import { undoTxn, type UndoResult } from '../../src/outbox/runner';
@@ -30,6 +31,8 @@ const PERIODS: { key: ActivityPeriod; label: string }[] = [
   { key: 'all', label: 'All time' },
 ];
 
+const ACTIVITY_STATES: PendingState[] = ['created', 'submitted', 'ignored'];
+
 type Notice = { tone: 'ok' | 'warn' | 'error'; message: string; retry?: () => void };
 
 export default function Activity() {
@@ -52,7 +55,8 @@ export default function Activity() {
   useEffect(() => () => { alive.current = false; }, []);
 
   const load = useCallback(async () => {
-    const all = await repo.listPending();
+    // Unanswered rows are not shown here: never read (or parse) them.
+    const all = await repo.listPending(ACTIVITY_STATES);
     if (alive.current) setItems(all);
   }, [repo]);
 
@@ -202,15 +206,23 @@ export default function Activity() {
     );
   };
 
-  const processed = (items ?? []).filter((t) => t.state === 'created' || t.state === 'submitted' || t.state === 'ignored');
-  const accounts = [...new Set(processed.map((t) => t.accountLast4).filter((x): x is string => !!x))].sort();
-  const baseFilter = { query, period, direction: filters.direction, accountLast4: accounts.length > 1 ? filters.accountLast4 : undefined };
-  const waiting = waitingCount(processed, baseFilter, isoToday(Date.now()));
-  const matching = sortActivity(filterActivity(processed, { ...baseFilter, status: filters.status }, isoToday(Date.now())), filters.sort);
-  const shown = matching.slice(0, limit);
-  const totals = totalsOf(matching);
+  const today = isoToday(Date.now());
+  // Re-derived only when the data, the search or the filters change, not on every busy/notice/sheet render.
+  const derived = useMemo(() => {
+    const processed = (items ?? []).filter((t) => t.state === 'created' || t.state === 'submitted' || t.state === 'ignored');
+    const accounts = [...new Set(processed.map((t) => t.accountLast4).filter((x): x is string => !!x))].sort();
+    const baseFilter = { query, period, direction: filters.direction, accountLast4: accounts.length > 1 ? filters.accountLast4 : undefined };
+    const waiting = waitingCount(processed, baseFilter, today);
+    const matching = sortActivity(filterActivity(processed, { ...baseFilter, status: filters.status }, today), filters.sort);
+    return { processed, accounts, waiting, matching, totals: totalsOf(matching) };
+  }, [items, query, period, filters, today]);
+  const { processed, accounts, waiting, matching, totals } = derived;
+  const shown = useMemo(() => matching.slice(0, limit), [matching, limit]);
   // Headings by recency only make sense newest first; any other order is one plain list.
-  const groups = filters.sort === 'newest' ? groupByRecency(shown, isoToday(Date.now())) : [{ title: null, rows: shown }];
+  const groups = useMemo(
+    () => (filters.sort === 'newest' ? groupByRecency(shown, today) : [{ title: null, rows: shown }]),
+    [shown, filters.sort, today],
+  );
   const nFilters = activeFilterCount(filters);
   const filtersLabel = nFilters ? `Filters (${nFilters})` : 'Filters';
 
