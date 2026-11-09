@@ -85,6 +85,14 @@ export default function Activity() {
 
   // The Activity tab gained focus: show what is stored, then ask ERPNext what the accountant did.
   useFocusEffect(useCallback(() => { void refresh(); }, [refresh]));
+  // A cycle or its automatic answers changed what is stored: show it (local read only).
+  const dataVersion = useUiStore((s) => s.dataVersion);
+  const seenVersion = useRef(dataVersion);
+  useEffect(() => {
+    if (seenVersion.current === dataVersion) return;
+    seenVersion.current = dataVersion;
+    load().catch(() => undefined);
+  }, [dataVersion, load]);
 
   const pullToRefresh = async () => {
     setRefreshing(true);

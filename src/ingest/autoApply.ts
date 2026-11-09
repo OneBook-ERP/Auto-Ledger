@@ -3,7 +3,17 @@
 // runner's per-txn lock, outbox and duplicate safety). Strictly one at a time, at most AUTO_LIMIT per run.
 // Never retries an item that failed (it waits in the Inbox with its message), never raises the rule's largest
 // confirmed amount, and never answers again an item the user took back with Undo. Never throws.
+//
+// Look-alikes (final review I1): an item is NEVER answered automatically when ANOTHER stored item (any state:
+// waiting, answered by the app or by the user, ignored) has the same pattern key (nameKey: direction + normalised
+// name), the same currency and amount (exact paise), and a date at most SIMILAR_DAYS (3) days away (an unreadable
+// date on either side counts as near). The rule is symmetric, so two identical new items both wait, and an item whose
+// look-alike the app answered yesterday waits too. Such an item gets `auto_held:<id>` = the look-alike's id and the
+// Inbox shows "Looks like another payment: check before answering". The bank sending two SMS for ONE payment is
+// already merged into one item before this point, so a look-alike is either a real second payment or a duplicate the
+// user must judge; the app never decides that alone.
 import { canAutoApply } from '../core/classify';
+import { SIMILAR_DAYS, dayNumber } from '../core/similar';
 import { learnRule, nameKey, ruleChoice } from '../core/suggest';
 import type { ActionChoice, PendingTxn, Rule } from '../core/types';
 import type { Repo } from '../data/repo';
@@ -27,6 +37,9 @@ export const AUTO_FAILED_PREFIX = 'auto_failed:';
 export const autoFailedKey = (id: string) => `${AUTO_FAILED_PREFIX}${id}`;
 /** `auto_skip:<txnId>`: the user put an automatic answer back with Undo; never automatic again. */
 export const AUTO_SKIP_PREFIX = 'auto_skip:';
+/** `auto_held:<txnId>` = the look-alike's id: not answered automatically (see the header); cleared once it stops waiting. */
+export const AUTO_HELD_PREFIX = 'auto_held:';
+export const autoHeldKey = (id: string) => `${AUTO_HELD_PREFIX}${id}`;
 /**
  * `auto_since:<matchKey>` = ms time the user made the pattern automatic. Only items that arrived after it are ever
  * answered automatically: the backlog, and items the user left unticked in a bulk answer, always wait for the user.
@@ -71,6 +84,32 @@ export function parseAutoDone(v: string | null | undefined): AutoDoneMark | null
 }
 
 const idsOf = (rows: { key: string }[], prefix: string) => new Set(rows.map((r) => r.key.slice(prefix.length)));
+
+/** For each item, another stored item that looks the same (see the header), or none. One pass over all items. */
+function lookAlikes(all: PendingTxn[]): (t: PendingTxn) => PendingTxn | null {
+  const buckets = new Map<string, { t: PendingTxn; day: number | null }[]>();
+  const keyOf = (t: PendingTxn) => {
+    const name = nameKey(t);
+    return name ? `${name}\u0000${t.currency}\u0000${t.amountMinor}` : null;
+  };
+  for (const t of all) {
+    const k = keyOf(t);
+    if (!k) continue;
+    const b = buckets.get(k);
+    const v = { t, day: dayNumber(t.occurredOn) };
+    if (b) b.push(v);
+    else buckets.set(k, [v]);
+  }
+  return (t) => {
+    const k = keyOf(t);
+    const day = dayNumber(t.occurredOn);
+    for (const o of (k && buckets.get(k)) || []) {
+      if (o.t.id === t.id) continue;
+      if (day === null || o.day === null || Math.abs(day - o.day) <= SIMILAR_DAYS) return o.t;
+    }
+    return null;
+  };
+}
 const sameRule = (a: Rule, b: Rule) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
@@ -104,15 +143,18 @@ export async function runAutoApply(deps: AutoApplyDeps): Promise<AutoApplyResult
   const { repo } = deps;
   const out: AutoApplyResult = { done: [], failed: [], queued: [] };
   try {
-    const [pending, queuedIds, failedRows, doneRows, skipRows] = await Promise.all([
-      repo.listPending('new'), repo.listQueuedTxnIds(), repo.listSettings(AUTO_FAILED_PREFIX), repo.listSettings(AUTO_DONE_PREFIX),
-      repo.listSettings(AUTO_SKIP_PREFIX),
+    const [all, queuedIds, failedRows, doneRows, skipRows, heldRows] = await Promise.all([
+      repo.listPending(), repo.listQueuedTxnIds(), repo.listSettings(AUTO_FAILED_PREFIX), repo.listSettings(AUTO_DONE_PREFIX),
+      repo.listSettings(AUTO_SKIP_PREFIX), repo.listSettings(AUTO_HELD_PREFIX),
     ]);
+    const pending = all.filter((t) => t.state === 'new');
     const waiting = new Set(pending.map((t) => t.id));
     const queued = new Set(queuedIds);
     // A failure note lasts until the user acts: once the item is no longer waiting, the note goes.
     for (const id of idsOf(failedRows, AUTO_FAILED_PREFIX)) if (!waiting.has(id)) await repo.deleteSetting(autoFailedKey(id));
     const failed = idsOf(failedRows, AUTO_FAILED_PREFIX);
+    const held = new Map(heldRows.map((r) => [r.key.slice(AUTO_HELD_PREFIX.length), r.value]));
+    for (const id of held.keys()) if (!waiting.has(id)) await repo.deleteSetting(autoHeldKey(id));
     const skip = idsOf(skipRows, AUTO_SKIP_PREFIX);
     // Answered automatically but waiting again (not just queued): the user took it back with Undo.
     for (const id of idsOf(doneRows, AUTO_DONE_PREFIX)) {
@@ -138,13 +180,20 @@ export async function runAutoApply(deps: AutoApplyDeps): Promise<AutoApplyResult
         && (!checkedFrom || t.occurredOn >= checkedFrom)
         && actionsFor(t.direction, t.accountType).some((a) => a.type === rule.action);
     };
+    const lookAlike = lookAlikes(all);
+    const hold: [PendingTxn, PendingTxn][] = [];
     const candidates = [...pending]
       .sort((a, b) => a.receivedAt - b.receivedAt || (a.id < b.id ? -1 : 1))
       .filter((t) => {
         if (queued.has(t.id) || failed.has(t.id) || skip.has(t.id) || done.has(t.id)) return false;
         const rule = auto.find((r) => r.matchKey === nameKey(t));
-        return !!rule && fits(t, rule) && canAutoApply(t, rule, dups.has(t.id));
+        if (!rule || !fits(t, rule) || !canAutoApply(t, rule, dups.has(t.id))) return false;
+        const other = lookAlike(t);
+        if (other) hold.push([t, other]);
+        return !other;
       });
+    // Look-alikes wait for the user with a note naming the other item (written once).
+    for (const [t, other] of hold) if (held.get(t.id) !== other.id) await repo.setSetting(autoHeldKey(t.id), other.id);
     if (!candidates.length) return out;
 
     const [mappings, company, drawings] = await Promise.all([repo.listMappings(), repo.getSetting(COMPANY_SETTING), repo.getSetting(DRAWINGS_SETTING)]);
@@ -153,6 +202,8 @@ export async function runAutoApply(deps: AutoApplyDeps): Promise<AutoApplyResult
     let tried = 0;
     for (const t of candidates) {
       if (tried >= AUTO_LIMIT) break;
+      // Signed out meanwhile (another request saw the session end): the rest of the batch waits for sign-in.
+      if (await repo.getSetting(NEEDS_LOGIN_SINCE_KEY)) break;
       // Re-read before every item: a rule switched off, edited or deleted a moment ago stops the run at once,
       // and a warning that appeared meanwhile is respected.
       const rule = (await repo.listRules()).find((r) => r.matchKey === nameKey(t));

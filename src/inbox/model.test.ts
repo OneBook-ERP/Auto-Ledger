@@ -198,6 +198,13 @@ describe('group cards (wave 3 K3)', () => {
     expect(m.chipOf('a')).toEqual({ text: 'Not done automatically. Open it to answer.', tone: 'warn' });
     expect(m.autoFailed).toEqual([{ id: 'a', text: 'FACEBOOK SI, ₹1.00: ERPNext needs these fields: Cost Center' }]);
   });
+
+  it('a row held back because it looks like another payment says so in its chip', () => {
+    const a = fb('a', 100);
+    const m = buildInboxModel(base({ pending: [a, fb('b', 100)], autoHeld: { a: 'b' } }));
+    expect(m.chipOf('a')).toEqual({ text: 'Looks like another payment: check before answering', tone: 'warn' });
+    expect(m.chipOf('b').text).not.toBe('Looks like another payment: check before answering');
+  });
 });
 
 describe('bulk helpers (wave 3 K3)', () => {

@@ -34,6 +34,8 @@ export type InboxInputs = {
   chips?: ChipCache;
   /** Txn id -> why the app could not answer it automatically (it waits for the user). */
   autoFailed?: Record<string, string>;
+  /** Txn id -> the look-alike's id: not answered automatically because it looks like another payment. */
+  autoHeld?: Record<string, string>;
   /** Payments answered automatically since the user last dismissed the notice. */
   autoDoneCount?: number;
 };
@@ -72,6 +74,7 @@ export const rulesVersion = (rules: Rule[]) => rules.map((r) => `${r.matchKey}|$
 
 const QUEUED_CHIP: ChipView = { text: 'Answer saved, waiting to send', tone: 'plain' };
 const AUTO_FAILED_CHIP: ChipView = { text: 'Not done automatically. Open it to answer.', tone: 'warn' };
+const AUTO_HELD_CHIP: ChipView = { text: 'Looks like another payment: check before answering', tone: 'warn' };
 
 export type InboxItem = { type: 'header'; key: string; title: string } | { type: 'row'; key: string; row: InboxRow };
 
@@ -166,6 +169,7 @@ export function buildInboxModel(i: InboxInputs): InboxModel {
   const chipOf = (id: string): ChipView => {
     if (queued.has(id)) return QUEUED_CHIP;
     if (autoFailed[id] !== undefined) return AUTO_FAILED_CHIP;
+    if (i.autoHeld?.[id] !== undefined) return AUTO_HELD_CHIP;
     const t = byId.get(id);
     return t ? chips.get(t, i.rules, version) : { text: 'Who is this?', tone: 'plain' };
   };

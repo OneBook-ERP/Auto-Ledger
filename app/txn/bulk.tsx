@@ -264,7 +264,7 @@ export default function BulkScreen() {
         title={income ? 'Which income account?' : 'Which expense account?'}
         subtitle={income ? 'Where this income is booked in ERPNext.' : 'Where this cost is booked in ERPNext.'}>
         {!deps.erp ? <Banner tone="warn" message="You are signed out of ERPNext. Sign in again to choose an account." /> : null}
-        {!company ? <Banner tone="error" message="Choose your company in Settings first (Run setup again)." /> : null}
+        {!company ? <Banner tone="error" message="Choose your company in Settings first." /> : null}
         {ledgers.isLoading ? <Banner message="Loading accounts..." /> : null}
         {ledgers.isError ? <Banner tone="error" message="Could not load the accounts. Check your connection." actionLabel="Try again" onAction={() => ledgers.refetch()} /> : null}
         {(ledgers.data ?? []).map((a) => (

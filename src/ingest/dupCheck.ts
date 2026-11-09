@@ -2,7 +2,7 @@
 // span of pending items in ONE batch and stores a flag per pending item that looks like one of them. Flags never
 // block, hide or change an answer; the runner's own duplicate safety (20A) is separate and unchanged.
 // Uses parsed fields only (no SMS text). Never throws.
-import { SIMILAR_DAYS, dayNumber, findSimilar, type BookedEntry, type SimilarHit } from '../core/similar';
+import { SIMILAR_DAYS, dayNumber, findSimilarIn, indexBooked, type BookedEntry, type SimilarHit } from '../core/similar';
 import type { PendingTxn } from '../core/types';
 import type { Repo } from '../data/repo';
 import type { ErpClient } from '../erp/client';
@@ -51,7 +51,8 @@ const isoOfDay = (day: number) => new Date(day * DAY_MS).toISOString().slice(0, 
  * Pending = state 'new' and no answer waiting in the outbox. Flags of anything else (answered, ignored, queued,
  * gone) are removed first, locally. Then the booked entries between the earliest pending date - 3 days and the
  * latest + 3 days are read once; each pending item's flag is set, updated or removed. Resolves true when the check
- * really ran (or nothing waits), false when it could not (no company, ERPNext or local failure). If ERPNext fails, the
+ * really ran (or nothing waits), false when it could not (no company, no waiting item with a readable date, ERPNext
+ * or local failure). If ERPNext fails, the
  * pending items' flags are left as they were. An entry recorded (createdDocs) by ANOTHER item of the opposite
  * direction and the same amount is the other half of an own-account transfer and never warns. CHECKED_FROM_KEY
  * follows the read's `checkedFrom`.
@@ -74,7 +75,8 @@ export async function runDupCheck(deps: DupCheckDeps): Promise<boolean> {
     if (!company) return false;
 
     const days = pending.map((t) => dayNumber(t.occurredOn)).filter((d): d is number => d !== null);
-    if (!days.length) return true;
+    // No waiting item has a readable date: nothing was checked, so report false (automatic answers wait).
+    if (!days.length) return false;
     const from = isoOfDay(Math.min(...days) - SIMILAR_DAYS);
     const to = isoOfDay(Math.max(...days) + SIMILAR_DAYS);
     const { entries, checkedFrom } = await deps.erp.readBookedEntries(company, from, to);
@@ -90,15 +92,19 @@ export async function runDupCheck(deps: DupCheckDeps): Promise<boolean> {
     for (const t of all) {
       for (const d of t.createdDocs) {
         const k = docKey(d);
-        recordedBy.set(k, [...(recordedBy.get(k) ?? []), t]);
+        const list = recordedBy.get(k);
+        if (list) list.push(t);
+        else recordedBy.set(k, [t]);
       }
     }
 
+    // Indexed once: each item is compared only with entries of its amount or reference (2,000 x 4,500 froze the UI).
+    const index = indexBooked(entries);
     let ok = true;
     for (const t of pending) {
       const otherHalf = (e: BookedEntry) =>
         (recordedBy.get(docKey(e)) ?? []).some((r) => r.id !== t.id && r.direction !== t.direction && r.amountMinor === t.amountMinor);
-      const hit = findSimilar(t, entries, otherHalf);
+      const hit = findSimilarIn(t, index, otherHalf);
       const key = dupKey(t.id);
       try {
         if (!hit) {

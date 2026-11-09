@@ -133,7 +133,7 @@ export default function RulesScreen() {
               {row.canAuto ? (
                 <ToggleRow
                   title="Do this automatically"
-                  subtitle={`For new payments from now on, up to ${row.limit}. Never for one that may already be in ERPNext. Payments already waiting are left to you.`}
+                  subtitle={`For new payments from now on, up to ${row.limit}. Never for one that may already be in ERPNext or looks like another payment. Payments already waiting are left to you.`}
                   value={row.rule.auto === true}
                   disabled={busy}
                   onChange={(v) => void setAuto(row.rule.matchKey, v)}
