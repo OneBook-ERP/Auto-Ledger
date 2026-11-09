@@ -1,22 +1,29 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { listOpenSalesOrders } from '../../src/erp/docs';
+import type { OpenOrder } from '../../src/erp/docs';
 import { nextStep } from '../../src/inbox/actions';
 import { useInboxDeps } from '../../src/inbox/deps';
 import { FlowAnswered, FlowGone, FlowLoading } from '../../src/inbox/FlowStates';
 import { chooseOrders, defaultAllocation, effectiveAmountMinor, parseRupees, skipOrders, toPaise } from '../../src/inbox/flow';
-import { longDate } from '../../src/inbox/format';
 import { stepHref, useTxnFlow } from '../../src/inbox/hooks';
-import { useApp } from '../../src/state/AppProvider';
-import { BackLink, Banner, Button, ChoiceRow, Screen, Stack, TextField, Txt, formatInr } from '../../src/ui';
+import { BackLink, Banner, Button, ChoiceRow, Screen, Stack, TextField, Txt, formatDate, formatInr } from '../../src/ui';
+
+/** Plain-words title of an order: its date and total. The order id is only ever secondary detail. */
+export function orderTitle(o: OpenOrder): string {
+  return o.orderDate ? `Order of ${formatDate(o.orderDate)}, ${formatInr(o.totalMinor)}` : `Order for ${formatInr(o.totalMinor)}`;
+}
+
+function orderDetail(o: OpenOrder): string {
+  const delivery = o.deliveryDate ? `. Delivery by ${formatDate(o.deliveryDate)}` : '';
+  return `${o.name}: already paid ${formatInr(o.advanceMinor)}, left to pay ${formatInr(o.remainingMinor)}${delivery}`;
+}
 
 /** Customer advance: which open Sales Order(s) the money is for, or none (a plain advance). */
 export default function OrderStep() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { siteUrl } = useInboxDeps();
-  const { client } = useApp();
+  const { erp, siteUrl } = useInboxDeps();
   const f = useTxnFlow(id);
   const txn = f.txn;
   const party = f.draft.party;
@@ -26,8 +33,8 @@ export default function OrderStep() {
 
   const q = useQuery({
     queryKey: ['open-orders', siteUrl, party?.name],
-    queryFn: () => listOpenSalesOrders(client!, party!.name),
-    enabled: !!client && !!party && !f.draft.newParty,
+    queryFn: () => erp!.listOpenSalesOrders(party!.name),
+    enabled: !!erp && !!party && !f.draft.newParty,
   });
 
   // No open orders (or a new customer): nothing to ask, go straight on as a plain advance.
@@ -84,37 +91,31 @@ export default function OrderStep() {
           <Button variant="secondary" label="Skip, this is not for an order" onPress={() => go(skipOrders())} />
         </Stack>
       }>
-      {!client ? <Banner tone="warn" message="You are signed out of ERPNext. Sign in again to see the orders, or skip this step." /> : null}
+      {!erp ? <Banner tone="warn" message="You are signed out of ERPNext. Sign in again to see the orders, or skip this step." /> : null}
       {q.isLoading ? <Banner message="Loading open orders..." /> : null}
       {q.isError ? <Banner tone="error" message="Could not load the open orders. Check your connection." actionLabel="Try again" onAction={() => q.refetch()} /> : null}
       {check?.total ? <Banner tone="error" message={check.total} /> : null}
-      {orders.map((o) => (
-        <ChoiceRow
-          key={o.name}
-          role="checkbox"
-          title={o.name}
-          subtitle={[
-            `Order total ${formatInr(o.totalMinor)}`,
-            `already paid ${formatInr(o.advanceMinor)}`,
-            `left to pay ${formatInr(o.remainingMinor)}`,
-          ].join(', ') + (o.deliveryDate ? `. Delivery by ${longDate(o.deliveryDate)}` : '')}
-          selected={chosen[o.name] !== undefined}
-          onPress={() => toggle(o.name, o.remainingMinor)}
-        />
-      ))}
-      {orders.filter((o) => chosen[o.name] !== undefined).map((o) => (
-        <TextField
-          key={`amt-${o.name}`}
-          label={`Amount for ${o.name} (₹)`}
-          value={chosen[o.name]}
-          keyboardType="decimal-pad"
-          onChangeText={(t) => {
-            setCheck(null);
-            setPicks({ ...chosen, [o.name]: t });
-          }}
-          error={check?.errors[o.name]}
-        />
-      ))}
+      {orders.map((o) => {
+        const on = chosen[o.name] !== undefined;
+        return (
+          <Stack key={o.name} gap={1}>
+            <ChoiceRow role="checkbox" title={orderTitle(o)} subtitle={orderDetail(o)} selected={on} onPress={() => toggle(o.name, o.remainingMinor)} />
+            {on ? (
+              <TextField
+                label="Amount for this order"
+                hint={`In rupees. Up to ${formatInr(o.remainingMinor)} is left to pay.`}
+                value={chosen[o.name]}
+                keyboardType="decimal-pad"
+                onChangeText={(t) => {
+                  setCheck(null);
+                  setPicks({ ...chosen, [o.name]: t });
+                }}
+                error={check?.errors[o.name]}
+              />
+            ) : null}
+          </Stack>
+        );
+      })}
       {Object.keys(chosen).length > 0 ? (
         <Txt variant="muted">{`Total: ${formatInr(Object.values(chosen).reduce((s, t) => s + (parseRupees(t) ?? 0), 0))} of ${formatInr(amount)}`}</Txt>
       ) : null}

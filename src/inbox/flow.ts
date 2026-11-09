@@ -201,7 +201,7 @@ export function chooseOrders(
   for (const r of rows) {
     totalMinor += r.allocatedMinor;
     if (!(r.allocatedMinor > 0)) errors[r.name] = 'Enter an amount above zero.';
-    else if (r.allocatedMinor > r.remainingMinor) errors[r.name] = `More than the ${formatInr(r.remainingMinor)} left to pay on ${r.name}.`;
+    else if (r.allocatedMinor > r.remainingMinor) errors[r.name] = `More than the ${formatInr(r.remainingMinor)} left to pay on this order.`;
   }
   const check: AllocationCheck = { ok: true, totalMinor, errors };
   if (rows.length === 0) check.total = 'Choose an order, or tap Skip if this is not for an order.';

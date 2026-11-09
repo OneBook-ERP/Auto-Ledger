@@ -27,6 +27,7 @@ export function fakeInboxErp() {
     checkSession: jest.fn<ReturnType<InboxErp['checkSession']>, []>(async () => false),
     getRequiredFields: jest.fn<ReturnType<InboxErp['getRequiredFields']>, Parameters<InboxErp['getRequiredFields']>>(async () => []),
     listOpenInvoices: jest.fn<ReturnType<InboxErp['listOpenInvoices']>, Parameters<InboxErp['listOpenInvoices']>>(async () => []),
+    listOpenSalesOrders: jest.fn<ReturnType<InboxErp['listOpenSalesOrders']>, Parameters<InboxErp['listOpenSalesOrders']>>(async () => []),
     listLedgerAccounts: jest.fn<ReturnType<InboxErp['listLedgerAccounts']>, Parameters<InboxErp['listLedgerAccounts']>>(async () => []),
     listBankAccounts: jest.fn<ReturnType<InboxErp['listBankAccounts']>, Parameters<InboxErp['listBankAccounts']>>(async () => []),
   } satisfies InboxErp;

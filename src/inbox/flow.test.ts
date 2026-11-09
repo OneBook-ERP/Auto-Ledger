@@ -158,7 +158,7 @@ describe('advance for a Sales Order (orders step)', () => {
   it('more than an order still needs, zero, or nothing chosen is blocked per order', () => {
     const over = chooseOrders(credit.amountMinor, [row('SO-1', 1_000_000, 1_000_001)]);
     expect(over.patch).toBeNull();
-    expect(over.check.errors['SO-1']).toBe('More than the ₹10,000.00 left to pay on SO-1.');
+    expect(over.check.errors['SO-1']).toBe('More than the ₹10,000.00 left to pay on this order.');
     expect(chooseOrders(credit.amountMinor, [row('SO-1', 1_000_000, 0)]).check.errors['SO-1']).toBe('Enter an amount above zero.');
     const none = chooseOrders(credit.amountMinor, []);
     expect(none.patch).toBeNull();
