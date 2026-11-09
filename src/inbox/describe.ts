@@ -1,5 +1,7 @@
-// Label / value rows for the confirm screen, read from the exact plan steps that will be sent. Pure.
+// Label / value rows for the confirm screen, read from the exact plan steps that will be sent, and the detail
+// screen's "may already be booked" warning. Pure.
 import type { PlanStep } from '../core/types';
+import type { DupFlag } from '../ingest/dupCheck';
 import type { Detail } from '../ui/DetailCard';
 import { formatInr } from '../ui/format';
 import { longDate } from './format';
@@ -64,4 +66,18 @@ export function describeStep(s: PlanStep, labels: Record<string, string> = {}): 
   rows.push({ label: 'Date', value: longDate(str(b.posting_date)) });
   rows.push({ label: 'Reference', value: str(b.cheque_no), mono: true });
   return rows;
+}
+
+export const DUPLICATE_TITLE = 'This may already be in ERPNext';
+export const DUPLICATE_STRONG = 'A payment of the same amount, on the same day, to the same party is already there.';
+export const DUPLICATE_WEAK = 'A payment of the same amount a few days apart is already there.';
+
+/** The "may already be booked" warning of the detail screen (warn only: nothing is disabled), or null. */
+export function duplicateWarning(flag: DupFlag | null): { title: string; message: string; doc: { doctype: string; name: string } } | null {
+  if (!flag) return null;
+  return {
+    title: DUPLICATE_TITLE,
+    message: flag.strength === 'strong' ? DUPLICATE_STRONG : DUPLICATE_WEAK,
+    doc: { doctype: flag.doctype, name: flag.name },
+  };
 }

@@ -1,5 +1,5 @@
 import { planAction } from '../core/plan';
-import { describeStep, stepTitle } from './describe';
+import { DUPLICATE_STRONG, DUPLICATE_TITLE, DUPLICATE_WEAK, describeStep, duplicateWarning, stepTitle } from './describe';
 import { BANK, CARD, txnFrom } from './testData';
 
 const ctx = (account = BANK) => ({ company: 'ZP', account, drawingsAccount: 'Drawings - ZP', today: '2026-11-08' });
@@ -79,5 +79,33 @@ describe('describeStep (confirm screen rows)', () => {
     expect(stepTitle(p.steps[0])).toBe('New Customer');
     expect(describeStep(p.steps[0], { customer_group: 'Customer Group' })).toEqual([{ label: 'Name', value: 'Acme' }, { label: 'Customer Group', value: 'Commercial' }]);
     expect(describeStep(p.steps[0])).toEqual([{ label: 'Name', value: 'Acme' }, { label: 'Customer group', value: 'Commercial' }]);
+  });
+});
+
+describe('duplicateWarning (warn only)', () => {
+  it('strong and weak flags read in plain words', () => {
+    expect(DUPLICATE_TITLE).toBe('This may already be in ERPNext');
+    expect(duplicateWarning({ doctype: 'Payment Entry', name: 'PE-1', strength: 'strong' })).toEqual({
+      title: DUPLICATE_TITLE,
+      message: 'A payment of the same amount, on the same day, to the same party is already there.',
+      doc: { doctype: 'Payment Entry', name: 'PE-1' },
+    });
+    expect(duplicateWarning({ doctype: 'Journal Entry', name: 'JE-1', strength: 'weak' })).toEqual({
+      title: DUPLICATE_TITLE,
+      message: 'A payment of the same amount a few days apart is already there.',
+      doc: { doctype: 'Journal Entry', name: 'JE-1' },
+    });
+    expect(DUPLICATE_STRONG).toMatch(/same day/);
+    expect(DUPLICATE_WEAK).toMatch(/few days apart/);
+  });
+
+  it('no flag, no warning', () => {
+    expect(duplicateWarning(null)).toBeNull();
+  });
+
+  it('the copy names no document type, id or jargon', () => {
+    for (const s of [DUPLICATE_TITLE, DUPLICATE_STRONG, DUPLICATE_WEAK]) {
+      expect(s).not.toMatch(/Payment Entry|Journal Entry|Invoice|UTR|Debit|Credit|\u2014/);
+    }
   });
 });
