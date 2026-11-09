@@ -13,6 +13,7 @@ import {
   getRequiredFields,
   listBankAccounts,
   listBookedEntries,
+  readBookedEntries,
   BOOKED_PAGE_SIZE,
   listCompanies,
   listLedgerAccounts,
@@ -668,6 +669,26 @@ describe('listBookedEntries', () => {
     expect(r).toHaveLength(3 * BOOKED_PAGE_SIZE);
     // A short page ends the doctype after one request.
     expect(calls.filter((x) => x.doctype === 'Journal Entry')).toHaveLength(1);
+  });
+
+  it('reports the oldest date read when a doctype hits the paging cap', async () => {
+    const page = (p: number, date: string) => Array.from({ length: BOOKED_PAGE_SIZE }, (_, i) => pe({ name: `PE-${p}-${i}`, posting_date: date }));
+    const jePage = (p: number, date: string) =>
+      Array.from({ length: BOOKED_PAGE_SIZE }, (_, i) => ({ name: `JE-${p}-${i}`, posting_date: date, total_debit: 1, docstatus: 0, company: 'ZP' }));
+    const { c } = routed({
+      'Payment Entry': [page(0, '2026-11-20'), page(1, '2026-11-15'), page(2, '2026-11-10')],
+      'Journal Entry': [jePage(0, '2026-11-25'), jePage(1, '2026-11-22'), jePage(2, '2026-11-12')],
+      'Purchase Invoice': [[]],
+    });
+    const r = await readBookedEntries(c, 'ZP', '2026-01-01', '2026-11-30');
+    // Both capped: everything from the later of the two oldest dates on was read.
+    expect(r.checkedFrom).toBe('2026-11-12');
+    expect(r.entries).toHaveLength(6 * BOOKED_PAGE_SIZE);
+  });
+
+  it('nothing capped: checkedFrom is null', async () => {
+    const { c } = routed({ 'Payment Entry': [[pe()]] });
+    expect((await readBookedEntries(c, 'ZP', '2026-11-01', '2026-11-30')).checkedFrom).toBeNull();
   });
 
   it('a failed request rejects', async () => {

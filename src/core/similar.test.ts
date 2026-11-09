@@ -19,12 +19,12 @@ describe('findSimilar', () => {
   it('same reference is strong', () => {
     const t = txn({ utr: '123456789012', amountMinor: 999 });
     const e = entry({ reference: '123456789012', postingDate: '2026-10-01', party: 'Someone else' });
-    expect(findSimilar(t, [e])).toEqual({ entry: e, strength: 'strong' });
+    expect(findSimilar(t, [e])).toEqual({ entry: e, strength: 'strong', why: 'reference' });
   });
 
   it('same amount, same date and same normalised party is strong', () => {
     const e = entry({ party: 'hp fuel-station' });
-    expect(findSimilar(txn(), [e])).toEqual({ entry: e, strength: 'strong' });
+    expect(findSimilar(txn(), [e])).toEqual({ entry: e, strength: 'strong', why: 'details' });
   });
 
   it('matches the counterparty as well as the merchant', () => {
@@ -34,7 +34,7 @@ describe('findSimilar', () => {
 
   it('same amount within 3 days and no party information is weak', () => {
     const e = entry({ party: null, postingDate: '2026-11-05' });
-    expect(findSimilar(txn(), [e])).toEqual({ entry: e, strength: 'weak' });
+    expect(findSimilar(txn(), [e])).toEqual({ entry: e, strength: 'weak', why: 'details' });
     expect(findSimilar(txn({ merchant: null }), [entry({ postingDate: '2026-11-11' })])?.strength).toBe('weak');
   });
 
@@ -104,6 +104,20 @@ describe('findSimilar', () => {
     const b = entry({ name: 'B' });
     expect(findSimilar(txn(), [a, b])?.entry.name).toBe('A');
     expect(findSimilar(txn(), [b, a])?.entry.name).toBe('B');
+  });
+
+  it('a reference match ranks above a date-closer amount match', () => {
+    const t = txn({ utr: 'R1' });
+    const near = entry({ name: 'NEAR', party: null });
+    const byRef = entry({ name: 'REF', reference: 'R1', postingDate: '2026-10-01', amountMinor: 1 });
+    expect(findSimilar(t, [near, byRef])).toEqual({ entry: byRef, strength: 'strong', why: 'reference' });
+  });
+
+  it('entries the caller excludes are skipped and the next best one is used', () => {
+    const a = entry({ name: 'A' });
+    const b = entry({ name: 'B', party: null, postingDate: '2026-11-07' });
+    expect(findSimilar(txn(), [a, b], (e) => e.name === 'A')?.entry.name).toBe('B');
+    expect(findSimilar(txn(), [a], (e) => e.name === 'A')).toBeNull();
   });
 
   it('no entries, no hit', () => {

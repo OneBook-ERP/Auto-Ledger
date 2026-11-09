@@ -334,8 +334,20 @@ const BOOKED_SOURCES: {
  * Money in paise. Read-only; used only for the "may already be booked" warning.
  */
 export async function listBookedEntries(c: ErpClient, company: string, fromDate: string, toDate: string): Promise<BookedEntry[]> {
-  const out: BookedEntry[] = [];
+  return (await readBookedEntries(c, company, fromDate, toDate)).entries;
+}
+
+/**
+ * listBookedEntries plus `checkedFrom`: null when every doctype was read completely; otherwise the latest of the
+ * oldest posting dates read by the doctypes that hit the paging cap (entries before it may be missing).
+ */
+export async function readBookedEntries(
+  c: ErpClient, company: string, fromDate: string, toDate: string,
+): Promise<{ entries: BookedEntry[]; checkedFrom: string | null }> {
+  const entries: BookedEntry[] = [];
+  let checkedFrom: string | null = null;
   for (const src of BOOKED_SOURCES) {
+    let oldest: string | null = null;
     for (let page = 0; page < BOOKED_MAX_PAGES; page += 1) {
       const rows = await list<BookedRow>(c, src.doctype, {
         fields: src.fields,
@@ -345,13 +357,15 @@ export async function listBookedEntries(c: ErpClient, company: string, fromDate:
         limit_page_length: BOOKED_PAGE_SIZE,
       });
       for (const r of rows) {
+        if (typeof r.posting_date === 'string' && (oldest === null || r.posting_date < oldest)) oldest = r.posting_date;
         if (r.company !== company || (r.docstatus !== 0 && r.docstatus !== 1) || typeof r.posting_date !== 'string') continue;
-        out.push({ doctype: src.doctype, name: r.name, postingDate: r.posting_date, docstatus: r.docstatus, ...src.map(r) });
+        entries.push({ doctype: src.doctype, name: r.name, postingDate: r.posting_date, docstatus: r.docstatus, ...src.map(r) });
       }
       if (rows.length < BOOKED_PAGE_SIZE) break;
+      if (page === BOOKED_MAX_PAGES - 1 && oldest !== null && (checkedFrom === null || oldest > checkedFrom)) checkedFrom = oldest;
     }
   }
-  return out;
+  return { entries, checkedFrom };
 }
 
 const STATUS_CHUNK = 50;
