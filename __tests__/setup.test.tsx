@@ -213,6 +213,44 @@ describe('permissions step', () => {
     expect(mockReplace).toHaveBeenCalledWith('/(tabs)/home');
   });
 
+  it('asks how far back to look and saves the choice as backfill_days', async () => {
+    const app = await fakeApp();
+    await render(<app.Wrap><Permissions /></app.Wrap>);
+    expect(screen.getByText('How far back should we look?')).toBeTruthy();
+    for (const l of ['1 week', '1 month', '3 months', '6 months']) expect(screen.getByRole('button', { name: l })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '1 week' }).props.accessibilityState).toMatchObject({ selected: true });
+    await press('3 months');
+    await waitFor(async () => expect(await app.repo.getSetting('backfill_days')).toBe('90'));
+    expect(screen.getByRole('button', { name: '3 months' }).props.accessibilityState).toMatchObject({ selected: true });
+  });
+
+  it('disclosure no longer fixes the period at 7 days and says only your set up senders are read', async () => {
+    const app = await fakeApp();
+    await render(<app.Wrap><Permissions /></app.Wrap>);
+    const all = DISCLOSURE_POINTS.join(' ');
+    expect(all).not.toMatch(/7 days|seven/i);
+    expect(all).toMatch(/only text messages from the bank senders you set up/);
+    expect(all).toMatch(/period you choose/);
+  });
+
+  it('after the first scan shows how many transactions were found, then continues', async () => {
+    const app = await fakeApp();
+    await app.repo.saveMapping({ bankAccount: 'IDFC', glAccount: 'IDFC - ZP', kind: 'bank', senderIds: ['IDFCFB'], last4: ['6507'], modeOfPayment: 'Wire Transfer' });
+    const fx = (require('../fixtures/sms/idfc.json') as { id: string; sender: string; body: string; receivedAt: number }[]).find((f) => f.id === 'idfc-001')!;
+    (app.mocks.backfill as jest.Mock).mockResolvedValue([{ sender: fx.sender, body: fx.body, receivedAt: fx.receivedAt }]);
+    await render(<app.Wrap><Permissions /></app.Wrap>);
+    await press('1 month');
+    await press('Continue');
+    await screen.findByText('Receive SMS');
+    await press('Finish setup');
+    expect(await screen.findByText('Found 1 transaction')).toBeTruthy();
+    expect(app.mocks.backfill).toHaveBeenCalledWith(30, ['IDFCFB']);
+    expect(app.value.completeSetup).not.toHaveBeenCalled();
+    await press('Continue');
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(tabs)/home'));
+    expect(app.value.completeSetup).toHaveBeenCalledTimes(1);
+  });
+
   it('finishing syncs sender patterns, completes setup and goes to Home', async () => {
     const app = await fakeApp();
     await app.repo.saveMapping({ bankAccount: 'IDFC', glAccount: 'IDFC - ZP', kind: 'bank', senderIds: ['IDFCFB'], last4: ['6507'], modeOfPayment: 'Wire Transfer' });

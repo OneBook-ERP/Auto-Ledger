@@ -1,6 +1,7 @@
 // Pure helpers for the setup wizard (spec 7.2): turning ERPNext Bank Accounts plus the user's choices into
 // AccountMappings. No I/O here.
 import type { AccountMapping } from '../core/types';
+import { DEFAULT_BACKFILL_DAYS } from '../ingest/pipeline';
 
 export type AccountDraft = {
   bankAccount: string;
@@ -90,4 +91,22 @@ export function validateDrafts(drafts: AccountDraft[]): { mappings: AccountMappi
     }
   }
   return { mappings, errors, none: chosen.length === 0 };
+}
+
+/** How far back the first (and later) scan of the phone's messages reads. Days match BACKFILL_CHOICES. */
+export const BACKFILL_OPTIONS: { days: number; label: string }[] = [
+  { days: 7, label: '1 week' },
+  { days: 30, label: '1 month' },
+  { days: 90, label: '3 months' },
+  { days: 180, label: '6 months' },
+];
+
+export const backfillLabel = (days: number): string =>
+  (BACKFILL_OPTIONS.find((o) => o.days === days) ?? BACKFILL_OPTIONS.find((o) => o.days === DEFAULT_BACKFILL_DAYS)!).label;
+
+/** "Found N transactions" from the counts a backfill returns (everything it read, new or already known). */
+export function foundMessage(r: { inserted: number; enriched: number; duplicates: number }): string {
+  const n = r.inserted + r.enriched + r.duplicates;
+  if (n === 0) return 'No transactions found';
+  return `Found ${n} ${n === 1 ? 'transaction' : 'transactions'}`;
 }

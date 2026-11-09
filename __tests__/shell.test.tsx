@@ -151,6 +151,22 @@ describe('settings', () => {
     expect(screen.queryByRole('button', { name: 'Grant SMS permission' })).toBeNull();
   });
 
+  it('shows the current SMS window, lets the user change it and re-runs the backfill once', async () => {
+    reset(signedIn);
+    const app = await fakeApp();
+    await app.repo.saveMapping({ bankAccount: 'IDFC', glAccount: 'x', kind: 'bank', senderIds: ['IDFCFB'], last4: ['6507'], modeOfPayment: 'Wire Transfer' });
+    await app.repo.setSetting('backfill_days', '30');
+    await render(<app.Wrap><Settings /></app.Wrap>);
+    expect(screen.getByText('How far back should we look?')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('button', { name: '1 month' }).props.accessibilityState).toMatchObject({ selected: true }));
+    expect(app.mocks.backfill).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByRole('button', { name: '6 months' }));
+    await waitFor(() => expect(app.mocks.backfill).toHaveBeenCalledTimes(1));
+    expect(app.mocks.backfill).toHaveBeenCalledWith(180, ['IDFCFB']);
+    expect(await app.repo.getSetting('backfill_days')).toBe('180');
+    expect(await screen.findByText('No transactions found')).toBeTruthy();
+  });
+
   it('links the debug receiver in dev builds only', async () => {
     const g = globalThis as { __DEV__?: boolean };
     const app = await fakeApp();
