@@ -9,7 +9,7 @@ import { useFlowStore } from '../../src/inbox/store';
 import { draftFromSuggestion, suggestionCard, usableSuggestions } from '../../src/inbox/suggestions';
 import { ActionSheet, BackLink, Banner, ChoiceRow, DetailCard, Gap, Screen, Stack, SuggestionCard, Txt, type Detail } from '../../src/ui';
 
-export const DRAWINGS_MISSING = 'Set your Drawings account in Settings first';
+export const DRAWINGS_MISSING = 'Set your Drawings account first';
 
 export default function TransactionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -51,8 +51,9 @@ export default function TransactionScreen() {
   const rows: Detail[] = [];
   if (who) rows.push({ label: incoming ? 'From' : txn.merchant && !txn.counterparty ? 'Merchant' : 'To', value: who });
   rows.push({ label: incoming ? 'Into' : 'From account', value: accountLabel(txn, mapping) });
-  rows.push({ label: txn.utr ? 'Reference' : 'AutoLedger reference', value: ref, mono: true });
-  if (txn.mergedCount > 1) rows.push({ label: 'Bank messages', value: `${txn.mergedCount} messages about this payment` });
+  const more: Detail[] = [{ label: 'Reference', value: ref, mono: true }];
+  if (txn.mergedCount > 1) more.push({ label: 'Bank messages', value: `Confirmed by ${txn.mergedCount} bank messages` });
+  if (txn.sender) more.push({ label: 'Sender', value: txn.sender });
 
   const items = actionsFor(txn.direction, txn.accountType).map((a) => ({
     key: a.type,
@@ -60,6 +61,7 @@ export default function TransactionScreen() {
     hint: a.hint,
     disabled: sending || f.rereading || (a.type === 'personal' && !hasDrawings),
     disabledReason: a.type === 'personal' && !hasDrawings ? DRAWINGS_MISSING : undefined,
+    action: a.type === 'personal' && !hasDrawings ? { label: 'Open Settings', onPress: () => router.navigate('/(tabs)/settings') } : undefined,
   }));
   // Ignore needs no account: it is offered even while the account is unknown.
   const ignoreOnly = items.filter((a) => a.key === 'ignore');
@@ -75,7 +77,7 @@ export default function TransactionScreen() {
         <Txt variant="muted">{`${dateTimeLabel(txn)} · ${kindLabel(txn.kind)}`}</Txt>
       </Stack>
       <Gap size={4} />
-      <DetailCard rows={rows} />
+      <DetailCard rows={rows} more={more} />
       {sending ? <Banner tone="info" message="Still sending your previous answer. Wait for it to finish." testID="sending" /> : null}
       {txn.error ? <Banner tone="error" title="The last attempt did not work" message={txn.error} /> : null}
 
@@ -116,7 +118,6 @@ export default function TransactionScreen() {
             <SuggestionCard {...suggestionCard(top, invoiceParty)} onPress={() => !sending && !f.rereading && go({ mapping, ...draftFromSuggestion(top, invoiceParty) })} />
           ) : null}
           <ActionSheet items={items} onSelect={choose} />
-          {!hasDrawings ? <Banner tone="info" message={`${DRAWINGS_MISSING} to use Personal.`} actionLabel="Open Settings" onAction={() => router.navigate('/(tabs)/settings')} /> : null}
         </>
       ) : null}
     </Screen>

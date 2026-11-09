@@ -6,9 +6,13 @@ import { FlowGone, FlowLoading } from '../../src/inbox/FlowStates';
 import { plainAmount, titleOf } from '../../src/inbox/format';
 import { newestFirst } from '../../src/inbox/hooks';
 import { erpDocUrl } from '../../src/inbox/outcome';
-import { Button, DetailCard, Gap, Row, Screen, Stack, Txt, formatInr, openExternal } from '../../src/ui';
+import { Text, View } from 'react-native';
+import { Button, DetailCard, Gap, Row, Screen, Stack, StatusChip, Txt, formatInr, openExternal } from '../../src/ui';
 
 export const WAITING = 'Waiting for your accountant';
+
+/** "Payment Entry" -> "Payment entry": the document's plain name, its id stays in mono beside it. */
+const friendlyDoc = (doctype: string) => doctype.charAt(0).toUpperCase() + doctype.slice(1).toLowerCase();
 
 export default function ResultScreen() {
   const { id, inr } = useLocalSearchParams<{ id: string; inr?: string }>();
@@ -64,12 +68,17 @@ export default function ResultScreen() {
 
   return (
     <Screen title={docs.length > 1 ? 'Drafts created' : 'Draft created'} footer={footer}>
+      <View accessibilityElementsHidden importantForAccessibility="no" className="mb-4 h-14 w-14 items-center justify-center self-start rounded-full bg-ok-soft dark:bg-ok-soft-dark">
+        <Text className="text-2xl font-bold text-ok dark:text-ok-dark">✓</Text>
+      </View>
       <Txt>{`${txn.currency !== 'INR' && inr && Number(inr) > 0 ? `${formatInr(Number(inr))} (${plainAmount(txn)})` : plainAmount(txn)}${who ? ` ${txn.direction === 'in' ? 'from' : 'to'} ${who}` : ''} is now in ERPNext as a draft.`}</Txt>
       <Gap size={4} />
-      <DetailCard
-        rows={[...docs.map((d) => ({ label: d.doctype, value: d.name, mono: true })), { label: 'Status', value: WAITING }]}
-        testID="docs"
-      />
+      <DetailCard rows={docs.map((d) => ({ label: friendlyDoc(d.doctype), value: d.name, mono: true }))} testID="docs" />
+      <Row>
+        <Text className="text-sm text-muted dark:text-muted-dark">Status</Text>
+        <StatusChip label={WAITING} tone="warn" />
+      </Row>
+      <Gap size={3} />
       <Txt variant="muted">You can undo this in Activity until your accountant submits it.</Txt>
     </Screen>
   );
