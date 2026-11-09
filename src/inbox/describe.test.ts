@@ -1,5 +1,7 @@
 import { planAction } from '../core/plan';
-import { describeStep, stepTitle } from './describe';
+import {
+  DUPLICATE_REFERENCE, DUPLICATE_STRONG, DUPLICATE_TITLE, DUPLICATE_WEAK, UNCHECKED_NOTE, describeStep, duplicateWarning, stepTitle, uncheckedNote,
+} from './describe';
 import { BANK, CARD, txnFrom } from './testData';
 
 const ctx = (account = BANK) => ({ company: 'ZP', account, drawingsAccount: 'Drawings - ZP', today: '2026-11-08' });
@@ -79,5 +81,46 @@ describe('describeStep (confirm screen rows)', () => {
     expect(stepTitle(p.steps[0])).toBe('New Customer');
     expect(describeStep(p.steps[0], { customer_group: 'Customer Group' })).toEqual([{ label: 'Name', value: 'Acme' }, { label: 'Customer Group', value: 'Commercial' }]);
     expect(describeStep(p.steps[0])).toEqual([{ label: 'Name', value: 'Acme' }, { label: 'Customer group', value: 'Commercial' }]);
+  });
+});
+
+describe('duplicateWarning (warn only)', () => {
+  it('says why it looks booked, in plain words', () => {
+    expect(DUPLICATE_TITLE).toBe('This may already be in ERPNext');
+    expect(duplicateWarning({ doctype: 'Payment Entry', name: 'PE-1', strength: 'strong', why: 'reference' })).toEqual({
+      title: DUPLICATE_TITLE,
+      message: 'An entry with the same reference number as this payment is already there.',
+      doc: { doctype: 'Payment Entry', name: 'PE-1' },
+    });
+    expect(duplicateWarning({ doctype: 'Payment Entry', name: 'PE-1', strength: 'strong', why: 'details' })?.message).toBe(
+      'An entry for the same amount, on the same day, with the same name is already there.',
+    );
+    expect(duplicateWarning({ doctype: 'Journal Entry', name: 'JE-1', strength: 'weak', why: 'details' })).toEqual({
+      title: DUPLICATE_TITLE,
+      message: 'An entry for the same amount, within 3 days of this one, is already there.',
+      doc: { doctype: 'Journal Entry', name: 'JE-1' },
+    });
+    expect([DUPLICATE_REFERENCE, DUPLICATE_STRONG, DUPLICATE_WEAK]).toHaveLength(3);
+  });
+
+  it('no flag, no warning', () => {
+    expect(duplicateWarning(null)).toBeNull();
+  });
+
+  it('the copy names no document type, id or jargon', () => {
+    for (const s of [DUPLICATE_TITLE, DUPLICATE_REFERENCE, DUPLICATE_STRONG, DUPLICATE_WEAK, UNCHECKED_NOTE]) {
+      expect(s).not.toMatch(/Payment Entry|Journal Entry|Invoice|UTR|Debit|Credit|\u2014/);
+    }
+  });
+});
+
+describe('uncheckedNote (paging cap)', () => {
+  it('only for items whose 3-day window reaches before the oldest date checked', () => {
+    expect(UNCHECKED_NOTE).toBe('We could not check older entries in ERPNext for this one.');
+    expect(uncheckedNote('2026-10-01', '2026-10-05')).toBe(UNCHECKED_NOTE);
+    expect(uncheckedNote('2026-10-08', '2026-10-05')).toBe(UNCHECKED_NOTE);
+    expect(uncheckedNote('2026-10-09', '2026-10-05')).toBeNull();
+    expect(uncheckedNote('2026-10-01', null)).toBeNull();
+    expect(uncheckedNote('2026-10-01', 'garbage')).toBeNull();
   });
 });

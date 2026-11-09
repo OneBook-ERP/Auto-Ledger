@@ -53,6 +53,11 @@ export type AfterCycleDeps = {
   refreshBanners: () => Promise<void>;
   /** Re-reads Home (drafts, answers, sync time). Runs whatever happened before it (finally). */
   invalidateHome: () => unknown;
+  /**
+   * The "may already be booked" check (warn only, src/ingest/dupCheck.ts). Runs only when ERPNext answered
+   * during the cycle, after Home is invalidated; a failure is swallowed and never blocks the cycle.
+   */
+  checkDuplicates?: () => Promise<void>;
 };
 
 /**
@@ -75,6 +80,13 @@ export async function afterCycle(summary: CycleOutcome | null, d: AfterCycleDeps
       if (r && typeof (r as Promise<unknown>).then === 'function') (r as Promise<unknown>).catch(() => undefined);
     } catch {
       // best effort
+    }
+    if (d.checkDuplicates && summary?.erpReached === true && !summary.skipped) {
+      try {
+        await d.checkDuplicates();
+      } catch {
+        // warnings are best effort
+      }
     }
   }
 }

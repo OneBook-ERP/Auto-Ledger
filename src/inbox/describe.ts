@@ -1,5 +1,8 @@
-// Label / value rows for the confirm screen, read from the exact plan steps that will be sent. Pure.
+// Label / value rows for the confirm screen, read from the exact plan steps that will be sent, and the detail
+// screen's "may already be booked" warning. Pure.
+import { SIMILAR_DAYS, dayNumber } from '../core/similar';
 import type { PlanStep } from '../core/types';
+import type { DupFlag } from '../ingest/dupCheck';
 import type { Detail } from '../ui/DetailCard';
 import { formatInr } from '../ui/format';
 import { longDate } from './format';
@@ -64,4 +67,29 @@ export function describeStep(s: PlanStep, labels: Record<string, string> = {}): 
   rows.push({ label: 'Date', value: longDate(str(b.posting_date)) });
   rows.push({ label: 'Reference', value: str(b.cheque_no), mono: true });
   return rows;
+}
+
+export const DUPLICATE_TITLE = 'This may already be in ERPNext';
+export const DUPLICATE_REFERENCE = 'An entry with the same reference number as this payment is already there.';
+export const DUPLICATE_STRONG = 'An entry for the same amount, on the same day, with the same name is already there.';
+export const DUPLICATE_WEAK = 'An entry for the same amount, within 3 days of this one, is already there.';
+export const UNCHECKED_NOTE = 'We could not check older entries in ERPNext for this one.';
+
+/** The "may already be booked" warning of the detail screen (warn only: nothing is disabled), or null. */
+export function duplicateWarning(flag: DupFlag | null): { title: string; message: string; doc: { doctype: string; name: string } } | null {
+  if (!flag) return null;
+  const message = flag.why === 'reference' ? DUPLICATE_REFERENCE : flag.strength === 'strong' ? DUPLICATE_STRONG : DUPLICATE_WEAK;
+  return { title: DUPLICATE_TITLE, message, doc: { doctype: flag.doctype, name: flag.name } };
+}
+
+/**
+ * The muted "could not check" line: the last check was capped at `checkedFrom` and this item's window (its date
+ * minus 3 days) reaches that date or earlier, so an older entry may have been missed. Null otherwise.
+ */
+export function uncheckedNote(occurredOn: string, checkedFrom: string | null): string | null {
+  if (!checkedFrom) return null;
+  const day = dayNumber(occurredOn);
+  const from = dayNumber(checkedFrom);
+  if (day === null || from === null) return null;
+  return day - SIMILAR_DAYS <= from ? UNCHECKED_NOTE : null;
 }
