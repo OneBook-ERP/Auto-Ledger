@@ -251,11 +251,13 @@ describe('listOpenSalesOrders', () => {
       body: { data: [row({ name: 'SAL-ORD-2026-2027-00004', grand_total: 25000.1, advance_paid: 1131.5, delivery_date: null })] },
     });
     expect(await listOpenSalesOrders(c, 'Acme #1')).toEqual([
-      { name: 'SAL-ORD-2026-2027-00004', totalMinor: 2500010, advanceMinor: 113150, remainingMinor: 2386860, deliveryDate: null },
+      { name: 'SAL-ORD-2026-2027-00004', totalMinor: 2500010, advanceMinor: 113150, remainingMinor: 2386860, deliveryDate: null, orderDate: '2026-10-01' },
     ]);
     expect(calls[0].url).toBe(
       `${BASE}/api/resource/Sales%20Order?${q({
-        fields: ['name', 'grand_total', 'advance_paid', 'delivery_date', 'status', 'docstatus', 'transaction_date'],
+        fields: [
+          'name', 'grand_total', 'rounded_total', 'base_grand_total', 'base_rounded_total', 'advance_paid', 'delivery_date', 'status', 'docstatus', 'transaction_date',
+        ],
         filters: [['customer', '=', 'Acme #1'], ['docstatus', '=', 1], ['status', 'in', ['To Deliver and Bill', 'To Bill', 'To Deliver']]],
         order_by: 'transaction_date asc, creation asc',
         limit_page_length: 0,
@@ -291,9 +293,32 @@ describe('listOpenSalesOrders', () => {
       },
     });
     expect(await listOpenSalesOrders(c, 'Acme')).toEqual([
-      { name: 'SO-1', totalMinor: 30, advanceMinor: 10, remainingMinor: 20, deliveryDate: '2026-11-30' },
-      { name: 'SO-2', totalMinor: 1999999, advanceMinor: 0, remainingMinor: 1999999, deliveryDate: '2026-11-30' },
+      { name: 'SO-1', totalMinor: 30, advanceMinor: 10, remainingMinor: 20, deliveryDate: '2026-11-30', orderDate: '2026-10-01' },
+      { name: 'SO-2', totalMinor: 1999999, advanceMinor: 0, remainingMinor: 1999999, deliveryDate: '2026-11-30', orderDate: '2026-10-01' },
     ]);
+  });
+
+  it('total matches ERPNext outstanding: base_rounded_total when set, else base_grand_total', async () => {
+    const { c } = setup({
+      body: {
+        data: [
+          row({ name: 'SO-ROUND', grand_total: 1000.4, rounded_total: 1000, base_grand_total: 1000.4, base_rounded_total: 1000, advance_paid: 200.1 }),
+          row({ name: 'SO-NOROUND', grand_total: 1000.4, rounded_total: 0, base_grand_total: 1000.4, base_rounded_total: 0, advance_paid: 0 }),
+          row({ name: 'SO-USD', grand_total: 100, rounded_total: 100, base_grand_total: 8500.55, base_rounded_total: '8501', advance_paid: 0 }),
+        ],
+      },
+    });
+    expect(await listOpenSalesOrders(c, 'Acme')).toEqual([
+      { name: 'SO-ROUND', totalMinor: 100000, advanceMinor: 20010, remainingMinor: 79990, deliveryDate: '2026-11-30', orderDate: '2026-10-01' },
+      { name: 'SO-NOROUND', totalMinor: 100040, advanceMinor: 0, remainingMinor: 100040, deliveryDate: '2026-11-30', orderDate: '2026-10-01' },
+      { name: 'SO-USD', totalMinor: 850100, advanceMinor: 0, remainingMinor: 850100, deliveryDate: '2026-11-30', orderDate: '2026-10-01' },
+    ]);
+  });
+
+  it('an order with no date sorts first and has a null orderDate', async () => {
+    const { c } = setup({ body: { data: [row({ name: 'SO-A', grand_total: 1 }), row({ name: 'SO-B', grand_total: 1, transaction_date: null })] } });
+    const r = await listOpenSalesOrders(c, 'Acme');
+    expect(r.map((o) => [o.name, o.orderDate])).toEqual([['SO-B', null], ['SO-A', '2026-10-01']]);
   });
 
   it('sorted oldest first (by order date, stable)', async () => {

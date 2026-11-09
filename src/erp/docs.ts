@@ -123,37 +123,55 @@ export async function listOpenInvoices(c: ErpClient, partyType: 'Customer' | 'Su
   return rows.map((r) => ({ doctype, name: r.name, outstandingMinor: toMinor(r.outstanding_amount), dueDate: r.due_date ?? '' }));
 }
 
-/** A submitted, still-open Sales Order of a customer. Money in minor units (paise). */
-export type OpenOrder = { name: string; totalMinor: number; advanceMinor: number; remainingMinor: number; deliveryDate: string | null };
+/** A submitted, still-open Sales Order of a customer. Money in minor units (paise), company currency. */
+export type OpenOrder = {
+  name: string; totalMinor: number; advanceMinor: number; remainingMinor: number; deliveryDate: string | null;
+  /** The order's date (transaction_date), YYYY-MM-DD. */
+  orderDate: string | null;
+};
 
 const OPEN_ORDER_STATUSES = ['To Deliver and Bill', 'To Bill', 'To Deliver'];
 
+type Amount = number | string | null | undefined;
+/** Zero, empty or absent counts as "not set" (ERPNext leaves rounded_total 0 when rounding is disabled). */
+const setMinor = (v: Amount): number | null => {
+  const m = toMinor(v);
+  return m === 0 ? null : m;
+};
+
 /**
  * Open Sales Orders of `customer` that can still take an advance: docstatus 1, status one of
- * OPEN_ORDER_STATUSES (never Closed, Cancelled or Completed), remaining (grand_total - advance_paid) above 0.
- * Oldest first. The server filters are repeated here so an odd reply never offers a closed order.
+ * OPEN_ORDER_STATUSES (never Closed, Cancelled or Completed), remaining above 0. Oldest first.
+ * The total is what ERPNext checks an advance against (its Sales Order outstanding):
+ * base_rounded_total when set, else base_grand_total (grand_total only when the base fields are absent).
+ * remaining = total - advance_paid, all in paise. The server filters are repeated here so an odd reply
+ * never offers a closed order.
  */
 export async function listOpenSalesOrders(c: ErpClient, customer: string): Promise<OpenOrder[]> {
   const rows = await list<{
-    name: string; grand_total: number | string; advance_paid: number | string | null; delivery_date: string | null;
-    status: string; docstatus: number; transaction_date: string | null;
+    name: string; grand_total: Amount; rounded_total: Amount; base_grand_total: Amount; base_rounded_total: Amount;
+    advance_paid: Amount; delivery_date: string | null; status: string; docstatus: number; transaction_date: string | null;
   }>(c, 'Sales Order', {
-    fields: ['name', 'grand_total', 'advance_paid', 'delivery_date', 'status', 'docstatus', 'transaction_date'],
+    fields: [
+      'name', 'grand_total', 'rounded_total', 'base_grand_total', 'base_rounded_total', 'advance_paid', 'delivery_date', 'status', 'docstatus', 'transaction_date',
+    ],
     filters: [['customer', '=', customer], ['docstatus', '=', 1], ['status', 'in', OPEN_ORDER_STATUSES]],
     order_by: 'transaction_date asc, creation asc',
     limit_page_length: 0,
   });
-  const out: { order: OpenOrder; date: string }[] = [];
+  const out: OpenOrder[] = [];
   for (const r of rows) {
     if (r.docstatus !== 1 || !OPEN_ORDER_STATUSES.includes(r.status)) continue;
-    const totalMinor = toMinor(r.grand_total);
+    const base = r.base_grand_total === undefined || r.base_grand_total === null ? r.grand_total : r.base_grand_total;
+    const totalMinor = setMinor(r.base_rounded_total) ?? toMinor(base);
     const advanceMinor = toMinor(r.advance_paid);
     const remainingMinor = totalMinor - advanceMinor;
     if (remainingMinor <= 0) continue;
-    out.push({ order: { name: r.name, totalMinor, advanceMinor, remainingMinor, deliveryDate: r.delivery_date ?? null }, date: r.transaction_date ?? '' });
+    out.push({ name: r.name, totalMinor, advanceMinor, remainingMinor, deliveryDate: r.delivery_date ?? null, orderDate: r.transaction_date ?? null });
   }
-  // Array.prototype.sort is stable: equal dates keep the server's creation order.
-  return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).map((x) => x.order);
+  // Array.prototype.sort is stable: equal dates keep the server's creation order; no date sorts first.
+  const key = (o: OpenOrder) => o.orderDate ?? '';
+  return out.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
 }
 
 /** Creates a DRAFT only (never submits). Any 2xx is success. */
