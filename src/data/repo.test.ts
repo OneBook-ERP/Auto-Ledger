@@ -59,6 +59,14 @@ describe('pending txns', () => {
     expect(await r.listPending([])).toEqual([]);
     expect(await r.listNewSources()).toEqual([{ sender: 'AX-IDFCFB', accountType: 'bank', accountLast4: '1111' }]);
   });
+  it('lists the merged SMS hashes in one query', async () => {
+    const r = await mk();
+    await r.upsertPending(txn());
+    expect(await r.mergeInto('t1', {}, 'src1')).toMatchObject({ status: 'merged' });
+    expect(await r.mergeInto('t1', {}, 'src2')).toMatchObject({ status: 'merged' });
+    expect([...(await r.listMergedSmsHashes())].sort()).toEqual(['src1', 'src2']);
+    expect(await r.isMergedSms('src1')).toBe(true);
+  });
   it('upsert with same id updates in place', async () => {
     const r = await mk();
     await r.upsertPending(txn());

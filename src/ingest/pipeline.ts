@@ -154,6 +154,10 @@ type Outcome = 'inserted' | 'enriched' | 'duplicate' | 'ignored' | 'unrecognised
 class Batch {
   readonly result = emptyResult();
   private pending: PendingTxn[] = [];
+  // Indexes over `pending` and the merged-SMS list, loaded once per scan: a message costs no repo read to check for duplicates.
+  private hashes = new Set<string>();
+  private ids = new Set<string>();
+  private merged = new Set<string>();
   private mappings: AccountMapping[] = [];
   private templates!: TemplateSet;
 
@@ -163,6 +167,9 @@ class Batch {
     this.templates = await loadTemplates(this.repo);
     this.mappings = await this.repo.listMappings();
     this.pending = await this.repo.listPending();
+    this.merged = await this.repo.listMergedSmsHashes();
+    this.hashes = new Set(this.pending.map((p) => p.rawHash));
+    this.ids = new Set(this.pending.map((p) => p.id));
   }
 
   /** Parses and stores one SMS. Throws on a storage failure (the caller then does not ack it). */
@@ -187,7 +194,7 @@ class Batch {
     }
 
     // Already stored (any age) or already merged into another txn: the same SMS again.
-    if (this.pending.some((p) => p.rawHash === txn.rawHash) || (await this.repo.isMergedSms(txn.rawHash))) return 'duplicate';
+    if (this.hashes.has(txn.rawHash) || this.merged.has(txn.rawHash)) return 'duplicate';
 
     const existing = this.pending.filter((p) => Math.abs(p.receivedAt - txn.receivedAt) <= CORRELATE_LOOKBACK_MS);
     const c = correlate(existing, txn);
@@ -196,20 +203,23 @@ class Batch {
       const target = c.action === 'enrich' ? c.target : c.of;
       const patch = c.action === 'enrich' ? c.patch : {};
       const m = await this.repo.mergeInto(target, patch, txn.rawHash);
-      if (m.status === 'merged') this.replace(m.txn);
+      if (m.status === 'merged') {
+        this.replace(m.txn);
+        this.merged.add(txn.rawHash);
+      }
+      if (m.status === 'already') this.merged.add(txn.rawHash);
       if (m.status !== 'merged' || c.action === 'drop_duplicate') return 'duplicate';
       return 'enriched';
     }
 
     const id = `t_${txn.rawHash}`;
-    const stored = await this.repo.getPending(id);
-    if (stored) {
-      this.replace(stored);
-      return 'duplicate';
-    }
+    // The table was loaded in full and is kept in step, so a known id is a row we already have (no per-message read).
+    if (this.ids.has(id)) return 'duplicate';
     const row: PendingTxn = { ...txn, id, state: 'new', createdDocs: [], error: null, mergedCount: 1 };
     await this.repo.upsertPending(row);
     this.pending.push(row);
+    this.hashes.add(row.rawHash);
+    this.ids.add(row.id);
     return 'inserted';
   }
 
@@ -228,6 +238,8 @@ class Batch {
     const i = this.pending.findIndex((p) => p.id === t.id);
     if (i >= 0) this.pending[i] = t;
     else this.pending.push(t);
+    this.hashes.add(t.rawHash);
+    this.ids.add(t.id);
   }
 }
 

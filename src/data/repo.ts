@@ -27,6 +27,8 @@ export interface Repo {
     { status: 'merged'; txn: PendingTxn } | { status: 'already' | 'missing' }>;
   /** True when SMS `rawHash` was merged into another txn by mergeInto. */
   isMergedSms(rawHash: string): Promise<boolean>;
+  /** Raw hashes of every SMS already merged into another txn, in one query (for scans that would otherwise ask per message). */
+  listMergedSmsHashes(): Promise<Set<string>>;
   saveMapping(m: AccountMapping): Promise<void>;
   listMappings(): Promise<AccountMapping[]>;
   saveRule(r: Rule): Promise<void>;
@@ -191,6 +193,10 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
     async isMergedSms(rawHash) {
       const rows = await d.all<{ value: string }>('SELECT value FROM settings WHERE key = ?', [MERGED_PREFIX + rawHash]);
       return rows.length > 0;
+    },
+    async listMergedSmsHashes() {
+      const rows = await d.all<{ key: string }>('SELECT key FROM settings WHERE key LIKE ?', [MERGED_PREFIX + '%']);
+      return new Set(rows.map((r) => r.key.slice(MERGED_PREFIX.length)));
     },
     async getPending(id) {
       const rows = await d.all<PendingRow>(`SELECT ${PENDING_COLS} FROM pending_txn WHERE id = ?`, [id]);
