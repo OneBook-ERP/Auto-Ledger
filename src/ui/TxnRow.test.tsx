@@ -42,10 +42,13 @@ describe('TxnRow colour scheme', () => {
     jest.spyOn(Appearance, 'addChangeListener').mockImplementation((l) => { fire = () => l({ colorScheme: 'dark' }); return { remove: () => undefined }; });
     const get = jest.spyOn(Appearance, 'getColorScheme').mockReturnValue('light');
     await render(<TxnRow {...base} direction="out" />);
-    get.mockReturnValue('dark');
     const { act } = require('@testing-library/react-native');
+    const colourOf = () => JSON.stringify(screen.toJSON());
+    expect(colourOf()).toContain('#0E1A2E');
+    get.mockReturnValue('dark');
     await act(async () => fire());
-    expect(screen.getByRole('button')).toBeTruthy();
+    expect(colourOf()).toContain('#EDF1F8');
+    expect(colourOf()).not.toContain('#0E1A2E');
   });
 });
 

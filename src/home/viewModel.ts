@@ -1,6 +1,6 @@
 // Home view-model: pure, built from fetched figures + local data. The screen only renders it.
 import { buildTrust, type Trust } from '../core/trust';
-import type { AccountMapping, ParsedTxn, PendingTxn } from '../core/types';
+import type { AccountMapping, PendingTxn } from '../core/types';
 import { resolveMapping } from '../ingest/pipeline';
 import type { CycleSummary } from '../ingest/pipeline';
 import { formatInr } from '../ui/format';
@@ -146,7 +146,7 @@ export function buildHomeModel(i: HomeInputs): HomeModel {
     }
     for (const src of i.unanswered?.sources ?? []) {
       if (src.accountType !== 'bank') continue;
-      const m = resolveMapping(i.mappings, src as ParsedTxn);
+      const m = resolveMapping(i.mappings, src);
       if (m) unsettled.add(m);
     }
     for (const [idx, m] of banks.entries()) {

@@ -141,14 +141,24 @@ export default function Activity() {
 
   // The dialog is open: no second tap may open another or start the action behind it.
   const confirming = useRef<Set<string>>(new Set());
-  const confirmThen = (t: PendingTxn, putBack: boolean) => {
+  const confirmThen = async (t: PendingTxn, putBack: boolean) => {
     if (busyRef.current.has(t.id) || confirming.current.has(t.id)) return;
-    const text = confirmText(removalPlan(t, items ?? []));
-    if (!text || (putBack && !removalPlan(t, items ?? []).remove.length)) {
+    confirming.current.add(t.id);
+    // Documents can also be held by unanswered or failed rows (a partial failure keeps them), which the lean list
+    // does not load: read everything once, only now that the user asked.
+    let all: PendingTxn[];
+    try {
+      all = await repo.listPending();
+    } catch {
+      all = items ?? [];
+    }
+    const plan = removalPlan(t, all);
+    const text = confirmText(plan);
+    if (!text || (putBack && !plan.remove.length)) {
+      confirming.current.delete(t.id);
       void runUndo(t, putBack);
       return;
     }
-    confirming.current.add(t.id);
     const release = () => confirming.current.delete(t.id);
     Alert.alert(
       text.title,
@@ -171,8 +181,8 @@ export default function Activity() {
 
   const actionsFor = (t: PendingTxn): ActivityAction[] => {
     const a: ActivityAction[] = [];
-    if (canUndo(t)) a.push({ label: 'Undo', variant: 'danger', onPress: () => confirmThen(t, false) });
-    if (canPutBack(t)) a.push({ label: 'Put back in Inbox', onPress: () => confirmThen(t, true) });
+    if (canUndo(t)) a.push({ label: 'Undo', variant: 'danger', onPress: () => void confirmThen(t, false) });
+    if (canPutBack(t)) a.push({ label: 'Put back in Inbox', onPress: () => void confirmThen(t, true) });
     if (t.state === 'ignored') a.push({ label: 'Bring back', onPress: () => void doBringBack(t) });
     if (siteUrl && (t.state === 'created' || t.state === 'submitted')) {
       const open = t.createdDocs.filter((d) => d.docstatus !== -1);

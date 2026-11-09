@@ -248,6 +248,16 @@ describe('Activity screen', () => {
     expect(await screen.findByText(/PE-1 stays in ERPNext/)).toBeTruthy();
   });
 
+  it('Undo knows about a document held by a row in any state, including an unanswered one', async () => {
+    await open([
+      txn('1', { createdDocs: [doc('PE-1')] }),
+      txn('2', { state: 'new', createdDocs: [doc('PE-1')] }), // a partial failure left the same draft on an unanswered row
+    ], { 'Payment Entry:PE-1': 0 });
+    await fireEvent.press(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(Alert.alert).toHaveBeenCalled());
+    expect((Alert.alert as jest.Mock).mock.calls.at(-1)![1]).toContain('also linked to another message');
+  });
+
   it('Put back in Inbox asks first when it will delete a draft, and offline says nothing was changed', async () => {
     const { repo, erp } = await open([txn('1', { createdDocs: [doc('PE-1'), doc('PE-2')] })], { 'Payment Entry:PE-1': 2, 'Payment Entry:PE-2': 0 });
     await waitFor(() => expect(screen.getByText('Cancelled in ERPNext')).toBeTruthy());

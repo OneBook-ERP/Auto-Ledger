@@ -195,7 +195,7 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
       return rows.length > 0;
     },
     async listMergedSmsHashes() {
-      const rows = await d.all<{ key: string }>('SELECT key FROM settings WHERE key LIKE ?', [MERGED_PREFIX + '%']);
+      const rows = await d.all<{ key: string }>('SELECT key FROM settings WHERE substr(key, 1, ?) = ?', [MERGED_PREFIX.length, MERGED_PREFIX]);
       return new Set(rows.map((r) => r.key.slice(MERGED_PREFIX.length)));
     },
     async getPending(id) {

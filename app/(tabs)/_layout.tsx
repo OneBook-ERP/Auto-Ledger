@@ -20,7 +20,7 @@ export function usePendingCount(): number {
   useEffect(() => {
     if (!repo) return;
     let live = true;
-    const read = () => repo.countPending('new').then((n) => live && setN(n), () => undefined);
+    const read = () => repo.countPending('new').then((count) => live && setN(count), () => undefined);
     void read();
     const id = setInterval(read, POLL_MS);
     return () => {

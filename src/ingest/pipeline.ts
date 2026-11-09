@@ -106,7 +106,7 @@ const senderMatches = (m: AccountMapping, sender: string) =>
  * last-4 listed. With no last-4 (IMPS, SI) the only mapping of that kind, or null when there are several or
  * none (the UI then asks the user).
  */
-export function resolveMapping(mappings: AccountMapping[], txn: ParsedTxn): AccountMapping | null {
+export function resolveMapping(mappings: AccountMapping[], txn: Pick<ParsedTxn, 'accountType' | 'sender' | 'accountLast4'>): AccountMapping | null {
   const cands = mappings.filter((m) => m.kind === txn.accountType && senderMatches(m, txn.sender));
   if (txn.accountLast4 === null) return cands.length === 1 ? cands[0] : null;
   return cands.find((m) => m.last4.includes(txn.accountLast4 as string)) ?? null;

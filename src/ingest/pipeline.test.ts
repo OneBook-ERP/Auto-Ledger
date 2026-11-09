@@ -761,3 +761,24 @@ describe('ensureBackfill on a large scan', () => {
     expect(spyGet.mock.calls.length + spyMerged.mock.calls.length).toBe(0);
   });
 });
+
+describe('ensureBackfill duplicates inside one scan', () => {
+  it('a second copy of the same SMS is a duplicate from the in-memory index, with no per-message reads', async () => {
+    const { deps, native, repo } = await setup();
+    const a = shortDebit('250.00', NOW - 5 * HOUR);
+    native.inbox = [a, { ...a }, shortDebit('260.00', NOW - 4 * HOUR)];
+    const merged = jest.spyOn(repo, 'isMergedSms');
+    const get = jest.spyOn(repo, 'getPending');
+    expect(await ensureBackfill(deps, { fullWindow: true })).toMatchObject({ inserted: 2, duplicates: 1, errors: 0 });
+    expect(merged.mock.calls.length + get.mock.calls.length).toBe(0);
+    expect((await repo.listPending()).length).toBe(2);
+  });
+  it('a correlated second message (merge) is recorded in the index so its repeat is a duplicate', async () => {
+    const { deps, native, repo } = await setup();
+    native.inbox = [fx('idfc-018'), shortDebit('250.00', NOW - 5 * HOUR), shortDebit('250.00', NOW - 5 * HOUR)];
+    const merged = jest.spyOn(repo, 'isMergedSms');
+    const r = await ensureBackfill(deps, { fullWindow: true });
+    expect(r.errors).toBe(0);
+    expect(merged.mock.calls.length).toBe(0);
+  });
+});
