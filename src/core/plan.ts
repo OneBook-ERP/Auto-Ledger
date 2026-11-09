@@ -122,12 +122,27 @@ export function planAction(txn: PendingTxn, choice: ActionChoice, ctx: PlanConte
   let party: PartyRef | undefined;
 
   switch (choice.type) {
-    case 'customer_advance':
+    case 'customer_advance': {
       need('in');
       party = choice.party;
-      step = pe({ payment_type: 'Receive', party_type: 'Customer', party: party.name, paid_to: gl });
-      line = `Payment Entry (draft): receive ${amt} from ${party.name} as advance, ${tail}`;
+      const orders = choice.orders ?? [];
+      if (orders.length === 0) {
+        step = pe({ payment_type: 'Receive', party_type: 'Customer', party: party.name, paid_to: gl });
+        line = `Payment Entry (draft): receive ${amt} from ${party.name} as advance, ${tail}`;
+        break;
+      }
+      const total = orders.reduce((s, o) => s + o.allocatedMinor, 0);
+      if (total > minor) throw new PlanError('over_allocated', 'Allocated more than the transaction amount');
+      const references = orders.map((o) => ({
+        reference_doctype: 'Sales Order', reference_name: o.name, allocated_amount: minorToMajor(o.allocatedMinor),
+      }));
+      step = pe({ payment_type: 'Receive', party_type: 'Customer', party: party.name, paid_to: gl, references });
+      const forOrders = orders.length === 1
+        ? `for order ${orders[0].name}`
+        : `for orders ${orders.map((o) => `${o.name} (${rupees(o.allocatedMinor)})`).join(', ')}`;
+      line = `Payment Entry (draft): receive ${amt} from ${party.name} as advance ${forOrders}, ${tail}`;
       break;
+    }
     case 'supplier_payment':
       need('out');
       party = choice.party;

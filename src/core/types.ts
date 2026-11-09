@@ -28,7 +28,8 @@ export type AccountMapping = {
 export type TransferSource = { bankAccount: string; glAccount: string; modeOfPayment?: string };
 
 export type ActionChoice =
- | {type:'customer_advance'; party: PartyRef}
+ /** `orders`: open Sales Orders this advance is for; allocations add up to at most the payment (paise). */
+ | {type:'customer_advance'; party: PartyRef; orders?: {name: string; allocatedMinor: number}[]}
  | {type:'supplier_payment'; party: PartyRef}
  | {type:'against_invoice'; party: PartyRef; invoices: {doctype:'Sales Invoice'|'Purchase Invoice'; name: string; allocatedMinor: number}[]}
  | {type:'bill_paid_by_card'; party: PartyRef; invoice: {name: string; allocatedMinor: number}}

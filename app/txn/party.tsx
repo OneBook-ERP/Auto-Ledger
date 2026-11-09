@@ -60,11 +60,11 @@ export default function PartyStep() {
       setErrors(errs);
       if (Object.keys(errs).length) return;
       const np = buildNewParty(doctype, newName, extra, required.data ?? []);
-      proceed({ party: np.ref, newParty: np, invoices: undefined });
+      proceed({ party: np.ref, newParty: np, invoices: undefined, orders: undefined });
       return;
     }
     if (!current) return setNeedPick(true);
-    proceed({ party: { doctype: current.doctype, name: current.name, displayName: current.displayName }, newParty: undefined, invoices: undefined });
+    proceed({ party: { doctype: current.doctype, name: current.name, displayName: current.displayName }, newParty: undefined, invoices: undefined, orders: undefined });
   };
 
   return (

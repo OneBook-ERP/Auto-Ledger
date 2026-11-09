@@ -6,6 +6,7 @@ import AccountStep from '../app/txn/account';
 import AmountStep, { RUPEE_LABEL } from '../app/txn/amount';
 import ConfirmStep, { IGNORE_MESSAGE, IGNORE_TITLE } from '../app/txn/confirm';
 import InvoicesStep from '../app/txn/invoices';
+import OrderStep from '../app/txn/order';
 import PartyStep from '../app/txn/party';
 import ResultScreen from '../app/txn/result';
 import TransactionScreen, { DRAWINGS_MISSING } from '../app/txn/[id]';
@@ -306,7 +307,8 @@ describe('party step', () => {
     await fireEvent.press(row);
     await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
     expect(useFlowStore.getState().drafts[t.id].party).toEqual({ doctype: 'Customer', name: 'CUST-0011', displayName: 'Company Eleven' });
-    expect(lastPush()).toEqual({ pathname: '/txn/confirm', params: { id: t.id } });
+    // An existing customer's advance asks which Sales Order it is for next (wave 2, A3).
+    expect(lastPush()).toEqual({ pathname: '/txn/order', params: { id: t.id } });
   });
 
   it('create new: name prefilled, required fields asked, and the plan gets a create_party step', async () => {
@@ -377,6 +379,84 @@ describe('invoice step', () => {
       { doctype: 'Sales Invoice', name: 'SINV-1', allocatedMinor: 2000000 },
       { doctype: 'Sales Invoice', name: 'SINV-2', allocatedMinor: 1000000 },
     ]);
+    expect(lastPush()).toEqual({ pathname: '/txn/confirm', params: { id: t.id } });
+  });
+});
+
+describe('order step (customer advance for a Sales Order)', () => {
+  const acme = { doctype: 'Customer' as const, name: 'CUST-0011', displayName: 'Company Eleven' };
+  const so = (name: string, orderDate: string, totalMinor: number, advanceMinor: number) => ({
+    name, orderDate, totalMinor, advanceMinor, remainingMinor: totalMinor - advanceMinor, deliveryDate: null,
+  });
+  async function open(erp: FakeInboxErp) {
+    const t = txnFrom('idfc-006'); // ₹30,000 in
+    const s = await setup({ txns: [t], erp });
+    draft(t.id, { mapping: BANK, action: 'customer_advance', party: acme });
+    mockParams = { id: t.id };
+    await render(<s.Wrap><OrderStep /></s.Wrap>);
+    return t;
+  }
+
+  it('no open orders: goes straight on to confirm as a plain advance', async () => {
+    const erp = fakeInboxErp();
+    erp.listOpenSalesOrders.mockResolvedValue([]);
+    const t = await open(erp);
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/txn/confirm', params: { id: t.id } }));
+    expect(erp.listOpenSalesOrders).toHaveBeenCalledWith('CUST-0011');
+    expect(useFlowStore.getState().drafts[t.id].orders).toEqual([]);
+    expect(planFor(t, useFlowStore.getState().drafts[t.id], { company: 'ZP', drawingsAccount: 'D', today: '2026-11-08' }).plan.steps[0].body.references).toBeUndefined();
+  });
+
+  it('pick orders: dated title, the id only as detail, editable amounts, over-payment blocked', async () => {
+    const erp = fakeInboxErp();
+    erp.listOpenSalesOrders.mockResolvedValue([
+      so('SAL-ORD-2026-2027-00004', '2026-10-01', 2500000, 500000),
+      so('SAL-ORD-2026-2027-00007', '2026-10-15', 2000000, 0),
+    ]);
+    const t = await open(erp);
+    const first = await screen.findByRole('checkbox', { name: 'Order of 1 Oct 2026, ₹25,000.00. SAL-ORD-2026-2027-00004: already paid ₹5,000.00, left to pay ₹20,000.00' });
+    expect(screen.queryByText('SAL-ORD-2026-2027-00004')).toBeNull(); // never a title on its own
+    await fireEvent.press(first);
+    await fireEvent.press(screen.getByRole('checkbox', { name: /^Order of 15 Oct 2026, ₹20,000.00\. / }));
+    const amounts = () => screen.getAllByLabelText('Amount for this order');
+    expect(amounts().map((a) => a.props.value)).toEqual(['20000.00', '10000.00']);
+    await fireEvent.changeText(amounts()[1], '15000');
+    await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
+    expect(screen.getByText('That is more than this payment. Lower the amount for an order.')).toBeTruthy();
+    expect(mockRouter.push).not.toHaveBeenCalled();
+    await fireEvent.changeText(amounts()[0], '25000');
+    await fireEvent.changeText(amounts()[1], '5000');
+    await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
+    expect(screen.getByText('More than the ₹20,000.00 left to pay on this order.')).toBeTruthy();
+    expect(mockRouter.push).not.toHaveBeenCalled();
+    await fireEvent.changeText(amounts()[0], '20000');
+    await fireEvent.changeText(amounts()[1], '10000');
+    await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
+    expect(useFlowStore.getState().drafts[t.id].orders).toEqual([
+      { name: 'SAL-ORD-2026-2027-00004', allocatedMinor: 2000000 },
+      { name: 'SAL-ORD-2026-2027-00007', allocatedMinor: 1000000 },
+    ]);
+    expect(lastPush()).toEqual({ pathname: '/txn/confirm', params: { id: t.id } });
+  });
+
+  it('Skip: a plain advance', async () => {
+    const erp = fakeInboxErp();
+    erp.listOpenSalesOrders.mockResolvedValue([so('SAL-ORD-2026-2027-00004', '2026-10-01', 2500000, 0)]);
+    const t = await open(erp);
+    await fireEvent.press(await screen.findByRole('checkbox', { name: /^Order of 1 Oct 2026/ }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Skip, this is not for an order' }));
+    expect(useFlowStore.getState().drafts[t.id].orders).toEqual([]);
+    expect(lastPush()).toEqual({ pathname: '/txn/confirm', params: { id: t.id } });
+  });
+
+  it('a load error still allows Skip', async () => {
+    const erp = fakeInboxErp();
+    erp.listOpenSalesOrders.mockRejectedValue(new ErpNetworkError('offline'));
+    const t = await open(erp);
+    expect(await screen.findByText('Could not load the open orders. Check your connection.')).toBeTruthy();
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByRole('button', { name: 'Skip, this is not for an order' }));
+    expect(useFlowStore.getState().drafts[t.id].orders).toEqual([]);
     expect(lastPush()).toEqual({ pathname: '/txn/confirm', params: { id: t.id } });
   });
 });

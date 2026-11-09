@@ -27,9 +27,13 @@ export function describeStep(s: PlanStep, labels: Record<string, string> = {}): 
   const rows: Detail[] = [];
   if (s.doctype === 'Payment Entry') {
     const party = b.party ? `${str(b.party)} (${str(b.party_type)})` : '';
+    const allRefs = Array.isArray(b.references) ? (b.references as Record<string, unknown>[]) : [];
+    // A customer advance for Sales Orders reads "Advance for order X (₹...)"; the document type is never shown.
+    const orders = allRefs.filter((r) => r.reference_doctype === 'Sales Order');
     if (b.payment_type === 'Receive') {
       rows.push({ label: 'Money in from', value: party });
       rows.push({ label: 'Amount', value: money(b.paid_amount), strong: true });
+      if (orders.length) rows.push({ label: 'Advance for', value: orders.map((r) => `order ${str(r.reference_name)} (${money(r.allocated_amount)})`).join(', ') });
       rows.push({ label: 'Into account', value: str(b.paid_to) });
     } else if (b.payment_type === 'Pay') {
       rows.push({ label: 'Paid to', value: party });
@@ -40,7 +44,7 @@ export function describeStep(s: PlanStep, labels: Record<string, string> = {}): 
       rows.push({ label: 'To account', value: str(b.paid_to) });
       rows.push({ label: 'Amount', value: money(b.paid_amount), strong: true });
     }
-    const refs = Array.isArray(b.references) ? (b.references as Record<string, unknown>[]) : [];
+    const refs = allRefs.filter((r) => r.reference_doctype !== 'Sales Order');
     if (refs.length) rows.push({ label: 'Against', value: refs.map((r) => `${str(r.reference_name)} (${money(r.allocated_amount)})`).join(', ') });
     rows.push({ label: 'Mode of payment', value: str(b.mode_of_payment) });
     rows.push({ label: 'Date', value: longDate(str(b.posting_date)) });

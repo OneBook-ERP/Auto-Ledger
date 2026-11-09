@@ -53,7 +53,7 @@ export function partyDoctypeFor(type: ActionType, direction: 'in' | 'out'): Part
   }
 }
 
-export type Step = 'choose' | 'amount' | 'party' | 'invoices' | 'account' | 'confirm';
+export type Step = 'choose' | 'amount' | 'party' | 'order' | 'invoices' | 'account' | 'confirm';
 
 /** The next question for this draft, or 'confirm' when every answer is in. */
 export function nextStep(txn: PendingTxn, d: FlowDraft): Step {
@@ -61,7 +61,11 @@ export function nextStep(txn: PendingTxn, d: FlowDraft): Step {
   if (!a) return 'choose';
   if (a !== 'ignore' && txn.currency !== 'INR' && d.inrAmountMinor === undefined) return 'amount';
   switch (a) {
-    case 'customer_advance': case 'supplier_payment': case 'salary':
+    case 'customer_advance':
+      if (!d.party) return 'party';
+      // A new customer has no Sales Orders yet; otherwise ask which order (or none) once.
+      return d.newParty || d.orders ? 'confirm' : 'order';
+    case 'supplier_payment': case 'salary':
       return d.party ? 'confirm' : 'party';
     case 'against_invoice': case 'bill_paid_by_card':
       if (!d.party) return 'party';

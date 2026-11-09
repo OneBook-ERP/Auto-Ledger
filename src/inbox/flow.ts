@@ -7,6 +7,8 @@ import { plainAmount } from './format';
 import type { ActionType } from './actions';
 
 export type InvoicePick = { doctype: 'Sales Invoice' | 'Purchase Invoice'; name: string; allocatedMinor: number };
+/** An open Sales Order a customer advance is for, with the part of the payment it takes (paise). */
+export type OrderPick = { name: string; allocatedMinor: number };
 /** `labels`: field name -> ERPNext label, for the confirm screen only (never sent). */
 export type NewParty = { ref: PartyRef; fields: Record<string, unknown>; labels?: Record<string, string> };
 
@@ -18,6 +20,8 @@ export type FlowDraft = {
   party?: PartyRef & { displayName?: string };
   newParty?: NewParty;
   invoices?: InvoicePick[];
+  /** Customer advance: the orders it is for. Undefined: not asked yet; []: not for an order (a plain advance). */
+  orders?: OrderPick[];
   /** Expense or income ledger account. */
   account?: string;
   /** Debit transfer: the mapped account the money went to. */
@@ -97,7 +101,12 @@ const ref = (p: PartyRef): PartyRef => ({ doctype: p.doctype, name: p.name });
 export function buildChoice(txn: PendingTxn, d: FlowDraft): ActionChoice {
   const missing = () => new PlanError('missing_choice');
   switch (d.action) {
-    case 'customer_advance': case 'supplier_payment': case 'salary':
+    case 'customer_advance':
+      if (!d.party) throw missing();
+      return d.orders?.length
+        ? { type: 'customer_advance', party: ref(d.party), orders: d.orders.map((o) => ({ name: o.name, allocatedMinor: o.allocatedMinor })) }
+        : { type: 'customer_advance', party: ref(d.party) };
+    case 'supplier_payment': case 'salary':
       if (!d.party) throw missing();
       return { type: d.action, party: ref(d.party) };
     case 'against_invoice':
@@ -177,6 +186,32 @@ export function validateAllocations(amountMinor: number, rows: { name: string; o
   out.ok = !out.total && Object.keys(errors).length === 0;
   return out;
 }
+
+// ---------- advance for a Sales Order ----------
+
+export const ORDERS_OVER_PAYMENT = 'That is more than this payment. Lower the amount for an order.';
+
+/** The orders step's answer. Allocations default with defaultAllocation (the order's remaining, capped at the payment left). */
+export function chooseOrders(
+  amountMinor: number,
+  rows: { name: string; remainingMinor: number; allocatedMinor: number }[],
+): { check: AllocationCheck; patch: { orders: OrderPick[] } | null } {
+  const errors: Record<string, string> = {};
+  let totalMinor = 0;
+  for (const r of rows) {
+    totalMinor += r.allocatedMinor;
+    if (!(r.allocatedMinor > 0)) errors[r.name] = 'Enter an amount above zero.';
+    else if (r.allocatedMinor > r.remainingMinor) errors[r.name] = `More than the ${formatInr(r.remainingMinor)} left to pay on this order.`;
+  }
+  const check: AllocationCheck = { ok: true, totalMinor, errors };
+  if (rows.length === 0) check.total = 'Choose an order, or tap Skip if this is not for an order.';
+  else if (totalMinor > amountMinor) check.total = ORDERS_OVER_PAYMENT;
+  check.ok = !check.total && Object.keys(errors).length === 0;
+  return { check, patch: check.ok ? { orders: rows.map((r) => ({ name: r.name, allocatedMinor: r.allocatedMinor })) } : null };
+}
+
+/** "Skip, this is not for an order": a plain advance. */
+export const skipOrders = (): { orders: OrderPick[] } => ({ orders: [] });
 
 // ---------- foreign-currency spends ----------
 

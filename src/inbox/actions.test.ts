@@ -50,8 +50,21 @@ describe('nextStep', () => {
   const acme = { doctype: 'Customer' as const, name: 'Acme' };
   it('party actions ask for the party first', () => {
     expect(nextStep(credit, { action: 'customer_advance' })).toBe('party');
-    expect(nextStep(credit, { action: 'customer_advance', party: acme })).toBe('confirm');
+    expect(nextStep(credit, { action: 'customer_advance', party: acme, orders: [] })).toBe('confirm');
     expect(nextStep(debit, { action: 'salary' })).toBe('party');
+  });
+  it('a customer advance asks which order after the customer; answered or skipped goes on', () => {
+    expect(nextStep(credit, { action: 'customer_advance', party: acme })).toBe('order');
+    expect(nextStep(credit, { action: 'customer_advance', party: acme, orders: [] })).toBe('confirm');
+    expect(nextStep(credit, { action: 'customer_advance', party: acme, orders: [{ name: 'SO-1', allocatedMinor: 1 }] })).toBe('confirm');
+  });
+  it('a new customer has no orders: straight to confirm', () => {
+    const newParty = { ref: { doctype: 'Customer' as const, name: 'New Co' }, fields: { customer_name: 'New Co' } };
+    expect(nextStep(credit, { action: 'customer_advance', party: newParty.ref, newParty })).toBe('confirm');
+  });
+  it('other party actions never ask for an order', () => {
+    expect(nextStep(debit, { action: 'supplier_payment', party: { doctype: 'Supplier', name: 'A' } })).toBe('confirm');
+    expect(nextStep(debit, { action: 'salary', party: { doctype: 'Employee', name: 'E' } })).toBe('confirm');
   });
   it('invoice actions: party, then invoices', () => {
     expect(nextStep(credit, { action: 'against_invoice' })).toBe('party');

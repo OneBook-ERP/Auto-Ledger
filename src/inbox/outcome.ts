@@ -12,7 +12,7 @@ export const OFFLINE_MESSAGE = 'No connection. Your answer is saved and will be 
 const PLAN_MESSAGES: Record<string, string> = {
   date_out_of_range: 'This transaction is dated outside the usual range. Check the date in ERPNext.',
   bad_direction: 'This answer does not fit the direction of the money. Go back and choose another answer.',
-  over_allocated: 'The invoice amounts add up to more than this transaction. Go back and lower an amount.',
+  over_allocated: 'The amounts add up to more than this transaction. Lower an amount or remove an item.',
   mixed_invoices: 'Choose only sales invoices or only purchase invoices, not both. Go back and change the invoices.',
   no_invoices: 'Choose at least one invoice. Go back to the invoice list.',
   same_account: 'Money cannot move from an account to itself. Go back and choose your other account.',
