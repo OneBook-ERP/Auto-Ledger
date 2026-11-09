@@ -1,22 +1,34 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Linking } from 'react-native';
+import { Alert, Linking, Text, View } from 'react-native';
 import type { PendingTxn } from '../../src/core/types';
 import { NEEDS_LOGIN_SINCE_KEY } from '../../src/ingest/drain';
 import { bringBack, pollStatuses } from '../../src/ingest/statusPoller';
 import { undoTxn, type UndoResult } from '../../src/outbox/runner';
 import {
-  PAGE_SIZE, UNDO_CONFIRM_MESSAGE, canPutBack, canUndo, confirmText, docUrl, groupActivity, removalPlan, statusOf, titleOf,
+  PAGE_SIZE, UNDO_CONFIRM_MESSAGE, canPutBack, canUndo, confirmText, docUrl, filterActivity, groupByRecency, isoToday, removalPlan, sortActivity,
+  statusOf, titleOf, totalsOf, type ActivityPeriod,
 } from '../../src/state/activityModel';
 import { siteMatches, useApp } from '../../src/state/AppProvider';
 import { useUiStore } from '../../src/state/store';
 import { useErpOps } from '../../src/state/useErpOps';
-import { ActivityRow, Banner, Button, EmptyState, Screen, SectionHeader, formatDate, friendlyDoctype, signedMoney, type ActivityAction } from '../../src/ui';
+import {
+  ActivityRow, Banner, Button, Chip, EmptyState, Figure, Screen, SearchField, SectionHeader, formatDate, formatInr, friendlyDoctype, signedMoney,
+  type ActivityAction,
+} from '../../src/ui';
 
 export { UNDO_CONFIRM_MESSAGE };
 export const OFFLINE_MESSAGE = 'No connection. Nothing was removed yet.';
 export const OFFLINE_PUT_BACK_MESSAGE = 'No connection. Nothing was changed.';
 const SITE_CHANGED_MESSAGE = 'You are signed in to a different ERPNext site than this phone\'s data belongs to. Sign in again to the original site first.';
+
+export const NO_MATCH_MESSAGE = 'Nothing matches. Try a different search or period.';
+const PERIODS: { key: ActivityPeriod; label: string }[] = [
+  { key: 'this_month', label: 'This month' },
+  { key: 'last_month', label: 'Last month' },
+  { key: 'this_fy', label: 'This financial year' },
+  { key: 'all', label: 'All time' },
+];
 
 type Notice = { tone: 'ok' | 'warn' | 'error'; message: string; retry?: () => void };
 
@@ -30,6 +42,8 @@ export default function Activity() {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [notice, setNotice] = useState<Notice | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [query, setQuery] = useState('');
+  const [period, setPeriod] = useState<ActivityPeriod>('all');
   const alive = useRef(true);
   const busyRef = useRef<Set<string>>(new Set());
   useEffect(() => () => { alive.current = false; }, []);
@@ -174,6 +188,7 @@ export default function Activity() {
         testID={`activity-row-${t.id}`}
         title={titleOf(t)}
         amount={signedMoney(t.amountMinor, t.currency, t.direction)}
+        direction={t.direction}
         date={formatDate(t.occurredOn)}
         docs={t.createdDocs.map((d) => ({ kind: friendlyDoctype(d.doctype), id: d.name }))}
         status={{ label: s.label, tone: s.tone }}
@@ -184,14 +199,11 @@ export default function Activity() {
     );
   };
 
-  const g = groupActivity(items ?? [], limit);
-  const section = (title: string, list: PendingTxn[]) =>
-    list.length ? (
-      <>
-        <SectionHeader title={title} count={list.length} />
-        {list.map(row)}
-      </>
-    ) : null;
+  const processed = (items ?? []).filter((t) => t.state === 'created' || t.state === 'submitted' || t.state === 'ignored');
+  const matching = sortActivity(filterActivity(processed, { query, period }, isoToday(Date.now())), 'newest');
+  const shown = matching.slice(0, limit);
+  const totals = totalsOf(matching);
+  const groups = groupByRecency(shown, isoToday(Date.now()));
 
   return (
     <Screen
@@ -199,13 +211,39 @@ export default function Activity() {
       top={notice ? <Banner tone={notice.tone} message={notice.message} actionLabel={notice.retry ? 'Retry' : undefined} onAction={notice.retry} testID="activity-notice" /> : undefined}
       onRefresh={() => void pullToRefresh()}
       refreshing={refreshing}>
-      {items && g.total === 0 ? (
+      {items && processed.length === 0 ? (
         <EmptyState title="Nothing processed yet" message="Entries you create from the Inbox are listed here, with an option to undo each draft while it is still a draft." />
       ) : null}
-      {section('Waiting for your accountant', g.created)}
-      {section('Submitted', g.submitted)}
-      {section('Ignored', g.ignored)}
-      {g.total > g.shown ? <Button variant="secondary" label={`Show older (${g.total - g.shown} more)`} onPress={() => setLimit((n) => n + PAGE_SIZE)} /> : null}
+      {processed.length ? (
+        <>
+          <SearchField value={query} onChange={setQuery} placeholder="Search by name or reference" testID="activity-search" />
+          <View className="flex-row flex-wrap">
+            {PERIODS.map((p) => (
+              <Chip key={p.key} label={p.label} selected={period === p.key} onPress={() => setPeriod(p.key)} />
+            ))}
+          </View>
+          <View testID="activity-totals" className="mb-2 mt-1 flex-row justify-between rounded-2xl border border-line bg-surface p-4 dark:border-line-dark dark:bg-surface-dark">
+            <Figure size="md" label="Money in" value={formatInr(totals.inMinor)} />
+            <Figure size="md" label="Money out" value={formatInr(totals.outMinor)} />
+            <Figure size="md" label="Net" value={formatInr(totals.netMinor)} />
+          </View>
+          {totals.foreignCount ? (
+            <Text className="mb-1 text-sm text-muted dark:text-muted-dark">
+              {totals.foreignCount === 1 ? '1 entry in another currency is not counted.' : `${totals.foreignCount} entries in another currency are not counted.`}
+            </Text>
+          ) : null}
+          {matching.length === 0 ? <Text className="px-2 py-8 text-center text-base text-muted dark:text-muted-dark">{NO_MATCH_MESSAGE}</Text> : null}
+        </>
+      ) : null}
+      {groups.map((g) => (
+        <View key={g.title}>
+          <SectionHeader title={g.title} count={g.rows.length} />
+          {g.rows.map(row)}
+        </View>
+      ))}
+      {matching.length > shown.length ? (
+        <Button variant="secondary" label={`Show older (${matching.length - shown.length} more)`} onPress={() => setLimit((n) => n + PAGE_SIZE)} />
+      ) : null}
     </Screen>
   );
 }

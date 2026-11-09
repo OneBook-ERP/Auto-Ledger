@@ -53,6 +53,8 @@ const confirm = async (label: string) => {
 };
 
 beforeEach(() => {
+  // "Today" for the recency groups and period chips is fixed: 9 Nov 2026.
+  jest.spyOn(Date, 'now').mockReturnValue(new Date(2026, 10, 9, 12, 0, 0).getTime());
   jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
   jest.spyOn(Linking, 'openURL').mockResolvedValue(true as never);
   mockPush.mockClear();
@@ -76,9 +78,7 @@ describe('Activity screen', () => {
       ],
       { 'Payment Entry:PE-1': 0, 'Payment Entry:PE-2': 0, 'Journal Entry:JV-3': 1 },
     );
-    expect(await screen.findByText('Waiting for your accountant (2)')).toBeTruthy();
-    expect(screen.getByText('Submitted (1)')).toBeTruthy();
-    expect(screen.getByText('Ignored (1)')).toBeTruthy();
+    expect(await screen.findByText('This week (4)')).toBeTruthy();
     const r2 = screen.getByTestId('activity-row-2');
     expect(within(r2).getByText('Vendor Two')).toBeTruthy();
     expect(within(r2).getByText('\u2212₹500.00')).toBeTruthy();
@@ -89,9 +89,9 @@ describe('Activity screen', () => {
     expect(within(screen.getByTestId('activity-row-3')).getByText('Submitted')).toBeTruthy();
     expect(within(screen.getByTestId('activity-row-1')).getByText('+₹12,345.00')).toBeTruthy();
     expect(screen.queryByTestId('activity-row-5')).toBeNull();
-    // row 2 is newer than row 1
+    // newest first
     const order = screen.getAllByTestId(/^activity-row-/).map((n) => n.props.testID);
-    expect(order).toEqual(['activity-row-2', 'activity-row-1', 'activity-row-3', 'activity-row-4']);
+    expect(order).toEqual(['activity-row-4', 'activity-row-3', 'activity-row-2', 'activity-row-1']);
   });
 
   it('offers Undo only when every document is a draft', async () => {
@@ -99,7 +99,7 @@ describe('Activity screen', () => {
       [txn('1'), txn('2', { createdDocs: [doc('PE-2', 1)] }), txn('3', { createdDocs: [doc('PE-3', 0), doc('PE-4', 1)] }), txn('4', { state: 'submitted', createdDocs: [doc('PE-5', 1)] })],
       { 'Payment Entry:PE-1': 0, 'Payment Entry:PE-2': 1, 'Payment Entry:PE-3': 0, 'Payment Entry:PE-4': 1, 'Payment Entry:PE-5': 1 },
     );
-    await screen.findByText('Waiting for your accountant (2)');
+    await screen.findByTestId('activity-row-1');
     expect(within(screen.getByTestId('activity-row-1')).getByRole('button', { name: 'Undo' })).toBeTruthy();
     for (const id of ['3', '4']) expect(within(screen.getByTestId(`activity-row-${id}`)).queryByRole('button', { name: 'Undo' })).toBeNull();
   });
@@ -184,16 +184,15 @@ describe('Activity screen', () => {
 
   it('polls on focus: a submitted draft moves to the Submitted section', async () => {
     await open([txn('1')], { 'Payment Entry:PE-1': 1 });
-    expect(await screen.findByText('Submitted (1)')).toBeTruthy();
-    expect(screen.queryByText(/Waiting for your accountant/)).toBeNull();
+    expect(await within(await screen.findByTestId('activity-row-1')).findByText('Submitted')).toBeTruthy();
   });
 
   it('limits the list to 100 items with a Show older control', async () => {
     const many = Array.from({ length: 105 }, (_, i) => txn(String(i + 1), { state: 'ignored', createdDocs: [] }));
     await open(many);
-    await screen.findByText('Ignored (100)');
+    await screen.findByText('This week (100)');
     await fireEvent.press(screen.getByRole('button', { name: 'Show older (5 more)' }));
-    expect(await screen.findByText('Ignored (105)')).toBeTruthy();
+    expect(await screen.findByText('This week (105)')).toBeTruthy();
   });
 
   it('shows amounts in the transaction currency, not always rupees', async () => {
@@ -242,8 +241,71 @@ describe('Activity screen', () => {
     mockErp = erp as unknown as ErpOps;
     useUiStore.setState({ session: { siteUrl: 'https://erp.example.com', user: 'a@b.c' }, needsLogin: false });
     await render(<Activity />, { wrapper: app.Wrap });
-    await screen.findByText('Waiting for your accountant (1)');
+    await screen.findByTestId('activity-row-1');
     expect(erp.calls).toHaveLength(0);
+  });
+});
+
+describe('Activity search, period and totals', () => {
+  const mixed = () => [
+    txn('1', { counterparty: 'Fuel Station', occurredOn: '2026-11-05', amountMinor: 100000 }),
+    txn('2', { counterparty: 'Rent', direction: 'out', occurredOn: '2026-10-20', amountMinor: 30000 }),
+    txn('3', { counterparty: 'Client', occurredOn: '2026-11-08', amountMinor: 50050 }),
+  ];
+  const docs = { 'Payment Entry:PE-1': 0, 'Payment Entry:PE-2': 0, 'Payment Entry:PE-3': 0 };
+
+  it('typing hides rows that do not match, case-insensitively; regex characters are plain text', async () => {
+    await open(mixed(), docs);
+    await screen.findByTestId('activity-row-1');
+    await fireEvent.changeText(screen.getByTestId('activity-search'), '  FUEL ');
+    expect(screen.getByTestId('activity-row-1')).toBeTruthy();
+    expect(screen.queryByTestId('activity-row-2')).toBeNull();
+    expect(screen.queryByTestId('activity-row-3')).toBeNull();
+    await fireEvent.changeText(screen.getByTestId('activity-search'), '(*');
+    expect(await screen.findByText('Nothing matches. Try a different search or period.')).toBeTruthy();
+  });
+
+  it('period chips: Last month shows only last month, This month the rest', async () => {
+    await open(mixed(), docs);
+    await screen.findByTestId('activity-row-1');
+    await fireEvent.press(screen.getByRole('radio', { name: 'Last month' }));
+    expect(screen.getByTestId('activity-row-2')).toBeTruthy();
+    expect(screen.queryByTestId('activity-row-1')).toBeNull();
+    await fireEvent.press(screen.getByRole('radio', { name: 'This month' }));
+    expect(screen.queryByTestId('activity-row-2')).toBeNull();
+    expect(screen.getByTestId('activity-row-1')).toBeTruthy();
+    expect(screen.getByTestId('activity-row-3')).toBeTruthy();
+  });
+
+  it('the totals strip adds up the shown rows', async () => {
+    await open(mixed(), docs);
+    await screen.findByTestId('activity-row-1');
+    const strip = screen.getByTestId('activity-totals');
+    expect(within(strip).getByText('Money in')).toBeTruthy();
+    expect(within(strip).getByText('₹1,500.50')).toBeTruthy();
+    expect(within(strip).getByText('Money out')).toBeTruthy();
+    expect(within(strip).getByText('₹300.00')).toBeTruthy();
+    expect(within(strip).getByText('Net')).toBeTruthy();
+    expect(within(strip).getByText('₹1,200.50')).toBeTruthy();
+    await fireEvent.press(screen.getByRole('radio', { name: 'Last month' }));
+    expect(within(screen.getByTestId('activity-totals')).getByText('−₹300.00')).toBeTruthy();
+  });
+
+  it('Undo still works on a filtered row', async () => {
+    const { repo } = await open(mixed(), docs);
+    await screen.findByTestId('activity-row-1');
+    await fireEvent.changeText(screen.getByTestId('activity-search'), 'fuel');
+    await fireEvent.press(within(screen.getByTestId('activity-row-1')).getByRole('button', { name: 'Undo' }));
+    await confirm('Undo');
+    await waitFor(async () => expect((await repo.getPending('1'))!.state).toBe('new'));
+  });
+
+  it('Bring back works on a filtered ignored row', async () => {
+    const { repo } = await open([txn('1', { state: 'ignored', createdDocs: [], counterparty: 'Spam' }), txn('2')], docs);
+    await screen.findByTestId('activity-row-1');
+    await fireEvent.changeText(screen.getByTestId('activity-search'), 'spam');
+    await fireEvent.press(within(screen.getByTestId('activity-row-1')).getByRole('button', { name: 'Bring back' }));
+    await waitFor(async () => expect((await repo.getPending('1'))!.state).toBe('new'));
   });
 });
 

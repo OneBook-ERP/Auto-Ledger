@@ -152,3 +152,9 @@ export function sortActivity(items: PendingTxn[], by: ActivitySort): PendingTxn[
     default: return l.sort(newestFirst);
   }
 }
+
+/** Today as YYYY-MM-DD in the phone's local time. */
+export function isoToday(nowMs: number): string {
+  const d = new Date(nowMs);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
