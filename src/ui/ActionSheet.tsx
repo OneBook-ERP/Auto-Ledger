@@ -1,6 +1,6 @@
 import { Pressable, Text, View } from 'react-native';
 
-export type ActionSheetItem = { key: string; label: string; hint?: string; disabled?: boolean; disabledReason?: string };
+export type ActionSheetItem = { key: string; label: string; hint?: string; disabled?: boolean; disabledReason?: string; /** Trailing button shown on a disabled row (e.g. Open Settings). */ action?: { label: string; onPress: () => void } };
 
 /** The suggested answer: the one prominent choice on the Transaction screen. */
 export function SuggestionCard({ title, subtitle, onPress }: { title: string; subtitle: string; onPress: () => void }) {
@@ -25,25 +25,37 @@ export function ActionSheet({ items, onSelect }: { items: ActionSheetItem[]; onS
   return (
     <View testID="action-sheet" className="mb-4 rounded-2xl border border-line bg-surface dark:border-line-dark dark:bg-surface-dark">
       {items.map((a, i) => (
-        <Pressable
+        <View
           key={a.key}
-          onPress={() => onSelect(a.key)}
-          disabled={a.disabled}
-          accessibilityRole="button"
-          accessibilityLabel={a.label}
-          accessibilityHint={a.disabled ? a.disabledReason : a.hint}
-          accessibilityState={{ disabled: !!a.disabled }}
-          className={`min-h-[56px] flex-row items-center px-4 py-2.5 active:bg-paper dark:active:bg-paper-dark ${i < items.length - 1 ? 'border-b border-line dark:border-line-dark' : ''} ${a.disabled ? 'opacity-60' : ''}`}>
-          <View className="flex-1">
-            <Text className={`text-[15px] font-medium ${a.key === 'ignore' ? 'text-muted dark:text-muted-dark' : 'text-ink dark:text-ink-dark'}`}>{a.label}</Text>
-            {a.disabled && a.disabledReason ? (
-              <Text className="mt-0.5 text-[13px] text-warn dark:text-warn-dark">{a.disabledReason}</Text>
-            ) : a.hint ? (
-              <Text className="mt-0.5 text-[13px] leading-[18px] text-muted dark:text-muted-dark">{a.hint}</Text>
-            ) : null}
-          </View>
-          <Text className="ml-3 text-lg text-muted dark:text-muted-dark">›</Text>
-        </Pressable>
+          className={`flex-row items-center ${i < items.length - 1 ? 'border-b border-line dark:border-line-dark' : ''}`}>
+          <Pressable
+            onPress={() => onSelect(a.key)}
+            disabled={a.disabled}
+            accessibilityRole="button"
+            accessibilityLabel={a.label}
+            accessibilityHint={a.disabled ? a.disabledReason : a.hint}
+            accessibilityState={{ disabled: !!a.disabled }}
+            className={`min-h-[56px] flex-1 flex-row items-center px-4 py-2.5 active:bg-paper dark:active:bg-paper-dark ${a.disabled ? 'opacity-60' : ''}`}>
+            <View className="flex-1">
+              <Text className={`text-[15px] font-medium ${a.key === 'ignore' ? 'text-muted dark:text-muted-dark' : 'text-ink dark:text-ink-dark'}`}>{a.label}</Text>
+              {a.disabled && a.disabledReason ? (
+                <Text className="mt-0.5 text-[13px] text-warn dark:text-warn-dark">{a.disabledReason}</Text>
+              ) : a.hint ? (
+                <Text className="mt-0.5 text-[13px] leading-[18px] text-muted dark:text-muted-dark">{a.hint}</Text>
+              ) : null}
+            </View>
+            {a.action ? null : <Text className="ml-3 text-lg text-muted dark:text-muted-dark">›</Text>}
+          </Pressable>
+          {a.action ? (
+            <Pressable
+              onPress={a.action.onPress}
+              accessibilityRole="button"
+              accessibilityLabel={a.action.label}
+              className="min-h-[48px] justify-center px-4">
+              <Text className="text-[15px] font-semibold text-accent dark:text-accent-dark">{a.action.label}</Text>
+            </Pressable>
+          ) : null}
+        </View>
       ))}
     </View>
   );

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
+import { FlatList, View } from 'react-native';
 import { nextStep } from '../../src/inbox/actions';
 import { useInboxDeps } from '../../src/inbox/deps';
 import { FlowAnswered, FlowGone, FlowLoading } from '../../src/inbox/FlowStates';
@@ -53,7 +54,7 @@ export default function AccountStep() {
         top={<BackLink label="Back" onPress={() => router.back()} />}
         title="Which account did the money come from?"
         subtitle="Your bank accounts in ERPNext. The transfer is booked from that account into this one."
-        footer={<Button label="Continue" disabled={!banks.data} onPress={() => {
+        footer={<Button label="Continue" disabled={!banks.data || !chosen} onPress={() => {
           const b = sources.find((x) => x.name === chosen);
           if (!b) return setMissing(true);
           const m = readBy(b.name);
@@ -82,7 +83,7 @@ export default function AccountStep() {
         top={<BackLink label="Back" onPress={() => router.back()} />}
         title="Which account did the money go to?"
         subtitle="For a credit card bill paid from this account, choose the card."
-        footer={<Button label="Continue" onPress={() => {
+        footer={<Button label="Continue" disabled={!chosen} onPress={() => {
           const m = others.find((x) => x.bankAccount === chosen);
           if (!m) return setMissing(true);
           go({ toAccount: m });
@@ -111,7 +112,7 @@ export default function AccountStep() {
       top={<BackLink label="Back" onPress={() => router.back()} />}
       title={isExpense ? 'Which expense account?' : 'Which income account?'}
       subtitle={isExpense ? 'Where this cost is booked in ERPNext.' : 'Where this income is booked in ERPNext.'}
-      footer={<Button label="Continue" onPress={() => {
+      footer={<Button label="Continue" disabled={!chosen} onPress={() => {
         if (!chosen || (q.data && !all.some((a) => a.name === chosen))) return setMissing(true);
         go({ account: chosen });
       }} />}>
@@ -128,11 +129,29 @@ export default function AccountStep() {
           )}
         </>
       ) : null}
-      {all.length > 8 ? <TextField label="Filter accounts" value={filter} onChangeText={setFilter} autoCapitalize="none" autoCorrect={false} /> : null}
+      {all.length > 8 ? <TextField label="Search accounts" placeholder="Search accounts" value={filter} onChangeText={setFilter} autoCapitalize="none" autoCorrect={false} /> : null}
       {q.data && shown.length === 0 ? <Txt variant="muted">No account matches.</Txt> : null}
-      {shown.map((a) => (
-        <ChoiceRow key={a.name} title={a.name} selected={chosen === a.name} onPress={() => { setPicked(a.name); setMissing(false); }} />
-      ))}
+      {shown.length > 40 ? (
+        // A long chart of accounts: render only the rows on screen.
+        <View testID="account-list" style={{ height: 420 }}>
+          <FlatList
+            data={shown}
+            keyExtractor={(a) => a.name}
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
+            initialNumToRender={20}
+            windowSize={7}
+            extraData={chosen}
+            renderItem={({ item: a }) => (
+              <ChoiceRow title={a.name} selected={chosen === a.name} onPress={() => { setPicked(a.name); setMissing(false); }} />
+            )}
+          />
+        </View>
+      ) : (
+        shown.map((a) => (
+          <ChoiceRow key={a.name} title={a.name} selected={chosen === a.name} onPress={() => { setPicked(a.name); setMissing(false); }} />
+        ))
+      )}
     </Screen>
   );
 }

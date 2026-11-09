@@ -185,6 +185,10 @@ describe('Transaction screen', () => {
       'Customer advance', 'Payment against an invoice', 'Other income', 'Transfer from my other account', 'Personal', 'Ignore this message',
     ]);
     expect(screen.getByText('₹30,000.00').props.accessibilityLabel).toBe('₹30,000.00 received');
+    // The reference, sender and message count sit behind a collapsed "Details" row.
+    expect(screen.queryByText('SBIN32974781')).toBeNull();
+    expect(screen.queryByText(/AutoLedger reference/)).toBeNull();
+    await fireEvent.press(screen.getByTestId('details-toggle'));
     expect(screen.getByText('SBIN32974781')).toBeTruthy();
   });
 
@@ -204,7 +208,8 @@ describe('Transaction screen', () => {
     await open(txnFrom('idfc-010'), { settings: { drawingsAccount: '' } });
     const personal = within(screen.getByTestId('action-sheet')).getByRole('button', { name: 'Personal' });
     expect(personal.props.accessibilityState.disabled).toBe(true);
-    expect(screen.getByText(`${DRAWINGS_MISSING} to use Personal.`)).toBeTruthy();
+    expect(screen.getByText(DRAWINGS_MISSING)).toBeTruthy();
+    expect(screen.getAllByText('Open Settings')).toHaveLength(1);
     await fireEvent.press(personal);
     expect(mockRouter.push).not.toHaveBeenCalled();
   });
@@ -336,7 +341,7 @@ describe('party step', () => {
 
     await render(<s.Wrap><ConfirmStep /></s.Wrap>);
     expect(await screen.findByText('New Customer')).toBeTruthy();
-    expect(screen.getByText('New Customer will be created: Company Eleven Pvt Ltd')).toBeTruthy();
+    expect(screen.getByLabelText('Name: Company Eleven Pvt Ltd')).toBeTruthy();
     expect(screen.getByLabelText('Customer Group: Commercial')).toBeTruthy(); // human label, not customer_group
     expect(screen.queryByLabelText('customer_group: Commercial')).toBeNull();
     await fireEvent.press(screen.getByRole('button', { name: 'Create draft' }));
@@ -392,6 +397,21 @@ describe('account step', () => {
     expect(useFlowStore.getState().drafts[t.id].account).toBe('Advertising - ZP');
     expect(lastPush()).toEqual({ pathname: '/txn/confirm', params: { id: t.id } });
   });
+  it('expense picker: Search accounts placeholder, Continue disabled until chosen, long lists are virtualised', async () => {
+    const t = txnFrom('idfc-034');
+    const erp = fakeInboxErp();
+    erp.listLedgerAccounts.mockResolvedValue(Array.from({ length: 60 }, (_, i) => ({ name: `Account ${String(i).padStart(2, '0')} - ZP`, accountType: null })));
+    const s = await setup({ txns: [t], erp });
+    draft(t.id, { mapping: CARD, action: 'expense' });
+    mockParams = { id: t.id };
+    await render(<s.Wrap><AccountStep /></s.Wrap>);
+    expect(await screen.findByPlaceholderText('Search accounts')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState.disabled).toBe(true);
+    expect(screen.getByTestId('account-list')).toBeTruthy();
+    expect(screen.queryByText('Account 59 - ZP')).toBeNull(); // not rendered until scrolled to
+    await fireEvent.press(screen.getAllByRole('radio')[0]);
+    expect(screen.getByRole('button', { name: 'Continue' }).props.accessibilityState.disabled).toBe(false);
+  });
   it('transfer: offers the other saved accounts', async () => {
     const t = txnFrom('idfc-010');
     const s = await setup({ txns: [t] });
@@ -435,7 +455,9 @@ describe('Confirm', () => {
     check();
     expect(seen.every((x) => !x.enabled || x.summary)).toBe(true);
     await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false));
-    expect(screen.getByText(/^Payment Entry \(draft\): receive ₹30,000.00 from Acme Test Traders as advance/)).toBeTruthy();
+    expect(screen.getByLabelText('Booked as: Customer advance')).toBeTruthy();
+    expect(screen.getByLabelText('Received from: Acme Test Traders (Customer)')).toBeTruthy();
+    expect(screen.queryByText(/\(draft\):/)).toBeNull();
     expect(screen.getByText('It is saved as a draft. Your accountant submits it and matches it to the bank statement in ERPNext.')).toBeTruthy();
   });
 
@@ -577,6 +599,7 @@ describe('Result', () => {
     await render(<s.Wrap><ResultScreen /></s.Wrap>);
     expect(await screen.findByText('Draft created')).toBeTruthy();
     expect(screen.getByText('ACC-PAY-2026-00041')).toBeTruthy();
+    expect(screen.getByLabelText('Payment entry: ACC-PAY-2026-00041')).toBeTruthy();
     expect(screen.getByText('Waiting for your accountant')).toBeTruthy();
     await fireEvent.press(screen.getByRole('button', { name: 'Next: ANTHROPIC* CLAUDE SUB, 2 left' }));
     expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/txn/[id]', params: { id: b.id } });
@@ -629,7 +652,8 @@ describe('credit transfer from another own account (R52b)', () => {
     await b.unmount();
 
     await render(<s.Wrap><ConfirmStep /></s.Wrap>);
-    expect(await screen.findByText(/^Internal transfer: ₹30,000.00 from ICICI - ZP into IDFC First - ZP/)).toBeTruthy();
+    expect(await screen.findByLabelText('Booked as: Transfer from my other account')).toBeTruthy();
+    expect(screen.getByLabelText('From account: ICICI - ZP')).toBeTruthy();
     expect(screen.queryByRole('switch')).toBeNull(); // transfers are never remembered
     await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false));
     await fireEvent.press(screen.getByTestId('create'));
@@ -876,7 +900,7 @@ describe('R54 follow-ups on screens', () => {
     await render(<s.Wrap><ConfirmStep /></s.Wrap>);
     expect(await screen.findByText('Several matching transfers were found. Check ERPNext for duplicates after creating.')).toBeTruthy();
     expect(screen.queryByTestId('linked')).toBeNull();
-    expect(screen.getByText(new RegExp(`UTR/ref AL-${credit.rawHash}`))).toBeTruthy();
+    expect(screen.queryByLabelText(/^Reference:/)).toBeNull(); // no real bank reference: none shown
   });
   it('a customer receipt on the other account is never offered as the linked leg', async () => {
     const acme = smsTxn('idfc-006', [['XXXXXXX6507', 'XXXXXXX1111'], ['05-11-2026', '19-10-2026']], txnFrom('idfc-010').receivedAt + 60_000);
@@ -890,7 +914,7 @@ describe('R54 follow-ups on screens', () => {
     await render(<s.Wrap><ConfirmStep /></s.Wrap>);
     await waitFor(() => expect(screen.getByTestId('create').props.accessibilityState.disabled).toBe(false));
     expect(screen.queryByTestId('linked')).toBeNull();
-    expect(screen.getByText(/UTR\/ref IDFB6292M4509651/)).toBeTruthy();
+    expect(screen.getByLabelText('Reference: IDFB6292M4509651')).toBeTruthy();
   });
   it('an error outcome keeps the computed link (no flicker, no re-lookup)', async () => {
     const debit = txnFrom('idfc-010');

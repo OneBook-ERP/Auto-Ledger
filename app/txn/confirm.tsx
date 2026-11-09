@@ -2,7 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { learnRule } from '../../src/core/suggest';
 import type { ActionChoice, ActionPlan } from '../../src/core/types';
-import { rememberDefault, rememberShown } from '../../src/inbox/actions';
+import { actionsFor, rememberDefault, rememberShown } from '../../src/inbox/actions';
 import { useInboxDeps } from '../../src/inbox/deps';
 import { describeStep, stepTitle } from '../../src/inbox/describe';
 import { FlowAnswered, FlowGone, FlowLoading } from '../../src/inbox/FlowStates';
@@ -13,11 +13,31 @@ import { useTxnFlow } from '../../src/inbox/hooks';
 import { GONE_MESSAGE, UNKNOWN_FAILURE, erpNewDocUrl, planErrorMessage, type Outcome } from '../../src/inbox/outcome';
 import { useFlowStore } from '../../src/inbox/store';
 import { submitAnswer } from '../../src/inbox/submit';
-import { BackLink, Banner, Button, DetailCard, Pill, Screen, Stack, ToggleRow, Txt, confirmDialog, openExternal } from '../../src/ui';
+import { BackLink, Banner, Button, DetailCard, Pill, Screen, Stack, ToggleRow, confirmDialog, openExternal, type Detail } from '../../src/ui';
 
 export const DRAFT_NOTE = 'It is saved as a draft. Your accountant submits it and matches it to the bank statement in ERPNext.';
 export const IGNORE_TITLE = 'Ignore this message?';
 export const IGNORE_MESSAGE = 'It will not be added to ERPNext.';
+
+/** Plain-word rows for the check screen: no Debit/Credit, "Booked as" first, and a reference only when the bank gave one. */
+function plainRows(rows: Detail[], opts: { transfer: boolean; incoming: boolean; bookedAs: string | null; hasBankRef: boolean }): Detail[] {
+  const out: Detail[] = [];
+  if (opts.bookedAs) out.push({ label: 'Booked as', value: opts.bookedAs });
+  for (const r of rows) {
+    if (r.label === 'Reference') {
+      if (opts.hasBankRef && r.value) out.push(r);
+      continue;
+    }
+    if (opts.transfer) out.push(r);
+    else if (r.label === 'Debit') out.push({ ...r, label: opts.incoming ? 'Received into' : 'Account' });
+    else if (r.label === 'Credit') out.push({ ...r, label: opts.incoming ? 'Account' : 'Paid from' });
+    else if (r.label === 'Into account') out.push({ ...r, label: 'Received into' });
+    else if (r.label === 'From account') out.push({ ...r, label: 'Paid from' });
+    else if (r.label === 'Money in from') out.push({ ...r, label: 'Received from' });
+    else out.push(r);
+  }
+  return out;
+}
 
 type Prepared = { plan: ActionPlan; choice: ActionChoice } | { error: string };
 
@@ -216,11 +236,18 @@ export default function ConfirmStep() {
       ) : null}
       {ok && !nothing ? (
         <Stack gap={1}>
-          {ok.plan.steps.map((s, i) => (
-            <DetailCard key={`${s.kind}-${i}`} title={stepTitle(s)} badge={<Pill text="Draft" tone="warn" />} rows={describeStep(s, s.kind === 'create_party' ? f.draft.newParty?.labels : undefined)} testID={`summary-${i}`}>
-              <Txt variant="muted">{ok.plan.summary[i]}</Txt>
-            </DetailCard>
-          ))}
+          {ok.plan.steps.map((s, i) => {
+            const party = s.kind === 'create_party';
+            const rows = party
+              ? describeStep(s, f.draft.newParty?.labels)
+              : plainRows(describeStep(s), {
+                  transfer: s.body.payment_type === 'Internal Transfer',
+                  incoming: txn.direction === 'in',
+                  bookedAs: actionsFor(txn.direction, txn.accountType).find((a) => a.type === action)?.label ?? null,
+                  hasBankRef: !!txn.utr,
+                });
+            return <DetailCard key={`${s.kind}-${i}`} title={party ? stepTitle(s) : 'What will be added'} badge={<Pill text="Draft" tone="warn" />} rows={rows} testID={`summary-${i}`} />;
+          })}
           <Banner tone="info" message={DRAFT_NOTE} />
         </Stack>
       ) : null}
