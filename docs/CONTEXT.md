@@ -44,6 +44,11 @@ Three Bank Accounts exist on stage: an ICICI savings account, "IDFC First - Zen 
 - Journal Entry reversal edge cases and "several equal candidates" internal transfers book extra drafts (warned before creation).
 - Settings Edit opens the whole account step; Home trust line appears only with exactly one bank account; credit card outstanding is not on Home; no custom typeface; UPI icon is a heuristic; backfill window is user-chosen (see rulings).
 - The 24 lakh bank balance on Home is the ERPNext ledger balance of the stage test books, not an SMS figure.
+- Two unanswered advances can both use the same order's "left to pay", because only submitted advances count, so the accountant may see a rejected submit.
+- Messages older than AutoLedger may already be booked by hand in ERPNext. Only items with a UTR are matched by reference, so card spends can become duplicate drafts. A window that crosses 1 April lands in the previous financial year.
+- The SMS read stops at 5000 messages per scan.
+- "Found N" after a scan counts second messages and already-known items too.
+- Activity totals count both legs of an own-account transfer in money in and money out; net is unaffected.
 
 ## How we work
 Subagent-driven: a controller dispatches one implementer per task or group (explicit model each), gets a per-group review, runs fix rounds (max 5), and merges. Parallel groups use worktrees with disjoint files. The controller does not edit product code except merge integration or tiny verified fixes. Every decision goes into the ledger as `Ruling: what, why, cost if wrong`.
