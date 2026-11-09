@@ -81,6 +81,53 @@ describe('planAction rows', () => {
     expect(plan.summary.join(' ')).toContain('₹5,12,932.76');
   });
 
+  describe('customer_advance with Sales Orders', () => {
+    const adv = () => pending({ ...parsed('idfc-006'), amountMinor: 2_500_000 });
+    it('customer_advance with one order adds a Sales Order reference', () => {
+      const t = adv();
+      const plan = planAction(t, {
+        type: 'customer_advance', party: acme, orders: [{ name: 'SAL-ORD-2026-2027-00004', allocatedMinor: 2_500_000 }],
+      }, ctxFor(t, bank));
+      const doc = plan.steps[plan.steps.length - 1].body as Record<string, any>;
+      expect(doc).toMatchObject({ payment_type: 'Receive', party_type: 'Customer', party: acme.name, paid_amount: 25000 });
+      expect(doc.references).toEqual([{ reference_doctype: 'Sales Order', reference_name: 'SAL-ORD-2026-2027-00004', allocated_amount: 25000 }]);
+      expect(plan.summary.join(' ')).toContain('for order SAL-ORD-2026-2027-00004');
+    });
+    it('customer_advance without orders is unchanged', () => {
+      const t = adv();
+      const doc = planAction(t, { type: 'customer_advance', party: acme }, ctxFor(t, bank)).steps[0].body;
+      expect('references' in doc).toBe(false);
+    });
+    it('customer_advance over-allocated throws PlanError(\'over_allocated\')', () => {
+      const t = adv();
+      const choice: ActionChoice = {
+        type: 'customer_advance', party: acme,
+        orders: [{ name: 'SO-1', allocatedMinor: 2_000_000 }, { name: 'SO-2', allocatedMinor: 500_001 }],
+      };
+      expect(() => planAction(t, choice, ctxFor(t, bank))).toThrow(PlanError);
+      expect(() => planAction(t, choice, ctxFor(t, bank))).toThrow(expect.objectContaining({ code: 'over_allocated' }));
+    });
+    it('customer_advance split over two orders sums to at most the payment', () => {
+      const t = adv();
+      const plan = planAction(t, {
+        type: 'customer_advance', party: acme,
+        orders: [{ name: 'SO-1', allocatedMinor: 2_000_000 }, { name: 'SO-2', allocatedMinor: 500_000 }],
+      }, ctxFor(t, bank));
+      expect((plan.steps[0].body as Record<string, any>).references).toEqual([
+        { reference_doctype: 'Sales Order', reference_name: 'SO-1', allocated_amount: 20000 },
+        { reference_doctype: 'Sales Order', reference_name: 'SO-2', allocated_amount: 5000 },
+      ]);
+      expect(plan.summary.join(' ')).toContain('for orders SO-1 (₹20,000.00), SO-2 (₹5,000.00)');
+    });
+    it('customer_advance with an empty orders array behaves like no orders', () => {
+      const t = adv();
+      const a = planAction(t, { type: 'customer_advance', party: acme, orders: [] }, ctxFor(t, bank));
+      const b = planAction(t, { type: 'customer_advance', party: acme }, ctxFor(t, bank));
+      expect(a).toEqual(b);
+      expect('references' in a.steps[0].body).toBe(false);
+    });
+  });
+
   it('supplier_payment: PE Pay, Supplier, paid_from = account', () => {
     const { t, doc } = run('idfc-010', bank, { type: 'supplier_payment', party: airtel });
     expect(doc).toMatchObject({
