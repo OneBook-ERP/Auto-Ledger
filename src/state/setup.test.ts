@@ -1,5 +1,7 @@
 import type { AccountMapping } from '../core/types';
-import { BACKFILL_OPTIONS, backfillLabel, foundMessage, buildDrafts, defaultKind, parseLast4, pickDefaultMode, validateDrafts } from './setup';
+import { BACKFILL_CHOICES } from '../ingest/pipeline';
+import {
+  BACKFILL_OPTIONS, TRUNCATED_NOTICE, backfillLabel, foundMessage, windowDisclosure, buildDrafts, defaultKind, parseLast4, pickDefaultMode, validateDrafts } from './setup';
 
 // Sorted by name ascending, like the ERPNext API: "Bank Draft" comes before "Wire Transfer".
 const MODES = [{ name: 'Bank Draft', type: 'Bank' }, { name: 'Cash', type: 'Cash' }, { name: 'Credit Card', type: 'General' }, { name: 'Wire Transfer', type: 'Bank' }];
@@ -103,12 +105,28 @@ describe('validateDrafts', () => {
 });
 
 describe('backfill window choice', () => {
-  it('offers 1 week, 1 month, 3 months, 6 months in that order', () => {
+  it('offers 1 week, 1 month, 3 months, 6 months, All time in that order, matching the pipeline choices', () => {
     expect(BACKFILL_OPTIONS).toEqual([
       { days: 7, label: '1 week' }, { days: 30, label: '1 month' }, { days: 90, label: '3 months' }, { days: 180, label: '6 months' },
+      { days: 0, label: 'All time' },
     ]);
+    expect(BACKFILL_OPTIONS.map((o) => o.days)).toEqual([...BACKFILL_CHOICES]);
+    expect(backfillLabel(0)).toBe('All time');
     expect(backfillLabel(90)).toBe('3 months');
     expect(backfillLabel(45)).toBe('1 week');
+  });
+  it('the disclosure names all messages from the set-up banks for all time and still limits senders', () => {
+    const all = windowDisclosure(0);
+    expect(all).toContain('all your messages from the banks you set up');
+    expect(all).toContain('never messages from anyone else');
+    expect(windowDisclosure(30)).toContain('only from the period you choose');
+    expect(windowDisclosure(30)).not.toContain('all your messages');
+  });
+  it('adds the truncation notice only when the scan was cut off', () => {
+    expect(TRUNCATED_NOTICE).toBe('Showing the newest 5,000 messages. Older ones were not read.');
+    expect(foundMessage({ inserted: 1, enriched: 0, duplicates: 0, truncated: true })).toBe(`Found 1 transaction. ${TRUNCATED_NOTICE}`);
+    expect(foundMessage({ inserted: 0, enriched: 0, duplicates: 0, truncated: true })).toBe(`No transactions found. ${TRUNCATED_NOTICE}`);
+    expect(foundMessage({ inserted: 1, enriched: 0, duplicates: 0 })).toBe('Found 1 transaction');
   });
   it('words the scan result in plain language', () => {
     expect(foundMessage({ inserted: 2, enriched: 1, duplicates: 4 })).toBe('Found 7 transactions');

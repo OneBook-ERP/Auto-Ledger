@@ -167,6 +167,18 @@ describe('settings', () => {
     expect(await screen.findByText('No transactions found')).toBeTruthy();
   });
 
+  it('choosing All time scans with no date limit and reports a cut-off scan', async () => {
+    reset(signedIn);
+    const app = await fakeApp();
+    await app.repo.saveMapping({ bankAccount: 'IDFC', glAccount: 'x', kind: 'bank', senderIds: ['IDFCFB'], last4: ['6507'], modeOfPayment: 'Wire Transfer' });
+    (app.mocks.backfill as jest.Mock).mockResolvedValue({ messages: [], truncated: true });
+    await render(<app.Wrap><Settings /></app.Wrap>);
+    await fireEvent.press(await screen.findByRole('button', { name: 'All time' }));
+    await waitFor(() => expect(app.mocks.backfill).toHaveBeenCalledWith(0, ['IDFCFB']));
+    expect(await app.repo.getSetting('backfill_days')).toBe('0');
+    expect(await screen.findByText('No transactions found. Showing the newest 5,000 messages. Older ones were not read.')).toBeTruthy();
+  });
+
   it('links the debug receiver in dev builds only', async () => {
     const g = globalThis as { __DEV__?: boolean };
     const app = await fakeApp();

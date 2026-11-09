@@ -6,6 +6,9 @@ export type QueuedSms = { id: string; sender: string; body: string; receivedAt: 
 /** An SMS read from the inbox by backfill. */
 export type RawSms = { sender: string; body: string; receivedAt: number };
 
+/** What a backfill returns: newest first, and whether older matching messages existed beyond the cap. */
+export type BackfillScan = { messages: RawSms[]; truncated: boolean };
+
 export type PermissionState = { receive: boolean; read: boolean; notifications: boolean };
 export type TemplatesInfo = { source: 'bundled' | 'override'; version: number | null };
 export type EngineHealth = { usable: boolean; reason: string };
@@ -22,7 +25,7 @@ type SmsIngestNative = {
   peek(): Promise<QueuedSms[]>;
   ack(ids: string[]): Promise<void>;
   droppedCount(): Promise<number>;
-  backfill(days: number, senderPatterns: string[]): Promise<RawSms[]>;
+  backfill(days: number, senderPatterns: string[]): Promise<BackfillScan>;
 };
 
 const native = requireNativeModule<SmsIngestNative>('SmsIngest');
@@ -51,8 +54,9 @@ export const ack = (ids: string[]): Promise<void> => native.ack(ids);
 export const droppedCount = (): Promise<number> => native.droppedCount();
 
 /**
- * Inbox SMS from the given sender substrings in the last `days` days, newest first, at most 1000.
- * OTP and non-money SMS are dropped natively. [] without READ_SMS. Does not touch the queue.
+ * Inbox SMS from the given sender substrings in the last `days` days (0 = no date limit), newest first, at
+ * most 5000; `truncated` is true when more existed. OTP and non-money SMS are dropped natively. Empty without
+ * READ_SMS. Does not touch the queue.
  */
-export const backfill = (days: number, senderPatterns: string[]): Promise<RawSms[]> =>
+export const backfill = (days: number, senderPatterns: string[]): Promise<BackfillScan> =>
   native.backfill(days, senderPatterns);

@@ -5,16 +5,17 @@ import type { PermissionState } from '../../modules/sms-ingest/src';
 import { useApp } from '../../src/state/AppProvider';
 import { BACKFILL_DAYS_KEY, DEFAULT_BACKFILL_DAYS, ensureBackfill, syncSenderPatterns } from '../../src/ingest/pipeline';
 import { BackfillChoice } from '../../src/state/BackfillChoice';
-import { foundMessage } from '../../src/state/setup';
+import { foundMessage, windowDisclosure } from '../../src/state/setup';
 import { Banner, Button, Card, Screen, StepHeader } from '../../src/ui';
 
 export const DISCLOSURE_TITLE = 'How AutoLedger uses your messages';
-export const DISCLOSURE_POINTS = [
-  'It reads only text messages from the bank senders you set up in the last step, and only from the period you choose below. You can change it later in Settings.',
+export const disclosurePoints = (days: number): string[] => [
+  windowDisclosure(days),
   'Messages are read and understood on this phone. The raw text never leaves the phone.',
   'One-time passwords (OTPs) are ignored and never stored.',
   'Only the amount, date and a few details of each transaction are kept, to ask you what it was for. Transaction details go only to your own ERPNext site.',
 ];
+export const DISCLOSURE_POINTS = disclosurePoints(DEFAULT_BACKFILL_DAYS);
 
 export const RESTRICTED_HELP = 'Some phones show this. If the permission dialog does not appear, open App info > Permissions.';
 
@@ -86,7 +87,7 @@ export default function PermissionsStep() {
         await repo.setSetting(BACKFILL_DAYS_KEY, String(days));
         try {
           const r = await ensureBackfill({ repo, native, now: Date.now }, { fullWindow: true });
-          if (!r.backfillSkipped && r.inserted + r.enriched + r.duplicates > 0) {
+          if (!r.backfillSkipped && (r.inserted + r.enriched + r.duplicates > 0 || r.truncated)) {
             setFound(foundMessage(r));
             return; // show the result; the next press finishes
           }
@@ -113,7 +114,7 @@ export default function PermissionsStep() {
         subtitle="Before Android asks for permission, here is exactly what AutoLedger does with it."
         footer={<Button label="Continue" onPress={request} accessibilityHint="Android will ask for SMS and notification permission" />}>
         <Card>
-          {DISCLOSURE_POINTS.map((p) => (
+          {disclosurePoints(days).map((p) => (
             <View key={p} className="mb-3 flex-row">
               <Text className="mr-2 text-base text-accent dark:text-accent-dark">{'•'}</Text>
               <Text className="flex-1 text-base leading-6 text-ink dark:text-ink-dark">{p}</Text>

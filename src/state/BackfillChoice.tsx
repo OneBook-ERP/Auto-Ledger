@@ -3,7 +3,7 @@ import { BACKFILL_OPTIONS } from './setup';
 
 export const BACKFILL_QUESTION = 'How far back should we look?';
 
-/** One-of-four choice of the message window, shown in setup and Settings. */
+/** One-of-five choice of the message window, shown in setup and Settings. */
 export function BackfillChoice({ days, onChange, disabled }: { days: number; onChange: (days: number) => void; disabled?: boolean }) {
   return (
     <View>

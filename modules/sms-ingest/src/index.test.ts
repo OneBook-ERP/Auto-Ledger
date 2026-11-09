@@ -15,7 +15,7 @@ const mockNative = {
     for (let i = mockQueue.length - 1; i >= 0; i--) if (ids.includes(mockQueue[i].id)) mockQueue.splice(i, 1);
   }),
   droppedCount: jest.fn(async () => 3),
-  backfill: jest.fn(async (_d: number, _p: string[]) => [{ sender: 'JM-IDFCFB-S', body: 'x', receivedAt: 1 }]),
+  backfill: jest.fn(async (_d: number, _p: string[]) => ({ messages: [{ sender: 'JM-IDFCFB-S', body: 'x', receivedAt: 1 }], truncated: true })),
 };
 
 jest.mock('expo-modules-core', () => ({ requireNativeModule: jest.fn(() => mockNative) }));
@@ -68,5 +68,10 @@ it('peek never removes; ack removes exactly the given ids', async () => {
 it('backfill passes days and sender patterns through', async () => {
   const out = await sms.backfill(7, ['IDFCFB']);
   expect(mockNative.backfill).toHaveBeenCalledWith(7, ['IDFCFB']);
-  expect(out).toEqual([{ sender: 'JM-IDFCFB-S', body: 'x', receivedAt: 1 }]);
+  expect(out).toEqual({ messages: [{ sender: 'JM-IDFCFB-S', body: 'x', receivedAt: 1 }], truncated: true });
+});
+
+it('backfill passes 0 days (no date limit) through unchanged', async () => {
+  await sms.backfill(0, ['IDFCFB']);
+  expect(mockNative.backfill).toHaveBeenCalledWith(0, ['IDFCFB']);
 });
