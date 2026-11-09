@@ -68,3 +68,14 @@ describe('Screen keyboard handling', () => {
     expect(within(kav).getByRole('header', { name: 'T' })).toBeTruthy();
   });
 });
+
+describe('non-scrolling Screen', () => {
+  it('gives its children the full height so a list inside it is not collapsed to zero (Inbox bug on device)', async () => {
+    const { Text } = require('react-native');
+    await render(<Screen scroll={false}><Text testID="kid">list</Text></Screen>);
+    const wrapper = screen.getByTestId('kid').parent!;
+    const cls = String(wrapper.props.className ?? '');
+    const flat = JSON.stringify(wrapper.props.style ?? '');
+    expect(cls.includes('flex-1') || /"flex(Grow)?":1/.test(flat)).toBe(true);
+  });
+});

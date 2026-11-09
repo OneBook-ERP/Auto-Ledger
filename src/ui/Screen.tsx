@@ -30,7 +30,8 @@ export function Screen({ title, subtitle, top, children, footer, scroll = true, 
         </Text>
       ) : null}
       {subtitle ? <Text className="mt-2 text-base leading-6 text-muted dark:text-muted-dark">{subtitle}</Text> : null}
-      <View className={title || subtitle ? 'mt-6' : ''}>{children}</View>
+      {/* In a non-scrolling Screen the children (e.g. a RefreshScroll list) must be able to fill the height. */}
+      <View className={`${scroll ? '' : 'flex-1 '}${title || subtitle ? 'mt-6' : ''}`.trim()}>{children}</View>
     </>
   );
   return (
