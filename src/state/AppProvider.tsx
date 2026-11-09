@@ -7,6 +7,7 @@ import { logoutSession, type Session } from '../erp/auth';
 import type { ErpClient } from '../erp/client';
 import type { Repo, SqlDriver } from '../data/repo';
 import { NEEDS_LOGIN_SINCE_KEY } from '../ingest/drain';
+import { dupCheckWith } from '../ingest/dupCheck';
 import { runForegroundCycle, type CycleSummary } from '../ingest/pipeline';
 import { getAppRepo } from './appRepo';
 import { TEMPLATES_URL } from './config';
@@ -145,6 +146,12 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
             now,
             refreshBanners,
             invalidateHome: () => queryClient.invalidateQueries({ queryKey: ['home'] }),
+            // Warn-only "may already be booked" flags; afterCycle runs it only when ERPNext answered.
+            checkDuplicates: async () => {
+              const r = repoRef.current;
+              const s = sessionRef.current;
+              if (r && s && (await siteMatches(r, s.siteUrl))) await dupCheckWith(r, buildErp(s, { fetchImpl }).client)();
+            },
           }),
       }),
     [native, fetchImpl, now, refreshBanners, queryClient],
