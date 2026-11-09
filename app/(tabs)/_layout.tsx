@@ -17,6 +17,8 @@ export function usePendingCount(): number {
   const app = useContext(AppContext);
   const repo = app?.repo;
   const [n, setN] = useState(0);
+  // Re-read at once after a cycle or its automatic answers, not only on the next poll.
+  const dataVersion = useUiStore((s) => s.dataVersion);
   useEffect(() => {
     if (!repo) return;
     let live = true;
@@ -27,7 +29,7 @@ export function usePendingCount(): number {
       live = false;
       clearInterval(id);
     };
-  }, [repo]);
+  }, [repo, dataVersion]);
   return n;
 }
 

@@ -6,6 +6,7 @@ import type { AccountMapping, OpenInvoice, PartyRef, PendingTxn, Rule, Suggestio
 import { AUTO_FAILED_PREFIX, AUTO_HELD_PREFIX, AUTO_NEW_COUNT_KEY } from '../ingest/autoApply';
 import { DUP_KEY_PREFIX } from '../ingest/dupCheck';
 import { UNRECOGNISED_COUNT_KEY, resolveMapping, unrecognisedAccountKey } from '../ingest/pipeline';
+import { useUiStore } from '../state/store';
 import { COMPANY_KEY, DEFAULT_EXPENSE_KEY, DRAWINGS_KEY } from '../state/useSetting';
 import type { Step } from './actions';
 import { useInboxDeps } from './deps';
@@ -45,6 +46,14 @@ export function useInboxData(filter?: InboxFilter) {
       autoHeld: Object.fromEntries(autoHeldRows.map((r) => [r.key.slice(AUTO_HELD_PREFIX.length), r.value])),
     });
   }, [repo, now, chips]);
+  // A cycle (or its automatic answers) changed the data: re-read, so answered items go and notes show.
+  const dataVersion = useUiStore((s) => s.dataVersion);
+  const seenVersion = useRef(dataVersion);
+  useEffect(() => {
+    if (seenVersion.current === dataVersion) return;
+    seenVersion.current = dataVersion;
+    reload().catch(() => undefined);
+  }, [dataVersion, reload]);
   // A changed search or filter only re-filters what is already loaded; nothing is read again.
   const model = useMemo<InboxModel | null>(() => (inputs ? buildInboxModel({ ...inputs, filter, chips }) : null), [inputs, filter, chips]);
   return { model, reload };

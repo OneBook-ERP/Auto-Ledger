@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { PendingTxn } from '../core/types';
+import { useUiStore } from '../state/store';
 import { fakeApp } from '../state/testUtils';
 import { usePendingCount } from '../../app/(tabs)/_layout';
 import { useInboxData } from './hooks';
@@ -39,4 +40,14 @@ it('the Inbox model gets the draft count from COUNT and lists only unanswered ro
   expect(result.current.model?.trustLine).toContain('3 drafts');
   expect(app.listPending.mock.calls).toEqual([['new']]);
   expect(app.countPending).toHaveBeenCalledWith('created');
+});
+
+it('the Inbox re-reads after a cycle or its automatic answers (data version bumped), not before', async () => {
+  const app = await seeded();
+  const { result } = await renderHook(() => useInboxData(), { wrapper: app.Wrap });
+  await act(async () => { await result.current.reload(); });
+  await waitFor(() => expect(result.current.model?.countLabel).toBe('2 to answer'));
+  await app.repo.upsertPending(txn('t0', 'created')); // answered automatically in the background
+  await act(async () => { useUiStore.getState().bumpData(); });
+  await waitFor(() => expect(result.current.model?.countLabel).toBe('1 to answer'));
 });
