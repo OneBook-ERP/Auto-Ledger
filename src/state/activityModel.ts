@@ -76,3 +76,91 @@ export function confirmText(plan: { remove: Doc[]; keep: Doc[] }): { title: stri
   if (!plan.remove.length) return { title: 'Put this message back in your Inbox?', message: keepMsg };
   return { title: UNDO_CONFIRM_TITLE, message: `${UNDO_CONFIRM_MESSAGE} ${plan.keep.map((d) => d.name).join(', ')}: ${keepMsg}` };
 }
+
+export type ActivityPeriod = 'this_month' | 'last_month' | 'this_fy' | 'all';
+export type ActivitySort = 'newest' | 'oldest' | 'amount_high' | 'amount_low' | 'name_az';
+export type ActivityStatus = 'waiting' | 'submitted' | 'ignored';
+export type ActivityFilter = { query: string; period: ActivityPeriod; direction?: 'in' | 'out'; accountLast4?: string; status?: ActivityStatus };
+
+const STATE_OF: Record<ActivityStatus, PendingTxn['state']> = { waiting: 'created', submitted: 'submitted', ignored: 'ignored' };
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/** `[from, to)` as YYYY-MM-DD strings (compared lexically), or null for no limit. */
+function periodRange(period: ActivityPeriod, today: string): [string, string] | null {
+  if (period === 'all') return null;
+  const y = Number(today.slice(0, 4));
+  const m = Number(today.slice(5, 7));
+  if (period === 'this_month') return [`${y}-${pad(m)}-01`, m === 12 ? `${y + 1}-01-01` : `${y}-${pad(m + 1)}-01`];
+  if (period === 'last_month') {
+    const [py, pm] = m === 1 ? [y - 1, 12] : [y, m - 1];
+    return [`${py}-${pad(pm)}-01`, `${y}-${pad(m)}-01`];
+  }
+  const fy = m >= 4 ? y : y - 1; // the financial year starts on 1 April
+  return [`${fy}-04-01`, `${fy + 1}-04-01`];
+}
+
+const searchText = (t: PendingTxn) => [t.counterparty, t.merchant, t.sender, t.utr, ...t.createdDocs.map((d) => d.name)].filter(Boolean).join('\n').toLowerCase();
+
+/** Search (plain text, case-insensitive, trimmed), period, direction and account. Keeps the input order. */
+export function filterActivity(items: PendingTxn[], f: ActivityFilter, today: string): PendingTxn[] {
+  const q = f.query.trim().toLowerCase();
+  const range = periodRange(f.period, today);
+  return items.filter((t) => {
+    if (range && (t.occurredOn < range[0] || t.occurredOn >= range[1])) return false;
+    if (f.direction && t.direction !== f.direction) return false;
+    if (f.status && t.state !== STATE_OF[f.status]) return false;
+    if (f.accountLast4 && t.accountLast4 !== f.accountLast4) return false;
+    return !q || searchText(t).includes(q);
+  });
+}
+
+/** Rupee totals in paise, for entries that count (not ignored, not cancelled or missing). Items in another currency are not added; they are counted in `foreignCount`. */
+export function totalsOf(items: PendingTxn[]): { inMinor: number; outMinor: number; netMinor: number; foreignCount: number } {
+  let inMinor = 0;
+  let outMinor = 0;
+  let foreignCount = 0;
+  for (const t of items) {
+    // Ignored items and drafts that were cancelled or are gone from ERPNext are not part of the books.
+    if (t.state === 'ignored' || t.createdDocs.some((d) => d.docstatus === 2 || d.docstatus === DOC_MISSING)) continue;
+    if ((t.currency || 'INR').toUpperCase() !== 'INR') foreignCount += 1;
+    else if (t.direction === 'in') inMinor += t.amountMinor;
+    else outMinor += t.amountMinor;
+  }
+  return { inMinor, outMinor, netMinor: inMinor - outMinor, foreignCount };
+}
+
+const dayNumber = (iso: string) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) / 86400000;
+
+export type RecencyTitle = 'Today' | 'Yesterday' | 'This week' | 'Earlier';
+
+/** Groups by how long ago `occurredOn` was; empty groups are left out and the order inside a group is kept. */
+export function groupByRecency(items: PendingTxn[], today: string): { title: RecencyTitle; rows: PendingTxn[] }[] {
+  const t0 = dayNumber(today);
+  const buckets: Record<RecencyTitle, PendingTxn[]> = { Today: [], Yesterday: [], 'This week': [], Earlier: [] };
+  for (const t of items) {
+    const age = t0 - dayNumber(t.occurredOn);
+    buckets[age <= 0 ? 'Today' : age === 1 ? 'Yesterday' : age <= 6 ? 'This week' : 'Earlier'].push(t);
+  }
+  return (['Today', 'Yesterday', 'This week', 'Earlier'] as const).filter((k) => buckets[k].length).map((k) => ({ title: k, rows: buckets[k] }));
+}
+
+const newestFirst = (a: PendingTxn, b: PendingTxn) =>
+  (a.occurredOn < b.occurredOn ? 1 : a.occurredOn > b.occurredOn ? -1 : 0) || b.receivedAt - a.receivedAt || (a.id < b.id ? 1 : -1);
+
+export function sortActivity(items: PendingTxn[], by: ActivitySort): PendingTxn[] {
+  const l = [...items];
+  switch (by) {
+    case 'oldest': return l.sort((a, b) => newestFirst(b, a));
+    case 'amount_high': return l.sort((a, b) => b.amountMinor - a.amountMinor || newestFirst(a, b));
+    case 'amount_low': return l.sort((a, b) => a.amountMinor - b.amountMinor || newestFirst(a, b));
+    case 'name_az': return l.sort((a, b) => titleOf(a).toLowerCase().localeCompare(titleOf(b).toLowerCase()) || newestFirst(a, b));
+    default: return l.sort(newestFirst);
+  }
+}
+
+/** Today as YYYY-MM-DD in the phone's local time. */
+export function isoToday(nowMs: number): string {
+  const d = new Date(nowMs);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
