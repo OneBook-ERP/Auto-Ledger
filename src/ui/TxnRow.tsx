@@ -1,5 +1,5 @@
-import { memo } from 'react';
-import { Pressable, Text, useColorScheme, View } from 'react-native';
+import { memo, useSyncExternalStore } from 'react';
+import { Appearance, Pressable, Text, View } from 'react-native';
 import { Icon, type IconName } from './Icon';
 import { Pill, type PillTone } from './Pill';
 
@@ -17,6 +17,22 @@ export interface TxnRowProps {
   testID?: string;
 }
 
+// One Appearance listener for the whole list (each row used to add its own through useColorScheme).
+const schemeListeners = new Set<() => void>();
+let schemeSub: { remove(): void } | null = null;
+function subscribeScheme(cb: () => void) {
+  schemeListeners.add(cb);
+  schemeSub ??= Appearance.addChangeListener(() => schemeListeners.forEach((l) => l()));
+  return () => {
+    schemeListeners.delete(cb);
+    if (schemeListeners.size === 0) {
+      schemeSub?.remove();
+      schemeSub = null;
+    }
+  };
+}
+const isDark = () => Appearance.getColorScheme() === 'dark';
+
 // Theme-aware colours for SVG strokes (NativeWind classes do not reach them): ink / money-in / money-out tokens of tailwind.config.js.
 const INK = { light: '#0E1A2E', dark: '#EDF1F8' };
 const MONEY_IN = { light: '#0F6B3F', dark: '#4ADE80' };
@@ -25,7 +41,7 @@ const MONEY_OUT = { light: '#A3203D', dark: '#FF8FA3' };
 /** One Inbox item: how it was paid, who, where and when, the signed amount (green in, rose out) and the suggestion. */
 export const TxnRow = memo(function TxnRow({ title, subtitle, amountText, amountA11y, direction, chip, kindIcon = 'bank', onPress, testID }: TxnRowProps) {
   const incoming = direction === 'in';
-  const dark = useColorScheme() === 'dark';
+  const dark = useSyncExternalStore(subscribeScheme, isDark);
   const mode = dark ? 'dark' : 'light';
   return (
     <Pressable
