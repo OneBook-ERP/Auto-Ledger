@@ -9,7 +9,7 @@ import { gateTarget } from '../../src/state/gate';
 import { useUiStore } from '../../src/state/store';
 
 /** Tab bar content height (icon 24 + label + padding); the real bottom inset is added on top. */
-export const TAB_BAR_CONTENT = 56;
+export const TAB_BAR_CONTENT = 64;
 const POLL_MS = 15_000;
 
 /** How many transactions wait for an answer (same source as the Inbox). 0 outside the app provider or on any error. */
@@ -54,9 +54,10 @@ export default function TabsLayout() {
           headerShown: false,
           tabBarActiveTintColor: dark ? '#8EA6FF' : '#2447D1',
           tabBarInactiveTintColor: dark ? '#97A5BA' : '#586579',
-          tabBarStyle: { backgroundColor: dark ? '#141C2C' : '#FFFFFF', borderTopColor: dark ? '#243049' : '#DCE2EA', height: TAB_BAR_CONTENT + insets.bottom, paddingTop: 6, paddingBottom: insets.bottom },
+          tabBarStyle: { backgroundColor: dark ? '#141C2C' : '#FFFFFF', borderTopColor: dark ? '#243049' : '#DCE2EA', height: TAB_BAR_CONTENT + Math.max(insets.bottom, 12), paddingTop: 6, paddingBottom: Math.max(insets.bottom, 12) },
           tabBarLabelStyle: { fontSize: 12, fontWeight: '600', marginTop: 2 },
           tabBarAllowFontScaling: false,
+          tabBarBadgeStyle: { minWidth: 18, height: 18, fontSize: 11, lineHeight: 16, top: -2 },
         }}>
         <Tabs.Screen name="home" options={{ title: 'Home', tabBarIcon: tabIcon('home') }} />
         <Tabs.Screen name="inbox" options={{ title: 'Inbox', tabBarIcon: tabIcon('inbox'), tabBarBadge: pending > 0 ? (pending > 99 ? '99+' : pending) : undefined }} />
