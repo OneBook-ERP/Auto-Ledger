@@ -47,6 +47,7 @@ Three Bank Accounts exist on stage: an ICICI savings account, "IDFC First - Zen 
 - Two unanswered advances can both use the same order's "left to pay", because only submitted advances count, so the accountant may see a rejected submit.
 - Messages older than AutoLedger may already be booked by hand in ERPNext. Only items with a UTR are matched by reference, so card spends can become duplicate drafts. A window that crosses 1 April lands in the previous financial year.
 - The SMS read stops at 5000 messages per scan.
+- The "may already be in ERPNext" check reads at most 1,500 entries per document type, newest first. When it stops early, older items show "We could not check older entries in ERPNext for this one." and get no warning. It is a warning only: it never blocks an answer.
 - "Found N" after a scan counts second messages and already-known items too.
 - Activity totals count both legs of an own-account transfer in money in and money out; net is unaffected.
 
