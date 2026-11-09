@@ -71,7 +71,7 @@ afterEach(() => jest.restoreAllMocks());
 describe('Activity screen', () => {
   it('an automatic answer shows "Done automatically" next to its status and keeps the normal Undo', async () => {
     await open([txn('1'), txn('2')], { 'Payment Entry:PE-1': 0, 'Payment Entry:PE-2': 0 }, (repo) => {
-      void repo.setSetting('auto_done:1', JSON.stringify({ at: 1 }));
+      void repo.setSetting('auto_done:1', JSON.stringify({ at: 1, docs: ['PE-1'] }));
     });
     const row = await screen.findByTestId('activity-row-1');
     await waitFor(() => expect(within(row).getByText('Done automatically')).toBeTruthy());

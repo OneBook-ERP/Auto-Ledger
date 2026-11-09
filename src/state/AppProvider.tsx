@@ -153,7 +153,8 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
             checkDuplicates: async () => {
               const r = repoRef.current;
               const s = sessionRef.current;
-              if (r && s && (await siteMatches(r, s.siteUrl))) await dupCheckWith(r, buildErp(s, { fetchImpl }).client)();
+              if (r && s && (await siteMatches(r, s.siteUrl))) return dupCheckWith(r, buildErp(s, { fetchImpl }).client)();
+              return false;
             },
             // Answers for patterns the user made automatic: signed in, same site, after the check above.
             autoApply: async () => {

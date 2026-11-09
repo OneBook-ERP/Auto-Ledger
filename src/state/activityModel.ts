@@ -30,10 +30,20 @@ export function statusOf(t: PendingTxn): RowStatus {
 
 export const AUTO_DONE_LABEL = 'Done automatically';
 
-/** The extra chip of a handled row the app answered by itself (ids from the `auto_done:` settings), else null. */
-export function autoChip(t: Pick<PendingTxn, 'id' | 'state'>, autoIds: ReadonlySet<string>): RowStatus | null {
+/** What the app recorded when it answered an item by itself (`auto_done:` settings). */
+export type AutoMark = { docs: string[]; queued?: boolean };
+
+/**
+ * The extra chip of a handled row the app answered by itself, else null. Shown only while the row still holds what
+ * the app made: one of its documents; an Ignore (no documents, still ignored); or an answer it saved offline that
+ * was sent later. After Undo, the user's own new answer never gets it.
+ */
+export function autoChip(t: Pick<PendingTxn, 'id' | 'state' | 'createdDocs'>, marks: ReadonlyMap<string, AutoMark>): RowStatus | null {
   if (t.state !== 'created' && t.state !== 'submitted' && t.state !== 'ignored') return null;
-  return autoIds.has(t.id) ? { label: AUTO_DONE_LABEL, tone: 'neutral' } : null;
+  const m = marks.get(t.id);
+  if (!m) return null;
+  const mine = m.docs.length ? t.createdDocs.some((d) => m.docs.includes(d.name)) : m.queued === true ? t.state !== 'ignored' : t.state === 'ignored';
+  return mine ? { label: AUTO_DONE_LABEL, tone: 'neutral' } : null;
 }
 
 /** Undo is offered only while every document is still a draft. */

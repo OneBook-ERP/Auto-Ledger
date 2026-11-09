@@ -154,7 +154,7 @@ describe('afterCycle: automatic answers', () => {
       now: () => 1,
       refreshBanners: jest.fn(async () => undefined),
       invalidateHome: jest.fn(() => { order.push('home'); }),
-      checkDuplicates: jest.fn(async () => { order.push('dup'); }),
+      checkDuplicates: jest.fn(async (): Promise<boolean> => { order.push('dup'); return true; }),
       autoApply: jest.fn(async () => { order.push('auto'); return 0; }),
     };
   };
@@ -176,12 +176,21 @@ describe('afterCycle: automatic answers', () => {
     expect(d.invalidateHome).toHaveBeenCalledTimes(2);
   });
 
-  it('a failure never blocks the cycle, even when the duplicate check failed first', async () => {
+  it('a failure never blocks the cycle', async () => {
     const d = deps();
-    d.checkDuplicates.mockRejectedValueOnce(new Error('offline'));
     d.autoApply.mockRejectedValueOnce(new Error('db'));
     await expect(afterCycle(synced, d)).resolves.toBeUndefined();
     expect(d.autoApply).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not run when the duplicate check failed or could not run this cycle (warnings would be stale)', async () => {
+    const d = deps();
+    d.checkDuplicates.mockRejectedValueOnce(new Error('offline'));
+    await afterCycle(synced, d);
+    d.checkDuplicates.mockResolvedValueOnce(false);
+    await afterCycle(synced, d);
+    await afterCycle(synced, { ...d, checkDuplicates: undefined });
+    expect(d.autoApply).not.toHaveBeenCalled();
   });
 
   it('runs inside the cycle: a second trigger meanwhile joins it, so no other step runs at the same time', async () => {

@@ -143,11 +143,18 @@ describe('Activity filter, totals, grouping and sort', () => {
 
 
 describe('autoChip', () => {
-  const t = (state: PendingTxn['state']) => ({ id: 'x', state }) as PendingTxn;
-  it('"Done automatically" only for handled rows answered by the app', () => {
-    expect(autoChip(t('created'), new Set(['x']))).toEqual({ label: 'Done automatically', tone: 'neutral' });
-    expect(autoChip(t('ignored'), new Set(['x']))).toEqual({ label: 'Done automatically', tone: 'neutral' });
-    expect(autoChip(t('created'), new Set())).toBeNull();
-    expect(autoChip(t('new'), new Set(['x']))).toBeNull();
+  const t = (state: PendingTxn['state'], docs: string[] = []) =>
+    ({ id: 'x', state, createdDocs: docs.map((name) => ({ doctype: 'Journal Entry', name, docstatus: 0 })) }) as unknown as PendingTxn;
+  const marks = (docs: string[], queued?: boolean) => new Map([['x', { at: 1, docs, ...(queued ? { queued } : {}) }]]);
+  it('"Done automatically" only while the item still holds what the app created', () => {
+    const chip = { label: 'Done automatically', tone: 'neutral' };
+    expect(autoChip(t('created', ['JE-1']), marks(['JE-1']))).toEqual(chip);
+    expect(autoChip(t('ignored'), marks([]))).toEqual(chip);
+    expect(autoChip(t('created', ['JE-9']), marks([], true))).toEqual(chip); // saved offline, sent later
+    expect(autoChip(t('created', ['JE-1']), new Map())).toBeNull();
+    expect(autoChip(t('new'), marks(['JE-1']))).toBeNull();
+    // Undone, then answered by the user: their own entry gets no chip.
+    expect(autoChip(t('created', ['JE-2']), marks(['JE-1']))).toBeNull();
+    expect(autoChip(t('created', ['JE-2']), marks([]))).toBeNull();
   });
 });

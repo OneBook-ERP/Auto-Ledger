@@ -3,13 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Linking, Pressable, Text, View, useColorScheme } from 'react-native';
 import type { PendingTxn } from '../../src/core/types';
 import type { PendingState } from '../../src/data/repo';
-import { AUTO_DONE_PREFIX } from '../../src/ingest/autoApply';
+import { AUTO_DONE_PREFIX, parseAutoDone } from '../../src/ingest/autoApply';
 import { NEEDS_LOGIN_SINCE_KEY } from '../../src/ingest/drain';
 import { bringBack, pollStatuses } from '../../src/ingest/statusPoller';
 import { undoTxn, type UndoResult } from '../../src/outbox/runner';
 import {
   PAGE_SIZE, UNDO_CONFIRM_MESSAGE, autoChip, canPutBack, canUndo, confirmText, docUrl, filterActivity, groupByRecency, isoToday, removalPlan, sortActivity,
-  statusOf, titleOf, totalsOf, waitingCount, type ActivityPeriod,
+  statusOf, titleOf, totalsOf, waitingCount, type ActivityPeriod, type AutoMark,
 } from '../../src/state/activityModel';
 import { siteMatches, useApp } from '../../src/state/AppProvider';
 import { useUiStore } from '../../src/state/store';
@@ -42,7 +42,7 @@ export default function Activity() {
   const router = useRouter();
   const siteUrl = useUiStore((s) => s.session?.siteUrl ?? null);
   const [items, setItems] = useState<PendingTxn[] | null>(null);
-  const [autoIds, setAutoIds] = useState<ReadonlySet<string>>(new Set());
+  const [autoMarks, setAutoMarks] = useState<ReadonlyMap<string, AutoMark>>(new Map());
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -61,7 +61,12 @@ export default function Activity() {
     const [all, auto] = await Promise.all([repo.listPending(ACTIVITY_STATES), repo.listSettings(AUTO_DONE_PREFIX).catch(() => [])]);
     if (!alive.current) return;
     setItems(all);
-    setAutoIds(new Set(auto.map((a) => a.key.slice(AUTO_DONE_PREFIX.length))));
+    const marks = new Map<string, AutoMark>();
+    for (const a of auto) {
+      const m = parseAutoDone(a.value);
+      if (m) marks.set(a.key.slice(AUTO_DONE_PREFIX.length), m);
+    }
+    setAutoMarks(marks);
   }, [repo]);
 
   const refresh = useCallback(async () => {
@@ -213,7 +218,7 @@ export default function Activity() {
         date={formatDate(t.occurredOn)}
         docs={t.createdDocs.map((d) => ({ kind: friendlyDoctype(d.doctype), id: d.name }))}
         status={{ label: s.label, tone: s.tone }}
-        badge={autoChip(t, autoIds)}
+        badge={autoChip(t, autoMarks)}
         hint={s.hint}
         actions={actionsFor(t)}
         busy={busy.has(t.id)}
