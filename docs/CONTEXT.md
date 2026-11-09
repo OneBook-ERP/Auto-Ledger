@@ -7,22 +7,22 @@ A business owner's phone receives bank/card SMS. AutoLedger parses them on the d
 
 ## Status (9 Nov 2026)
 - Plan: `docs/superpowers/plans/2026-11-08-autoledger-phase1.md` (20 tasks) is fully implemented and merged on branch `phase1` (head is a merge of the UI polish pass). UI polish plan: `docs/superpowers/plans/2026-11-09-ui-polish.md` (U1 to U4 merged). Tests: about 1,234 Jest, 88 Kotlin JUnit, typecheck clean.
-- Running on the user's Oppo phone as a development build against the stage site. Sign-in, setup, SMS backfill (7 days), Inbox, answer flow, Home, Activity and Settings work. One real draft (a Payment Entry) exists on stage from testing.
+- Running on the user's Oppo phone as a development build against the stage site. Sign-in, setup, SMS backfill (1 week by default, user-chosen), Inbox, answer flow, Home, Activity and Settings work. One real draft (a Payment Entry) exists on stage from testing.
 - Nothing is pushed to GitHub (see hard rules in `CLAUDE.md`).
 
 ## Next steps
 1. Walk the answer flow on the device (detail, account picker, Confirm, Result) after the UI changes; check light mode, large font, TalkBack labels.
 2. First real end-to-end test on stage: answer one transaction, confirm the draft in ERPNext, Undo works, second phone sends fresh SMS (live receiver path).
-3. Final docs/copy sync: add the 7-day backfill sentence to the in-app disclosure (`app/(setup)/permissions.tsx` and its test) and `docs/play-sms-declaration.md`; mention Sentry is off by default and quarantine pruning; remove internal task names from `docs/release.md` and `docs/pilot-checklist.md`.
+3. Final docs/copy sync: (the disclosure and `docs/play-sms-declaration.md` now cover the user-chosen backfill window) mention Sentry is off by default and quarantine pruning; remove internal task names from `docs/release.md` and `docs/pilot-checklist.md`.
 4. Measure memory on a release build (a debug build uses about 640 MB; expect 120 to 250 MB in release). If high, virtualise the Inbox list.
 5. Device checks still open: keyboard overlap, dark/light, TalkBack, site switch, "Grant SMS permission", credit transfer between own accounts, receiver idle test on the production receiver, OTP drop on hardware, "bill paid by card" with a real submitted Purchase Invoice.
 6. Final whole-branch review (most capable model), then finishing the development branch.
 
 ## Things only the user can do
-Review the design mockup (optional); decide GitHub privacy and approve a push after history cleanup; rotate the credentials that were pasted in chat during setup (stage and prod keys, a password); ask the ERPNext admin to delete two cancelled test invoices on stage (PINV-26-00029, PINV-26-00030); submit the Play SMS declaration; `eas init` and Play Console setup; decide if the 7-day backfill window should grow.
+Review the design mockup (optional); decide GitHub privacy and approve a push after history cleanup; rotate the credentials that were pasted in chat during setup (stage and prod keys, a password); ask the ERPNext admin to delete two cancelled test invoices on stage (PINV-26-00029, PINV-26-00030); submit the Play SMS declaration; `eas init` and Play Console setup.
 
 ## Stage data facts (for testing)
-Three Bank Accounts exist on stage: an ICICI savings account, "IDFC First - Zen Pivot - IDFC First" (current account, number ends 6507) and "IDFC Credit Card - IDFC First" (the card, endings 3455 and 8129 in SMS). Setup only lists accounts flagged **Is Company Account**; the card account had to be flagged. The setup wizard asks the user to type the last four digits per account: the SMS account ending must match the mapping or messages for it are treated as an unrecognised account and skipped (re-read on the next app open while inside the 7-day window).
+Three Bank Accounts exist on stage: an ICICI savings account, "IDFC First - Zen Pivot - IDFC First" (current account, number ends 6507) and "IDFC Credit Card - IDFC First" (the card, endings 3455 and 8129 in SMS). Setup only lists accounts flagged **Is Company Account**; the card account had to be flagged. The setup wizard asks the user to type the last four digits per account: the SMS account ending must match the mapping or messages for it are treated as an unrecognised account and skipped (re-read on the next app open while inside the chosen window).
 
 ## Key decisions (digest of the rulings)
 **Stack and architecture.** React Native with Expo (dev build, not Expo Go) was chosen over native Kotlin and Flutter for speed with a Kotlin module for the SMS receiver; iOS is future. `frappe-js-sdk` is not used (thin typed `fetch` client instead). No custom Frappe app: only REST/whitelisted calls. Shared JSON templates for TS and Kotlin parsers.
@@ -42,8 +42,12 @@ Three Bank Accounts exist on stage: an ICICI savings account, "IDFC First - Zen 
 - KL4: an accountant's hand-made draft with the same reference but different details blocks the second transaction until the accountant checks it; there is no in-app way around it.
 - First-time customer credit takes about 5 taps (3 with a saved rule); detached documents can be re-adopted on re-answer.
 - Journal Entry reversal edge cases and "several equal candidates" internal transfers book extra drafts (warned before creation).
-- Settings Edit opens the whole account step; Home trust line appears only with exactly one bank account; credit card outstanding is not on Home; no custom typeface; UPI icon is a heuristic; backfill is 7 days.
+- Settings Edit opens the whole account step; Home trust line appears only with exactly one bank account; credit card outstanding is not on Home; no custom typeface; UPI icon is a heuristic; backfill window is user-chosen (see rulings).
 - The 24 lakh bank balance on Home is the ERPNext ledger balance of the stage test books, not an SMS figure.
 
 ## How we work
 Subagent-driven: a controller dispatches one implementer per task or group (explicit model each), gets a per-group review, runs fix rounds (max 5), and merges. Parallel groups use worktrees with disjoint files. The controller does not edit product code except merge integration or tiny verified fixes. Every decision goes into the ledger as `Ruling: what, why, cost if wrong`.
+
+## Ruling: SMS backfill window (wave 2)
+
+The window is user-chosen (1 week, 1 month, 3 months, 6 months), default 1 week, stored as setting `backfill_days` and changeable in Settings (changing it re-runs the backfill once). Senders are still limited to the configured banks. A larger window never duplicates or reopens answered items (same `rawHash` dedupe).

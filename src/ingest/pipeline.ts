@@ -66,7 +66,17 @@ export type IngestResult = {
 };
 export type BackfillResult = IngestResult & { backfillSkipped?: 'no_permission' | 'no_mappings' };
 
-export const BACKFILL_DAYS = 7;
+export const BACKFILL_DAYS_KEY = 'backfill_days';
+export const BACKFILL_CHOICES = [7, 30, 90, 180] as const;
+export const DEFAULT_BACKFILL_DAYS = 7;
+/** Alias of the default, kept so existing imports compile. */
+export const BACKFILL_DAYS = DEFAULT_BACKFILL_DAYS;
+
+/** The saved window in days; anything that is not one of the offered choices means the default. */
+export async function getBackfillDays(repo: Pick<Repo, 'getSetting'>): Promise<number> {
+  const n = Number(await repo.getSetting(BACKFILL_DAYS_KEY));
+  return (BACKFILL_CHOICES as readonly number[]).includes(n) ? n : DEFAULT_BACKFILL_DAYS;
+}
 export const UNRECOGNISED_COUNT_KEY = 'unrecognised_count';
 export const BACKFILL_DONE_AT_KEY = 'backfill_done_at';
 export const unrecognisedAccountKey = (last4: string) => `unrecognised_account:${last4}`;
@@ -270,7 +280,7 @@ export function ingest(deps: { repo: Repo; native: Pick<NativeBridge, 'peek' | '
 }
 
 /**
- * Reads the last 7 days of the inbox for the configured senders and runs every message through the same
+ * Reads the last N days (setting `backfill_days`, default 7) of the inbox for the configured senders and runs every message through the same
  * path as live items (nothing is acked: backfilled SMS are not in the native queue; rawHash dedupe makes the
  * overlap harmless). Runs after setup and on every app open; records `backfill_done_at`. Skips silently
  * without READ_SMS ('no_permission') or without mappings ('no_mappings').
@@ -283,7 +293,7 @@ export function ensureBackfill(deps: {
     if (!perm.read) return { ...emptyResult(), backfillSkipped: 'no_permission' as const };
     const patterns = senderPatternsOf(await deps.repo.listMappings());
     if (!patterns.length) return { ...emptyResult(), backfillSkipped: 'no_mappings' as const };
-    const raws = await deps.native.backfill(BACKFILL_DAYS, patterns);
+    const raws = await deps.native.backfill(await getBackfillDays(deps.repo), patterns);
     const batch = new Batch(deps.repo, deps.now);
     await batch.load();
     for (const raw of oldestFirst(raws)) {

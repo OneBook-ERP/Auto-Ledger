@@ -3,12 +3,14 @@ import { useState } from 'react';
 import { Alert, Text, View } from 'react-native';
 import type { PermissionState } from '../../modules/sms-ingest/src';
 import { useApp } from '../../src/state/AppProvider';
-import { syncSenderPatterns } from '../../src/ingest/pipeline';
+import { BACKFILL_DAYS_KEY, DEFAULT_BACKFILL_DAYS, ensureBackfill, syncSenderPatterns } from '../../src/ingest/pipeline';
+import { BackfillChoice } from '../../src/state/BackfillChoice';
+import { foundMessage } from '../../src/state/setup';
 import { Banner, Button, Card, Screen, StepHeader } from '../../src/ui';
 
 export const DISCLOSURE_TITLE = 'How AutoLedger uses your messages';
 export const DISCLOSURE_POINTS = [
-  'It reads only text messages from the bank sender ids you chose in the last step.',
+  'It reads only text messages from the bank senders you set up in the last step, and only from the period you choose below. You can change it later in Settings.',
   'Messages are read and understood on this phone. The raw text never leaves the phone.',
   'One-time passwords (OTPs) are ignored and never stored.',
   'Only the amount, date and a few details of each transaction are kept, to ask you what it was for. Transaction details go only to your own ERPNext site.',
@@ -36,6 +38,13 @@ export default function PermissionsStep() {
   const [finishing, setFinishing] = useState(false);
   const [perm, setPerm] = useState<PermissionState | null>(null);
   const [error, setError] = useState(false);
+  const [days, setDays] = useState<number>(DEFAULT_BACKFILL_DAYS);
+  const [found, setFound] = useState<string | null>(null);
+
+  const chooseDays = (d: number) => {
+    setDays(d);
+    void repo.setSetting(BACKFILL_DAYS_KEY, String(d));
+  };
 
   const check = async () => setPerm(await native.hasPermission());
 
@@ -55,7 +64,7 @@ export default function PermissionsStep() {
   };
 
   const finish = async () => {
-    if (perm && !(perm.receive && perm.read)) {
+    if (found === null && perm && !(perm.receive && perm.read)) {
       const go = await new Promise<boolean>((resolve) =>
         Alert.alert(
           SMS_DENIED_TITLE,
@@ -72,7 +81,19 @@ export default function PermissionsStep() {
     setFinishing(true);
     setError(false);
     try {
-      await syncSenderPatterns({ repo, native });
+      if (found === null) {
+        await syncSenderPatterns({ repo, native });
+        await repo.setSetting(BACKFILL_DAYS_KEY, String(days));
+        try {
+          const r = await ensureBackfill({ repo, native, now: Date.now });
+          if (!r.backfillSkipped && r.inserted + r.enriched + r.duplicates > 0) {
+            setFound(foundMessage(r));
+            return; // show the result; the next press finishes
+          }
+        } catch {
+          // the first cycle after setup reads the messages again
+        }
+      }
       await completeSetup(); // sets setupDone and runs one foreground cycle
       router.replace('/(tabs)/home');
     } catch {
@@ -99,6 +120,9 @@ export default function PermissionsStep() {
             </View>
           ))}
         </Card>
+        <Card>
+          <BackfillChoice days={days} onChange={chooseDays} />
+        </Card>
       </Screen>
     );
   }
@@ -108,8 +132,9 @@ export default function PermissionsStep() {
       top={<StepHeader step={4} total={4} label="Permissions" />}
       title="Allow SMS and notifications"
       subtitle="AutoLedger needs these to see new bank messages and tell you about them."
-      footer={<Button label="Finish setup" onPress={finish} loading={finishing} disabled={busy} />}>
+      footer={<Button label={found === null ? 'Finish setup' : 'Continue'} onPress={finish} loading={finishing} disabled={busy} />}>
       {error ? <Banner tone="error" message="Something went wrong. Try again." /> : null}
+      {found !== null ? <Banner tone="ok" message={found} /> : null}
       {perm
         ? ROWS.map((r) => (
             <View key={r.key} className="mb-2 min-h-[48px] flex-row items-center justify-between rounded-xl border border-line bg-surface px-4 dark:border-line-dark dark:bg-surface-dark">

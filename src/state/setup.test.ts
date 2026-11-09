@@ -1,5 +1,5 @@
 import type { AccountMapping } from '../core/types';
-import { buildDrafts, defaultKind, parseLast4, pickDefaultMode, validateDrafts } from './setup';
+import { BACKFILL_OPTIONS, backfillLabel, foundMessage, buildDrafts, defaultKind, parseLast4, pickDefaultMode, validateDrafts } from './setup';
 
 // Sorted by name ascending, like the ERPNext API: "Bank Draft" comes before "Wire Transfer".
 const MODES = [{ name: 'Bank Draft', type: 'Bank' }, { name: 'Cash', type: 'Cash' }, { name: 'Credit Card', type: 'General' }, { name: 'Wire Transfer', type: 'Bank' }];
@@ -99,5 +99,20 @@ describe('validateDrafts', () => {
     d[0] = { ...d[0], selected: true, last4: '6507', senders: '' };
     const e = validateDrafts(d).errors['IDFC First - ZP'];
     expect(e).toMatch(/sender/i);
+  });
+});
+
+describe('backfill window choice', () => {
+  it('offers 1 week, 1 month, 3 months, 6 months in that order', () => {
+    expect(BACKFILL_OPTIONS).toEqual([
+      { days: 7, label: '1 week' }, { days: 30, label: '1 month' }, { days: 90, label: '3 months' }, { days: 180, label: '6 months' },
+    ]);
+    expect(backfillLabel(90)).toBe('3 months');
+    expect(backfillLabel(45)).toBe('1 week');
+  });
+  it('words the scan result in plain language', () => {
+    expect(foundMessage({ inserted: 2, enriched: 1, duplicates: 4 })).toBe('Found 7 transactions');
+    expect(foundMessage({ inserted: 1, enriched: 0, duplicates: 0 })).toBe('Found 1 transaction');
+    expect(foundMessage({ inserted: 0, enriched: 0, duplicates: 0 })).toBe('No transactions found');
   });
 });

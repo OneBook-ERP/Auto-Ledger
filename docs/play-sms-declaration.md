@@ -9,7 +9,7 @@ Package: `app.onebook.autoledger` (app.json). Permissions declared in `modules/s
 | Permission | Used for | Code |
 |---|---|---|
 | `RECEIVE_SMS` | A broadcast receiver is told when a new SMS arrives, including when the app is not running, so the transaction can be queued and a notification posted. | `SmsReceiver.kt` |
-| `READ_SMS` | One-off backfill: when the app is opened it can read the last 7 days of the phone's SMS inbox, from the configured bank senders only, to catch alerts that arrived while the phone was off or the app lacked permission. It does not read the inbox continuously and does not read other senders. | `SmsIngestModule.kt` (`backfill`), `Ingest.kt` (`MessageClassifier.keep`) |
+| `READ_SMS` | One-off backfill: when the app is opened it can read the phone's SMS inbox for a period the user chooses (1 week by default, up to 6 months), from the configured bank senders only, to catch alerts that arrived while the phone was off or the app lacked permission. It does not read the inbox continuously and does not read other senders. | `SmsIngestModule.kt` (`backfill`), `Ingest.kt` (`MessageClassifier.keep`) |
 
 ## 2. Core functionality statement (paste into "core functionality")
 
@@ -17,7 +17,7 @@ Package: `app.onebook.autoledger` (app.json). Permissions declared in `modules/s
 
 ## 3. Why the default SMS handler is not applicable (paste)
 
-> AutoLedger is not a messaging app. It does not send or compose SMS, does not show conversations and does not replace the user's messaging app, so it does not and cannot be the default SMS handler. It needs RECEIVE_SMS (and READ_SMS for a 7-day catch-up) because receiving the bank alert is its core function and no other API provides the content of an incoming bank alert. [VERIFY IN PLAY CONSOLE: the form lists "default SMS handler" exceptions; pick the one matching "other core functionality" if it is offered.]
+> AutoLedger is not a messaging app. It does not send or compose SMS, does not show conversations and does not replace the user's messaging app, so it does not and cannot be the default SMS handler. It needs RECEIVE_SMS (and READ_SMS for a catch-up over a period the user chooses) because receiving the bank alert is its core function and no other API provides the content of an incoming bank alert. [VERIFY IN PLAY CONSOLE: the form lists "default SMS handler" exceptions; pick the one matching "other core functionality" if it is offered.]
 
 ## 4. Exactly which messages are read (paste)
 
@@ -59,16 +59,16 @@ Shown before the Android permission dialog, on the setup step "Permissions" (ste
 Title: **How AutoLedger uses your messages**
 Subtitle: "Before Android asks for permission, here is exactly what AutoLedger does with it."
 
-1. It reads only text messages from the bank sender ids you chose in the last step.
+1. It reads only text messages from the bank senders you set up in the last step, and only from the period you choose below. You can change it later in Settings.
 2. Messages are read and understood on this phone. The raw text never leaves the phone.
 3. One-time passwords (OTPs) are ignored and never stored.
 4. Only the amount, date and a few details of each transaction are kept, to ask you what it was for. Transaction details go only to your own ERPNext site.
 
-These strings are the exported constants `DISCLOSURE_TITLE` and `DISCLOSURE_POINTS`; if the screen copy changes, change this section in the same commit. No test pins the copy today, so compare by eye (or add a snapshot test) before every submission.
+These strings are the exported constants `DISCLOSURE_TITLE` and `DISCLOSURE_POINTS`; if the screen copy changes, change this section in the same commit. `__tests__/setup.test.tsx` checks that the copy does not fix the period at 7 days.
 
 ### Differences between the app copy and the Play text (report, do not paper over)
 
-1. Disclosure point 1 does not say the app can also read the **last 7 days of the SMS inbox** (READ_SMS backfill). Play expects the disclosure to cover every use of the permission. Recommended wording change to the app copy (not made here, it belongs to the setup screen owners): "It reads only text messages from the bank sender ids you chose in the last step, including messages from the last 7 days when you open the app."
+1. Disclosure point 1 now covers the READ_SMS backfill: it states that only the senders you set up are read and only for the period you choose (1 week, 1 month, 3 months or 6 months; default 1 week), changeable in Settings. The setup step shows the choice under the disclosure before the Continue button.
 2. Point 3 says OTPs are "never stored". True for the native queue and the database (`Ingest.kt` drops them before `append`). Not verified on hardware: spike report C.5 row "C.2 #3 OTP-like message: NOT VERIFIED ON DEVICE" (covered by JUnit classifier tests only).
 3. Point 4 says only the amount, date and a few details are kept. True of the database; the native queue briefly holds the full text of accepted messages until acknowledged (section 5). The Play text above says so explicitly; the app copy is a simplification. Consider "kept" -> "kept long term".
 4. "The last step" assumes the account step precedes permissions, which it does (`step 4 of 4`; accounts step before).
@@ -100,8 +100,8 @@ Prepare before submitting, using the preview APK on a real phone with a test ban
 
 ## 10. If the declaration is rejected
 
-1. Read the rejection email; the usual reasons are (a) the disclosure does not cover the 7-day inbox read, (b) the core functionality text sounds like a convenience feature, (c) no privacy policy, (d) the video does not show the disclosure before the permission dialog. Fix the specific point (for (a), change the app copy and ship a new build), resubmit. [VERIFY IN PLAY CONSOLE: the appeal and resubmission options.]
-2. Remove READ_SMS only if needed: the app works without the 7-day backfill, using RECEIVE_SMS alone (the backfill returns an empty list when READ_SMS is not granted: `SmsIngestModule.kt`). This needs a build change in the module manifest and a reduced disclosure.
+1. Read the rejection email; the usual reasons are (a) the disclosure does not cover the inbox read for the chosen period, (b) the core functionality text sounds like a convenience feature, (c) no privacy policy, (d) the video does not show the disclosure before the permission dialog. Fix the specific point (for (a), change the app copy and ship a new build), resubmit. [VERIFY IN PLAY CONSOLE: the appeal and resubmission options.]
+2. Remove READ_SMS only if needed: the app works without the backfill, using RECEIVE_SMS alone (the backfill returns an empty list when READ_SMS is not granted: `SmsIngestModule.kt`). This needs a build change in the module manifest and a reduced disclosure.
 3. Alternative distribution while the declaration is open (the pilot does not need the Play production track):
    - Internal testing track: build with `eas build -p android --profile production` and `eas submit` to the internal track. [VERIFY IN PLAY CONSOLE: whether restricted permissions block internal testing releases; as of writing they do not require the declaration for internal testing, but confirm.]
    - Or sideload the `preview` APK (`docs/release.md`) onto the pilot phones, outside Play. Android may show "restricted settings" prompts for sideloaded apps on some devices (spike report A.2: none was needed on the pilot phone; the RECEIVE_SMS flag was `RESTRICTION_INSTALLER_EXEMPT`).
