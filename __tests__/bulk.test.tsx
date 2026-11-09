@@ -8,7 +8,7 @@ import { ErpValidationError } from '../src/erp/client';
 import { InboxDepsOverride } from '../src/inbox/deps';
 import { fakeInboxErp, type FakeInboxErp } from '../src/inbox/fakeErp';
 import { useFlowStore } from '../src/inbox/store';
-import { AUTO_NEW_COUNT_KEY, autoFailedKey } from '../src/ingest/autoApply';
+import { AUTO_NEW_COUNT_KEY, autoFailedKey, autoSinceKey, runAutoApply } from '../src/ingest/autoApply';
 import { dupKey } from '../src/ingest/dupCheck';
 import { BANK, CARD, NOW, txnFrom } from '../src/inbox/testData';
 import { runPlan } from '../src/outbox/runner';
@@ -218,5 +218,57 @@ describe('Bulk screen', () => {
     expect(await screen.findByText('Nothing left to answer here')).toBeTruthy();
     await act(async () => { await fireEvent.press(screen.getByRole('button', { name: 'Back to Inbox' })); });
     expect(mockRouter.dismissTo).toHaveBeenCalledWith('/(tabs)/inbox');
+  });
+
+  it('Yes makes only NEWER payments automatic: one the user unticked stays for the user', async () => {
+    const { Wrap, repo } = await setup({ txns: [fb('a', 100), fb('b', 200), fb('c', 300)], rules: [ADS] });
+    confirmWith('Apply to 2');
+    await render(<Wrap><BulkScreen /></Wrap>);
+    await fireEvent.press(await screen.findByTestId('item-a'));
+    await fireEvent.press(screen.getByRole('button', { name: 'Apply to 2' }));
+    await fireEvent.press(await screen.findByRole('button', { name: 'Yes, do this automatically' }));
+    await waitFor(async () => expect(await repo.getSetting(autoSinceKey(KEY))).toBe(String(NOW)));
+    const erp = fakeInboxErp();
+    await repo.upsertPending(fb('n', 400, { receivedAt: NOW + 60_000 }));
+    expect((await runAutoApply({ repo, erp, runPlan, now: () => NOW + 120_000 })).done).toEqual(['n']);
+    expect((await repo.getPending('a'))?.state).toBe('new');
+  });
+
+  it('an expense can carry an existing supplier (optional); the drafts and the learned rule keep it', async () => {
+    const erp = fakeInboxErp();
+    erp.listLedgerAccounts.mockResolvedValue([{ name: 'Advertising - ZP', accountType: null }]);
+    erp.searchParties.mockResolvedValue([{ doctype: 'Supplier', name: 'Meta Platforms', displayName: 'Meta Platforms' }]);
+    const { Wrap, repo } = await setup({ txns: [fb('a', 100), fb('b', 200)], erp });
+    confirmWith('Apply to 2');
+    await render(<Wrap><BulkScreen /></Wrap>);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Choose the answer' }));
+    await fireEvent.press(screen.getByRole('radio', { name: /^Expense/ }));
+    await fireEvent.press(await screen.findByRole('radio', { name: 'Advertising - ZP' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Link a supplier (optional)' }));
+    expect(screen.getByText(/Add a new supplier in ERPNext first/)).toBeTruthy();
+    await fireEvent.press(await screen.findByRole('radio', { name: 'Meta Platforms' }));
+    expect(screen.getByTestId('bulk-answer')).toHaveTextContent('Expense, Advertising, for Meta Platforms');
+    await fireEvent.press(screen.getByRole('button', { name: 'Apply to 2' }));
+    await screen.findByTestId('bulk-result');
+    expect(erp.createDraft).toHaveBeenCalledTimes(2);
+    for (const call of erp.createDraft.mock.calls) {
+      const rows = (call[1] as { accounts: Record<string, unknown>[] }).accounts;
+      expect(rows.find((r) => r.account === 'Advertising - ZP')).toMatchObject({ party_type: 'Supplier', party: 'Meta Platforms' });
+    }
+    expect((await repo.listRules()).find((r) => r.matchKey === KEY)).toMatchObject({ account: 'Advertising - ZP', party: { doctype: 'Supplier', name: 'Meta Platforms' } });
+    await fireEvent.press(screen.getByRole('button', { name: 'Yes, do this automatically' }));
+    await waitFor(async () => expect((await repo.listRules()).find((r) => r.matchKey === KEY)).toMatchObject({ auto: true, party: { name: 'Meta Platforms' } }));
+  });
+
+  it('nothing done: the result is not titled Done', async () => {
+    const erp = fakeInboxErp();
+    erp.createDraft.mockRejectedValue(new ErpValidationError('Cost Center is mandatory', 417, ['Cost Center']));
+    const { Wrap } = await setup({ txns: [fb('a', 100), fb('b', 200)], rules: [ADS], erp });
+    confirmWith('Apply to 2');
+    await render(<Wrap><BulkScreen /></Wrap>);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Apply to 2' }));
+    const result = await screen.findByTestId('bulk-result');
+    expect(result).toHaveTextContent(/^Needs your attention/);
+    expect(screen.queryByTestId('ask-auto')).toBeNull();
   });
 });

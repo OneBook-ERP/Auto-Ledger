@@ -1,7 +1,7 @@
 import type { PendingTxn, Rule } from '../core/types';
 import { suggest } from '../core/suggest';
 import {
-  amountRange, answerText, automaticRule, buildInboxModel, bulkActions, bulkSummary, createChipCache, kindIconOf, pageItems, planChoice, plainFailure,
+  amountRange, answerText, automaticRule, buildInboxModel, bulkActions, bulkSummary, bulkTitle, createChipCache, kindIconOf, pageItems, planChoice, plainFailure,
   type InboxInputs,
 } from './model';
 import { BANK, CARD, NOW, txnFrom } from './testData';
@@ -214,6 +214,10 @@ describe('bulk helpers (wave 3 K3)', () => {
     expect(bulkSummary({ done: ['a', 'b', 'c'], failed: [], queued: [], skipped: [] })).toBe('3 done');
     expect(bulkSummary({ done: ['a'], failed: [{ id: 'x', message: 'm' }], queued: ['q', 'r'], skipped: [] }))
       .toBe('1 done, 2 saved to send later, 1 needs your attention');
+    expect(bulkTitle({ done: ['a'], failed: [{ id: 'x', message: 'm' }], queued: [], skipped: [] })).toBe('Done');
+    expect(bulkTitle({ done: [], failed: [{ id: 'x', message: 'm' }], queued: ['q'], skipped: [] })).toBe('Needs your attention');
+    expect(bulkTitle({ done: [], failed: [], queued: ['q'], skipped: [] })).toBe('Saved to send later');
+    expect(bulkTitle({ done: [], failed: [], queued: [], skipped: ['s'] })).toBe('Already answered');
     expect(bulkSummary({ done: [], failed: [{ id: 'x', message: 'm' }, { id: 'y', message: 'm' }], queued: [], skipped: ['s'] }))
       .toBe('0 done, 2 need your attention, 1 was already answered');
   });
@@ -226,6 +230,10 @@ describe('bulk helpers (wave 3 K3)', () => {
     expect(plainFailure('ERPNext needs these fields: Cost Center')).toBe('ERPNext needs these fields: Cost Center');
     expect(plainFailure('Removed PE-9, JE-3 from ERPNext.')).toBe('Removed from ERPNext.');
     expect(plainFailure('Could not create the Journal Entry. An entry JE-4 already exists.')).toBe('Could not create the entry. An entry already exists.');
+    expect(plainFailure('It could not be processed (ACC-JV-2026-00001); try again.')).toBe('It could not be processed; try again.');
+    expect(plainFailure('An entry JV/25-26/0001 already exists.')).toBe('An entry already exists.');
+    expect(plainFailure('PINV/0042 was already submitted in ERPNext.')).toBe('An entry was already submitted in ERPNext.');
+    expect(plainFailure('Could not create the Purchase Invoice for a Sales Invoice.')).toBe('Could not create the bill for an invoice.');
   });
 
   it('bulkActions: only the five bulk answers that fit every item', () => {
@@ -240,6 +248,8 @@ describe('bulk helpers (wave 3 K3)', () => {
     expect(answerText({ type: 'expense', expenseAccount: 'Advertising - ZP' }, 'out', 'card')).toBe('Expense, Advertising');
     expect(answerText({ type: 'supplier_payment', party: { doctype: 'Supplier', name: 'Meta Platforms' } }, 'out', 'bank')).toBe('Supplier payment, Meta Platforms');
     expect(answerText({ type: 'ignore' }, 'out', 'card')).toBe('Ignore this message');
+    expect(answerText({ type: 'expense', expenseAccount: 'Advertising - ZP', party: { doctype: 'Supplier', name: 'Meta' } }, 'out', 'card'))
+      .toBe('Expense, Advertising, for Meta');
   });
 
   it('planChoice plans each item with its own account, like the single flow', () => {

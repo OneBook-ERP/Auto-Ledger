@@ -11,8 +11,9 @@ import { useInboxDeps } from '../../src/inbox/deps';
 import { FlowLoading } from '../../src/inbox/FlowStates';
 import { accountLabel, istToday, signedAmount, titleOf, whenLabel } from '../../src/inbox/format';
 import { parseFilterParam, useBulkData, useDebounced, useTapGuard } from '../../src/inbox/hooks';
-import { amountRange, answerText, automaticRule, bulkActions, bulkSummary, groupTitle, plainFailure, planChoice, ruleHasAnswer } from '../../src/inbox/model';
+import { amountRange, answerText, automaticRule, bulkActions, bulkSummary, bulkTitle, groupTitle, plainFailure, planChoice, ruleHasAnswer } from '../../src/inbox/model';
 import { UNKNOWN_FAILURE } from '../../src/inbox/outcome';
+import { switchAutomatic } from '../../src/ingest/autoApply';
 import { BackLink, Banner, Button, Card, ChoiceRow, EmptyState, Screen, Stack, TextField, Txt, confirmDialog } from '../../src/ui';
 
 /** Item rows rendered at first and added by "Show more". */
@@ -38,6 +39,8 @@ export default function BulkScreen() {
   const tap = useTapGuard();
 
   const [stage, setStage] = useState<Stage>('review');
+  /** The supplier step answers either "Supplier payment" or the optional supplier of an expense. */
+  const [supplierFor, setSupplierFor] = useState<'payment' | 'expense'>('payment');
   const [ticked, setTicked] = useState<Set<string> | null>(null);
   const [picked, setPicked] = useState<ActionChoice | null>(null);
   const [limit, setLimit] = useState(ITEMS_PAGE);
@@ -117,6 +120,7 @@ export default function BulkScreen() {
       return;
     }
     if (type === 'supplier_payment') {
+      setSupplierFor('payment');
       setStage('supplier');
       return;
     }
@@ -174,7 +178,8 @@ export default function BulkScreen() {
     try {
       const doneIds = new Set(done.result.done);
       const rule = automaticRule(await deps.repo.listRules(), key, done.choice, done.items.filter((t) => doneIds.has(t.id)));
-      if (rule) await deps.repo.saveRule(rule);
+      // From now on only: the items just answered, and any the user left unticked, are never answered automatically.
+      if (rule) await switchAutomatic(deps.repo, rule, true, deps.now());
       if (mounted.current) setAutoSaved(!!rule);
     } catch {
       // the rule stays manual; nothing else changes
@@ -190,7 +195,7 @@ export default function BulkScreen() {
     const allOk = result.failed.length === 0 && result.queued.length === 0;
     return (
       <Screen title={groupTitle(done.items)} footer={<Button label="Back to Inbox" variant={ask ? 'secondary' : 'primary'} onPress={backToInbox} />}>
-        <Banner tone={allOk ? 'ok' : 'warn'} title="Done" message={bulkSummary(result)} testID="bulk-result" />
+        <Banner tone={allOk ? 'ok' : 'warn'} title={bulkTitle(result)} message={bulkSummary(result)} testID="bulk-result" />
         {result.queued.length ? (
           <Banner tone="info" message="No connection for some of them. Those answers are saved and will be sent when you are back online." />
         ) : null}
@@ -268,7 +273,8 @@ export default function BulkScreen() {
             title={a.name}
             selected={(choice?.type === 'expense' && choice.expenseAccount === a.name) || (choice?.type === 'other_income' && choice.incomeAccount === a.name)}
             onPress={() => {
-              setPicked(income ? { type: 'other_income', incomeAccount: a.name } : { type: 'expense', expenseAccount: a.name });
+              const party = choice?.type === 'expense' ? choice.party : undefined;
+              setPicked(income ? { type: 'other_income', incomeAccount: a.name } : party ? { type: 'expense', expenseAccount: a.name, party } : { type: 'expense', expenseAccount: a.name });
               setStage('review');
             }}
           />
@@ -279,21 +285,26 @@ export default function BulkScreen() {
 
   if (stage === 'supplier') {
     return (
-      <Screen top={<BackLink label="Back" onPress={() => setStage('choose')} />} title="Which supplier?" subtitle={`The bank message says: ${who}`}>
+      <Screen
+        top={<BackLink label="Back" onPress={() => setStage(supplierFor === 'expense' ? 'review' : 'choose')} />}
+        title={supplierFor === 'expense' ? 'Which supplier was this expense for?' : 'Which supplier?'}
+        subtitle={`The bank message says: ${who}`}>
         {!deps.erp ? <Banner tone="warn" message="You are signed out of ERPNext. Sign in again to search." /> : null}
         <TextField label="Search suppliers" value={search ?? who} onChangeText={setSearch} autoCapitalize="none" autoCorrect={false} placeholder="Name" />
         {suppliers.isError ? <Banner tone="error" message="Could not search ERPNext. Check your connection and try again." actionLabel="Try again" onAction={() => suppliers.refetch()} /> : null}
         {suppliers.isFetching ? <Txt variant="muted">Searching...</Txt> : null}
-        {suppliers.data && suppliers.data.length === 0 && !suppliers.isFetching ? <Txt variant="muted">{`No supplier matches "${term}". Add the supplier in ERPNext first, or answer these one at a time.`}</Txt> : null}
+        {suppliers.data && suppliers.data.length === 0 && !suppliers.isFetching ? <Txt variant="muted">{`No supplier matches "${term}".`}</Txt> : null}
+        <Txt variant="muted">Only suppliers already in ERPNext can be chosen here. Add a new supplier in ERPNext first, then come back.</Txt>
         {(suppliers.data ?? []).map((p) => (
           <ChoiceRow
             key={p.name}
             title={p.displayName}
             subtitle={p.displayName !== p.name ? p.name : undefined}
-            selected={choice?.type === 'supplier_payment' && choice.party.name === p.name}
+            selected={(choice?.type === 'supplier_payment' || choice?.type === 'expense') && choice.party?.name === p.name}
             onPress={() => {
-              const party: PartyRef = { doctype: 'Supplier', name: p.name };
-              setPicked({ type: 'supplier_payment', party });
+              const party: PartyRef = { doctype: p.doctype, name: p.name };
+              if (supplierFor === 'expense' && choice?.type === 'expense') setPicked({ ...choice, party });
+              else setPicked({ type: 'supplier_payment', party });
               setStage('review');
             }}
           />
@@ -316,6 +327,17 @@ export default function BulkScreen() {
         <View className="mt-2">
           <Button variant="secondary" label={choice ? 'Change the answer' : 'Choose the answer'} disabled={busy} onPress={() => tap(() => setStage('choose'))} />
         </View>
+        {choice?.type === 'expense' ? (
+          choice.party ? (
+            <Button
+              variant="quiet" label="Remove supplier" disabled={busy}
+              onPress={() => setPicked({ type: 'expense', expenseAccount: choice.expenseAccount })} />
+          ) : (
+            <Button
+              variant="quiet" label="Link a supplier (optional)" disabled={busy}
+              onPress={() => { setSupplierFor('expense'); setStage('supplier'); }} />
+          )
+        ) : null}
       </Card>
       {busy ? <Banner tone="info" message={`Sending ${n} answers to ERPNext, one at a time. Stay on this screen until it finishes.`} testID="bulk-sending" /> : null}
       {range ? (

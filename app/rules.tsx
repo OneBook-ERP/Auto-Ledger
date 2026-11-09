@@ -6,10 +6,13 @@ import { nameKey, ruleChoice } from '../src/core/suggest';
 import type { PendingTxn, Rule } from '../src/core/types';
 import { titleOf } from '../src/inbox/format';
 import { answerText } from '../src/inbox/model';
+import { forgetRule, switchAutomatic } from '../src/ingest/autoApply';
 import { useApp } from '../src/state/AppProvider';
 import { gateTarget } from '../src/state/gate';
 import { useUiStore } from '../src/state/store';
-import { BackLink, Button, Card, EmptyState, Screen, ToggleRow, Txt, confirmDialog, formatInr } from '../src/ui';
+import { BackLink, Banner, Button, Card, EmptyState, Screen, ToggleRow, Txt, confirmDialog, formatInr } from '../src/ui';
+
+const SAVE_FAILED = 'Could not save that change. Try again.';
 
 type Row = { rule: Rule; pattern: string; answer: string; used: string; canAuto: boolean; limit: string | null };
 
@@ -51,6 +54,7 @@ export default function RulesScreen() {
   const setupDone = useUiStore((s) => s.setupDone);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -73,12 +77,17 @@ export default function RulesScreen() {
   const target = gateTarget({ signedIn, setupDone });
   if (target !== '/(tabs)/home') return <Redirect href={target} />;
 
-  // Always re-read before saving: the switch never writes back an older use count or amount.
+  // Always re-read before saving: the switch never writes back an older use count or amount. Switching on counts
+  // "from now on": payments already waiting are never answered automatically.
   const setAuto = async (key: string, on: boolean) => {
+    if (busy) return;
     setBusy(true);
+    setError(null);
     try {
       const fresh = (await repo.listRules()).find((r) => r.matchKey === key);
-      if (fresh) await repo.saveRule({ ...fresh, auto: on });
+      if (fresh) await switchAutomatic(repo, fresh, on, Date.now());
+    } catch {
+      setError(SAVE_FAILED);
     } finally {
       setBusy(false);
       await load();
@@ -94,8 +103,11 @@ export default function RulesScreen() {
     });
     if (!ok) return;
     setBusy(true);
+    setError(null);
     try {
-      await repo.deleteRule(key);
+      await forgetRule(repo, key);
+    } catch {
+      setError(SAVE_FAILED);
     } finally {
       setBusy(false);
       await load();
@@ -107,6 +119,7 @@ export default function RulesScreen() {
       top={<BackLink label="Settings" onPress={() => router.back()} />}
       title="Automatic rules"
       subtitle="Answers AutoLedger remembers. Switch one on to let AutoLedger answer new payments like it after each check, as drafts only.">
+      {error ? <Banner tone="error" message={error} testID="rules-error" /> : null}
       {rows && rows.length === 0 ? (
         <EmptyState title="No saved answers yet" message="When you answer a payment with Remember this choice on, or answer similar payments together, the answer is kept here." />
       ) : null}
@@ -120,8 +133,9 @@ export default function RulesScreen() {
               {row.canAuto ? (
                 <ToggleRow
                   title="Do this automatically"
-                  subtitle={`For new payments up to ${row.limit}. Never for one that may already be in ERPNext.`}
+                  subtitle={`For new payments from now on, up to ${row.limit}. Never for one that may already be in ERPNext. Payments already waiting are left to you.`}
                   value={row.rule.auto === true}
+                  disabled={busy}
                   onChange={(v) => void setAuto(row.rule.matchKey, v)}
                   testID={`auto-${row.rule.matchKey}`}
                 />

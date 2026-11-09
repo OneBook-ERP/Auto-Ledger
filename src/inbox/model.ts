@@ -208,12 +208,12 @@ export function bulkActions(items: Pick<PendingTxn, 'direction' | 'accountType'>
   return lists[0].filter((a) => AUTO_ACTIONS.has(a.type) && lists.every((l) => l.some((x) => x.type === a.type)));
 }
 
-/** "Expense, Advertising", "Supplier payment, Meta Platforms", "Ignore this message". */
+/** "Expense, Advertising", "Expense, Advertising, for Meta", "Supplier payment, Meta Platforms", "Ignore this message". */
 export function answerText(c: Partial<ActionChoice>, direction: 'in' | 'out', kind: 'bank' | 'card'): string {
   const label = c.type ? actionLabel(c.type, direction, kind) : 'Not chosen yet';
   const r = c as { expenseAccount?: string; incomeAccount?: string; party?: PartyRef };
   const account = r.expenseAccount ?? r.incomeAccount;
-  if (account) return `${label}, ${shortAccount(account)}`;
+  if (account) return r.party ? `${label}, ${shortAccount(account)}, for ${r.party.name}` : `${label}, ${shortAccount(account)}`;
   if (r.party) return `${label}, ${r.party.name}`;
   return label;
 }
@@ -268,19 +268,34 @@ export function bulkSummary(r: BulkResult): string {
 }
 
 const DOCTYPE_NOTE = /\s*\((?:Payment Entry|Journal Entry|Purchase Invoice|Sales Invoice)\)/g;
-const DOC_ID = '[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\\d+';
+// Document names: "PE-9", "ACC-PAY-2026-00012", "JV/25-26/0001", "PINV/0042".
+const DOC_ID = '[A-Z][A-Z0-9]*(?:[-/][A-Z0-9]+)*[-/]\\d+';
 
-/** A runner or ERPNext message without document ids or document type names in brackets (shown as plain text). */
+/** A runner or ERPNext message without document ids or document type names (shown as plain text). */
 export function plainFailure(message: string): string {
   return message
     .replace(DOCTYPE_NOTE, '')
     .replace(/\b(?:the|a) (?:Payment Entry|Journal Entry)\b/g, 'the entry')
     .replace(/\b(?:Payment Entry|Journal Entry)\b/g, 'entry')
-    .replace(new RegExp(`^${DOC_ID}(?:,\\s*${DOC_ID})*\\b`), 'An entry')
-    .replace(new RegExp(`(\\b[Aa]n entry)\\s+${DOC_ID}\\b`, 'g'), '$1')
-    .replace(new RegExp(`\\s*\\b${DOC_ID}\\b,?`, 'g'), '')
+    .replace(/\ba Purchase Invoice\b/g, 'a bill')
+    .replace(/\ba Sales Invoice\b/g, 'an invoice')
+    .replace(/\bPurchase Invoice\b/g, 'bill')
+    .replace(/\bSales Invoice\b/g, 'invoice')
+    .replace(new RegExp(`^${DOC_ID}(?:,\\s*${DOC_ID})*(?![\\w/-])`), 'An entry')
+    .replace(new RegExp(`(\\b[Aa]n entry)\\s+${DOC_ID}(?![\\w/-])`, 'g'), '$1')
+    .replace(new RegExp(`\\s*\\b${DOC_ID}(?![\\w/-]),?`, 'g'), '')
+    .replace(/\s*\(\s*\)/g, '')
+    .replace(/\s+([;,.:])/g, '$1')
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+/** The heading of a bulk result: never "Done" when nothing was done. */
+export function bulkTitle(r: BulkResult): string {
+  if (r.done.length) return 'Done';
+  if (r.failed.length) return 'Needs your attention';
+  if (r.queued.length) return 'Saved to send later';
+  return 'Already answered';
 }
 
 export type ChoiceSettings = { mappings: AccountMapping[]; company: string; drawingsAccount: string; today: string };

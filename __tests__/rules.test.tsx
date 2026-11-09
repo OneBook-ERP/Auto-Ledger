@@ -5,7 +5,7 @@ import RulesScreen from '../app/rules';
 import type { Rule } from '../src/core/types';
 import { fakeInboxErp } from '../src/inbox/fakeErp';
 import { BANK, CARD, NOW, txnFrom } from '../src/inbox/testData';
-import { runAutoApply } from '../src/ingest/autoApply';
+import { autoSinceKey, runAutoApply } from '../src/ingest/autoApply';
 import { runPlan } from '../src/outbox/runner';
 import { useUiStore } from '../src/state/store';
 import { fakeApp } from '../src/state/testUtils';
@@ -30,6 +30,7 @@ async function setup(rules: Rule[] = [FB, SALARY]) {
   useUiStore.setState({ ...useUiStore.getInitialState(), ...signedIn });
   const app = await fakeApp();
   for (const r of rules) await app.repo.saveRule(r);
+  for (const r of rules) if (r.auto) await app.repo.setSetting(autoSinceKey(r.matchKey), '1');
   await app.repo.upsertPending(txnFrom('idfc-035', { id: 'old', state: 'created', createdDocs: [{ doctype: 'Journal Entry', name: 'JE-1', docstatus: 0 }] }));
   return app;
 }
@@ -69,6 +70,35 @@ describe('Automatic rules screen', () => {
     expect((await app.repo.listRules()).find((r) => r.matchKey === KEY)).toMatchObject({ hits: 7, maxAmountMinor: 300_000 });
   });
 
+  it('switching a rule on answers only payments that arrive from now on, never the backlog', async () => {
+    const app = await setup([{ ...FB, auto: false }]);
+    await app.repo.setSetting('company', 'ZP');
+    await app.repo.saveMapping(CARD);
+    await app.repo.upsertPending(txnFrom('idfc-035', { id: 'backlog', rawHash: 'b1', amountMinor: 100_000 }));
+    jest.spyOn(Date, 'now').mockReturnValue(NOW);
+    await render(<app.Wrap><RulesScreen /></app.Wrap>);
+    const card = await screen.findByTestId(`rule-${KEY}`);
+    expect(within(card).getByText(/^For new payments from now on, up to ₹6,000\.00/)).toBeTruthy();
+    await fireEvent(within(card).getByRole('switch', { name: 'Do this automatically' }), 'valueChange', true);
+    await waitFor(async () => expect(await app.repo.getSetting(autoSinceKey(KEY))).toBe(String(NOW)));
+    expect((await app.repo.listRules()).find((r) => r.matchKey === KEY)?.auto).toBe(true);
+    const erp = fakeInboxErp();
+    expect((await runAutoApply({ repo: app.repo, erp, runPlan, now: () => NOW })).done).toEqual([]);
+    await app.repo.upsertPending(txnFrom('idfc-035', { id: 'later', rawHash: 'l1', amountMinor: 100_000, receivedAt: NOW + 1 }));
+    expect((await runAutoApply({ repo: app.repo, erp, runPlan, now: () => NOW })).done).toEqual(['later']);
+    expect((await app.repo.getPending('backlog'))?.state).toBe('new');
+  });
+
+  it('a storage error while switching or deleting is reported, and the switch is locked while saving', async () => {
+    const app = await setup();
+    jest.spyOn(app.repo, 'saveRule').mockRejectedValue(new Error('disk'));
+    await render(<app.Wrap><RulesScreen /></app.Wrap>);
+    const sw = within(await screen.findByTestId(`rule-${KEY}`)).getByRole('switch', { name: 'Do this automatically' });
+    await fireEvent(sw, 'valueChange', false);
+    expect(await screen.findByText('Could not save that change. Try again.')).toBeTruthy();
+    expect(within(screen.getByTestId(`rule-${KEY}`)).getByRole('switch', { name: 'Do this automatically' }).props.disabled).toBeFalsy();
+  });
+
   it('Delete asks first, then removes only that rule', async () => {
     const app = await setup();
     jest.spyOn(Alert, 'alert').mockImplementation((_t, _m, b) => b?.find((x) => x.text === 'Delete')?.onPress?.());
@@ -77,6 +107,7 @@ describe('Automatic rules screen', () => {
     expect(Alert.alert).toHaveBeenCalledWith('Delete this rule?', expect.stringContaining('Drafts already created are not changed'), expect.anything(), expect.anything());
     await waitFor(() => expect(screen.queryByTestId(`rule-${KEY}`)).toBeNull());
     expect((await app.repo.listRules()).map((r) => r.matchKey)).toEqual(['cp:out:ravi']);
+    expect(await app.repo.getSetting(autoSinceKey(KEY))).toBeNull();
   });
 
   it('no rules yet', async () => {
