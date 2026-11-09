@@ -191,11 +191,11 @@ type Orphans = { items: OutboxOp[]; docs: DocRef[] };
 
 /**
  * What the txns other than `txnId` claim. `docs`: `${doctype}:${name}` of every document such a txn has recorded,
- * on the txn or in the progress of one of its outbox items that is not superseded (a crash between a step's
- * progress write and the final txn write leaves the document only there). `attempting`: `${doctype}\u0000${reference}`
- * of every document step such a txn has STARTED on a still-open item (pending or failed) without recording its
- * result (write-ahead marker, lost reply): an unlisted draft with that reference may be that txn's.
- * Outbox items are read only for txns still waiting for a decision ('new'); a finished txn lists its documents.
+ * on the txn or in the progress of one of its open outbox items (a crash between a step's progress write and the
+ * final txn write leaves the document only there). `attempting`: `${doctype}\u0000${reference}` of every document
+ * step such a txn has STARTED on an open item (pending or failed) without recording its result (write-ahead
+ * marker, lost reply): an unlisted draft with that reference may be that txn's. Two queries; read afresh for
+ * every step that has a hit (another txn may have advanced in between).
  */
 type Claims = { docs: Set<string>; attempting: Set<string> };
 const claimKey = (doctype: string, ref: string) => `${doctype}\u0000${ref}`;
@@ -203,21 +203,29 @@ const claimKey = (doctype: string, ref: string) => `${doctype}\u0000${ref}`;
 async function claimsOfOtherTxns(repo: Repo, txnId: string): Promise<Claims> {
   const docs = new Set<string>();
   const attempting = new Set<string>();
-  for (const t of await repo.listPending()) {
-    if (t.id === txnId) continue;
-    for (const d of t.createdDocs) docs.add(docKey(d));
-    if (t.state !== 'new') continue;
-    for (const o of await repo.listOutbox(t.id)) {
-      if (o.status === 'superseded') continue;
-      for (const c of o.progress.created.slice(0, o.progress.stepIndex)) if (c) docs.add(docKey(c));
-      const att = o.progress.attempting;
-      if (o.status === 'done' || att === undefined || att < o.progress.stepIndex) continue;
-      const s = o.plan.steps[att];
-      const ref = s ? referenceOf(s) : null;
-      if (s && ref) attempting.add(claimKey(s.doctype, ref));
-    }
+  for (const t of await repo.listPending()) if (t.id !== txnId) for (const d of t.createdDocs) docs.add(docKey(d));
+  for (const o of await repo.listOpenOutbox()) {
+    if (o.txnId === txnId) continue;
+    for (const c of o.progress.created.slice(0, o.progress.stepIndex)) if (c) docs.add(docKey(c));
+    const att = o.progress.attempting;
+    if (att === undefined || att < o.progress.stepIndex) continue;
+    const s = o.plan.steps[att];
+    const ref = s ? referenceOf(s) : null;
+    if (s && ref) attempting.add(claimKey(s.doctype, ref));
   }
   return { docs, attempting };
+}
+
+/** Party renames of item `o`: the names ERPNext assigned to the parties its finished steps created. */
+function renamesOf(o: OutboxOp): Map<string, string> {
+  const renames = new Map<string, string>();
+  o.plan.steps.forEach((s, j) => {
+    const c = j < o.progress.stepIndex ? o.progress.created[j] : undefined;
+    if (s.kind !== 'create_party' || !c) return;
+    const refName = referencedPartyName(o.plan, j);
+    if (refName && c.name !== refName) renames.set(`${s.doctype}\u0000${refName}`, c.name);
+  });
+  return renames;
 }
 
 /**
@@ -241,6 +249,9 @@ async function findOrphans(repo: Repo, erp: ErpOps, others: OutboxOp[], txn: Pen
     foreign ??= await claimsOfOtherTxns(repo, txn.id);
     return !foreign.docs.has(docKey(d));
   };
+  const fresh = () => {
+    foreign = null; // re-read the other txns' claims for every step that looks at hits
+  };
   for (const o of others) {
     const steps = o.plan.steps
       .map((s, j) => ({ s, j }))
@@ -249,6 +260,7 @@ async function findOrphans(repo: Repo, erp: ErpOps, others: OutboxOp[], txn: Pen
     items.push(o);
     for (const { s, j } of steps) {
       // Only a document of that item's own doctype is its orphan; anything else is not ours to touch.
+      fresh();
       const hits = (await erp.findDraftsByUtr(referenceOf(s) as string)).filter((h) => h.doctype === s.doctype && !seen.has(docKey(h)));
       const rec = j < o.progress.stepIndex ? o.progress.created[j] : undefined;
       let hit: (typeof hits)[number] | undefined;
@@ -257,14 +269,12 @@ async function findOrphans(repo: Repo, erp: ErpOps, others: OutboxOp[], txn: Pen
         if (rec.adopted) adopted.add(docKey(rec));
         hit = hits.find((h) => h.name === rec.name);
       } else {
-        // Started but unrecorded (lost reply): the first hit that no other txn lists and this txn did not adopt.
-        // When another txn has also started a document with this reference and not recorded it, an unlisted
-        // hit may be that txn's lost reply: it is deleted only when it is the document this item planned
-        // (samePlanned), otherwise left alone (detached: never deleted).
-        const ref = referenceOf(s) as string;
+        // Started but unrecorded (lost reply): the first hit that no other txn lists, this txn did not adopt,
+        // and that IS the document this item planned (samePlanned, party renames applied). A hit that does not
+        // match (entered by hand, or another txn's) is never deleted; if none matches there is nothing to clean.
+        const body = applyRenames(s.body, renamesOf(o));
         for (const h of hits) {
-          if (await removable(h)) {
-            if (foreign!.attempting.has(claimKey(h.doctype, ref)) && !(await samePlanned(erp, h, s.doctype, s.body))) continue;
+          if ((await removable(h)) && (await samePlanned(erp, h, s.doctype, body))) {
             hit = h;
             break;
           }
@@ -277,6 +287,7 @@ async function findOrphans(repo: Repo, erp: ErpOps, others: OutboxOp[], txn: Pen
       docs.push({ doctype: hit.doctype, name: hit.name });
     }
   }
+  fresh();
   const recorded: CreatedDoc[] = [];
   for (const d of txn.createdDocs) if (!seen.has(docKey(d)) && (await removable(d))) recorded.push(d); // others: detached
   if (recorded.length) {
@@ -336,9 +347,12 @@ async function sameTransfer(erp: ErpOps, hit: UtrHit, body: Record<string, unkno
 }
 
 /**
- * True when `hit` (a draft no txn has recorded and that this step has no marker for: entered by hand, or
- * another txn's lost reply) is the document `body` plans: same doctype, payment type and amount (minor units),
- * the same party when one is planned, and the same company when both name one. A document that is gone is not.
+ * True when `hit` is the document `body` plans (read with getDraftSummary; a document that is gone is not):
+ *  - Payment Entry: same payment type and amount (minor units), the same paid_from / paid_to and party (and
+ *    party type) when the plan names them, no party when it names none;
+ *  - Journal Entry: the same account rows: for every account the same debit and credit (minor units, row order
+ *    ignored; a reversal swaps them), and the planned party on that account's row when one is planned;
+ *  - and the same company when both name one.
  */
 async function samePlanned(erp: ErpOps, hit: UtrHit, doctype: string, body: Record<string, unknown>): Promise<boolean> {
   if (hit.doctype !== doctype) return false;
@@ -354,18 +368,36 @@ async function samePlanned(erp: ErpOps, hit: UtrHit, doctype: string, body: Reco
     if (typeof body.paid_amount !== 'number' || !Number.isFinite(body.paid_amount)) return false;
     if (s.paymentType === null || s.paymentType !== body.payment_type) return false;
     if (s.paidAmountMinor === null || s.paidAmountMinor !== toMinor(body.paid_amount)) return false;
+    if (typeof body.paid_from === 'string' && s.paidFrom !== body.paid_from) return false;
+    if (typeof body.paid_to === 'string' && s.paidTo !== body.paid_to) return false;
     if (typeof body.party === 'string' && (s.party !== body.party || (typeof body.party_type === 'string' && s.partyType !== body.party_type))) return false;
     if (typeof body.party !== 'string' && s.party !== null) return false;
     return true;
   }
-  // Journal Entry: the planned total debit.
-  const rows = Array.isArray(body.accounts) ? (body.accounts as Record<string, unknown>[]) : [];
-  let debit = 0;
-  for (const r of rows) {
-    const v = r && typeof r === 'object' ? r.debit_in_account_currency : undefined;
-    if (typeof v === 'number' && Number.isFinite(v)) debit += toMinor(v);
+  const planned = Array.isArray(body.accounts) ? (body.accounts as unknown[]).filter((r): r is Record<string, unknown> => !!r && typeof r === 'object') : [];
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? toMinor(v) : 0);
+  const totals = (rows: { account: string | null; debit: number; credit: number }[]) => {
+    const m = new Map<string, { debit: number; credit: number }>();
+    for (const r of rows) {
+      if (!r.debit && !r.credit) continue;
+      const k = r.account ?? '';
+      const t = m.get(k) ?? { debit: 0, credit: 0 };
+      m.set(k, { debit: t.debit + r.debit, credit: t.credit + r.credit });
+    }
+    return m;
+  };
+  const want = totals(planned.map((r) => ({ account: typeof r.account === 'string' ? r.account : null, debit: num(r.debit_in_account_currency), credit: num(r.credit_in_account_currency) })));
+  const got = totals(s.accounts.map((r) => ({ account: r.account, debit: r.debitMinor, credit: r.creditMinor })));
+  if (!want.size || want.size !== got.size) return false;
+  for (const [k, w] of want) {
+    const g = got.get(k);
+    if (!g || g.debit !== w.debit || g.credit !== w.credit) return false;
   }
-  return debit > 0 && s.totalDebitMinor !== null && s.totalDebitMinor === debit;
+  for (const r of planned) {
+    if (typeof r.party !== 'string') continue;
+    if (!s.accounts.some((a) => a.account === r.account && a.party === r.party && (typeof r.party_type !== 'string' || a.partyType === r.party_type))) return false;
+  }
+  return true;
 }
 
 // ---------- runner ----------
@@ -518,40 +550,40 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
   };
 
   // KL1: a real UTR can be shared by several txns (a reversal or refund, both legs of an own-account transfer).
-  let foreign: Claims | null = null;
   /**
-   * The reference hit step `i` may use, or null to create its own document. The document an earlier attempt of
-   * this step recorded wins. Otherwise the first acceptable hit in server order:
-   *  - one another txn lists (on the txn or in an open item's progress) ONLY when it is the same Internal
-   *    Transfer (the other leg books the very same Payment Entry), `shared`;
-   *  - one no other txn lists, when this step's own write-ahead marker is set (its lost reply) and no other txn
-   *    has an unrecorded attempt with this reference;
-   *  - otherwise (entered by hand, or possibly another txn's lost reply) only when it is the planned document
-   *    (samePlanned), `adopted`. A different doctype nobody lists or contests still blocks (returned as is).
-   * Anything else is skipped, and this txn books its own document.
+   * The reference hit step `i` may use, `block` when an entry with this reference must be resolved first, or
+   * null to create its own document. The document an earlier attempt of this step recorded wins. Otherwise, in
+   * server order (the other txns' claims are read afresh for each step):
+   *  - a hit another txn lists (on the txn or in an open item's progress) is used ONLY when it is the same
+   *    Internal Transfer (`shared`); otherwise it is skipped;
+   *  - a hit that another txn has an unrecorded attempt for (contested) is used only when it is the planned
+   *    document (samePlanned), `adopted`; otherwise skipped;
+   *  - an uncontested hit nobody lists is used when it is the planned document: as this step's own lost reply
+   *    when its write-ahead marker is set, else `adopted` (entered by hand);
+   *  - an uncontested hit nobody lists that is NOT the planned document (or of another doctype) is never used
+   *    and never silently duplicated: the first one blocks, unless a later hit is the planned document.
+   * Only when every hit is listed or contested (or there are none) does this txn book its own document.
    */
-  const chooseHit = async (hits: UtrHit[], step: PlanStep, at: number): Promise<{ hit: UtrHit; shared?: true; adopted?: true } | null> => {
+  const chooseHit = async (hits: UtrHit[], step: PlanStep, at: number): Promise<{ hit: UtrHit; shared?: true; adopted?: true; block?: true } | null> => {
     const rec = at < prior.stepIndex ? prior.created[at] : undefined;
     const mine = rec && hits.find((h) => h.doctype === rec.doctype && h.name === rec.name);
     if (mine) return { hit: mine };
+    if (!hits.length) return null;
     const ownMarker = prior.attempting !== undefined && prior.attempting >= at;
     const ref = referenceOf(step) as string;
     const body = applyRenames(step.body, renames);
+    const foreign = await claimsOfOtherTxns(repo, txnId);
+    let blocker: UtrHit | null = null;
     for (const h of hits) {
-      foreign ??= await claimsOfOtherTxns(repo, txnId);
       if (foreign.docs.has(docKey(h))) {
         if (h.doctype === step.doctype && (await sameTransfer(erp, h, body))) return { hit: h, shared: true };
         continue;
       }
       const contested = foreign.attempting.has(claimKey(h.doctype, ref));
-      if (h.doctype !== step.doctype) {
-        if (!contested) return { hit: h }; // blocks: someone's entry of another doctype
-        continue;
-      }
-      if (ownMarker && !contested) return { hit: h };
-      if (await samePlanned(erp, h, step.doctype, body)) return { hit: h, adopted: true };
+      if (await samePlanned(erp, h, step.doctype, body)) return contested || !ownMarker ? { hit: h, adopted: true } : { hit: h };
+      if (!contested) blocker ??= h;
     }
-    return null;
+    return blocker ? { hit: blocker, block: true } : null;
   };
 
   try {
@@ -582,7 +614,7 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
         let doc: CreatedDoc;
         if (choice) {
           const { hit } = choice;
-          if (hit.doctype !== step.doctype) {
+          if (choice.block) {
             throw new ErpValidationError(
               `An entry ${hit.name} (${hit.doctype}) already exists for this reference; open it in ERPNext or delete it, then try again.`,
               0,
