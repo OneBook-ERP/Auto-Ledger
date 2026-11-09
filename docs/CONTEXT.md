@@ -7,7 +7,7 @@ A business owner's phone receives bank/card SMS. AutoLedger parses them on the d
 
 ## Status (9 Nov 2026)
 - Plan: `docs/superpowers/plans/2026-11-08-autoledger-phase1.md` (20 tasks) is fully implemented and merged on branch `phase1` (head is a merge of the UI polish pass). UI polish plan: `docs/superpowers/plans/2026-11-09-ui-polish.md` (U1 to U4 merged). Tests: about 1,234 Jest, 88 Kotlin JUnit, typecheck clean.
-- Running on the user's Oppo phone as a development build against the stage site. Sign-in, setup, SMS backfill (1 week by default, user-chosen), Inbox, answer flow, Home, Activity and Settings work. One real draft (a Payment Entry) exists on stage from testing.
+- Running on the user's Oppo phone as a development build against the stage site. Sign-in, setup, SMS backfill (1 week by default, user-chosen; routine app opens re-read only the last week or the days since the last read), Inbox, answer flow, Home, Activity and Settings work. One real draft (a Payment Entry) exists on stage from testing.
 - Nothing is pushed to GitHub (see hard rules in `CLAUDE.md`).
 
 ## Next steps
@@ -51,3 +51,5 @@ Subagent-driven: a controller dispatches one implementer per task or group (expl
 ## Ruling: SMS backfill window (wave 2)
 
 The window is user-chosen (1 week, 1 month, 3 months, 6 months), default 1 week, stored as setting `backfill_days` and changeable in Settings (changing it re-runs the backfill once). Senders are still limited to the configured banks. A larger window never duplicates or reopens answered items (same `rawHash` dedupe).
+
+The full chosen window is read only when it is set (setup) or grown (Settings). Routine foreground cycles read the larger of 7 days and the days since the last read plus one day of overlap, never more than the chosen window. The native SMS read stops at 5000 messages per scan (`BACKFILL_CAP` in `SmsIngestModule.kt`, raised from 1000), newest first.

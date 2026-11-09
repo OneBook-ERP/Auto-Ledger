@@ -134,6 +134,6 @@ class SmsIngestModule : Module() {
   }
 
   companion object {
-    private const val BACKFILL_CAP = 1000
+    private const val BACKFILL_CAP = 5000
   }
 }
