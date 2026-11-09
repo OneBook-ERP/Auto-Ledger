@@ -616,7 +616,7 @@ async function run(txnId: string, plan: ActionPlan, { repo, erp }: { repo: Repo;
           const { hit } = choice;
           if (choice.block) {
             throw new ErpValidationError(
-              `An entry ${hit.name} (${hit.doctype}) already exists for this reference; open it in ERPNext or delete it, then try again.`,
+              `An entry ${hit.name} (${hit.doctype}) already exists for this reference. Open it in ERPNext and check it, or ask your accountant.`,
               0,
             );
           }

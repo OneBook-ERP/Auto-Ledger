@@ -816,7 +816,7 @@ describe('runPlan: reference hit of another doctype (I3)', () => {
     expect(r).toMatchObject({ status: 'failed', retryable: false });
     if (r.status === 'failed') {
       expect(r.error).toBeInstanceOf(ErpValidationError);
-      expect(r.error.message).toMatch(/An entry OLD-1 .*already exists for this reference; open it in ERPNext or delete it, then try again/);
+      expect(r.error.message).toMatch(/An entry OLD-1 .*already exists for this reference\. Open it in ERPNext and check it, or ask your accountant\./);
     }
     expect(erp.count('createDraft')).toBe(0);
     expect(erp.count('deleteDraft')).toBe(0);
@@ -1461,7 +1461,7 @@ describe('an unlisted reference hit is adopted only when provably ours or the pl
     erp.docs.push({ doctype: 'Payment Entry', name: 'PE-HAND', docstatus: 0, body });
     const r = await runPlan('t1', advance(txn()), deps);
     expect(r).toMatchObject({ status: 'failed', retryable: false });
-    if (r.status === 'failed') expect(r.error.message).toMatch(/An entry PE-HAND \(Payment Entry\) already exists for this reference/);
+    if (r.status === 'failed') expect(r.error.message).toBe('An entry PE-HAND (Payment Entry) already exists for this reference. Open it in ERPNext and check it, or ask your accountant.');
     expect(erp.count('createDraft')).toBe(0);
     expect(erp.docs.map((d) => d.name)).toEqual(['PE-HAND']);
     expect((await repo.getPending('t1'))!).toMatchObject({ state: 'new', createdDocs: [] });
