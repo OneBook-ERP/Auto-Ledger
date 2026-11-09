@@ -28,7 +28,7 @@ describe('submitAnswer', () => {
     expect(o).toEqual({ kind: 'created', docs: [{ doctype: 'Payment Entry', name: 'PE-1' }] });
     expect(run).toHaveBeenCalledWith(txn.id, plan, { repo, erp }, { userAction: true });
     expect((await repo.getPending(txn.id))?.state).toBe('created');
-    expect(await repo.listRules()).toEqual([{ matchKey: 'cp:in:company11', action: 'customer_advance', party: acme, hits: 1, lastUsed: txn.receivedAt }]);
+    expect(await repo.listRules()).toEqual([{ matchKey: 'cp:in:company11', action: 'customer_advance', party: acme, hits: 1, lastUsed: txn.receivedAt, auto: false, maxAmountMinor: txn.amountMinor, currency: 'INR' }]);
   });
   it('remember off: no rule', async () => {
     const { repo, txn, erp, run, plan, choice } = await setup();
@@ -39,7 +39,7 @@ describe('submitAnswer', () => {
     const { repo, txn, erp, run, plan, choice } = await setup();
     await repo.saveRule({ matchKey: 'cp:in:company11', action: 'customer_advance', party: acme, hits: 4, lastUsed: 1 });
     await submitAnswer({ repo, erp, runPlan: run }, { txn, plan, choice, remember: true });
-    expect(await repo.listRules()).toEqual([{ matchKey: 'cp:in:company11', action: 'customer_advance', party: acme, hits: 5, lastUsed: txn.receivedAt }]);
+    expect(await repo.listRules()).toEqual([{ matchKey: 'cp:in:company11', action: 'customer_advance', party: acme, hits: 5, lastUsed: txn.receivedAt, auto: false, maxAmountMinor: txn.amountMinor, currency: 'INR' }]);
   });
   it('needs_login with an invalid session: login; the txn stays new and its item stays queued', async () => {
     const { repo, txn, erp, run, plan, choice } = await setup();

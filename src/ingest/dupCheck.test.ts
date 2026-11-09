@@ -66,8 +66,14 @@ describe('runDupCheck', () => {
   it('a failure leaves old flags untouched and does not reject', async () => {
     const s = await setup([txn('a')], new ErpNetworkError('offline'));
     await s.repo.setSetting(dupKey('a'), JSON.stringify({ doctype: 'Payment Entry', name: 'PE-OLD', strength: 'weak' }));
-    await expect(runDupCheck(s.deps)).resolves.toBeUndefined();
+    await expect(runDupCheck(s.deps)).resolves.toBe(false);
     expect(await flag(s.repo, 'a')).toEqual({ doctype: 'Payment Entry', name: 'PE-OLD', strength: 'weak', why: 'details' });
+  });
+
+  it('reports whether the check really ran: true when done or nothing waits, false without a company', async () => {
+    expect(await runDupCheck((await setup([txn('a')], [entry()])).deps)).toBe(true);
+    expect(await runDupCheck((await setup([])).deps)).toBe(true);
+    expect(await runDupCheck((await setup([txn('a')], [], null)).deps)).toBe(false);
   });
 
   it('a flag is removed when the entry is no longer returned (cancelled in ERPNext)', async () => {

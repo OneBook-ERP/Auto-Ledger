@@ -631,7 +631,7 @@ describe('Confirm', () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(run.mock.calls[0][3]).toEqual({ userAction: true });
     expect((await repo.getPending(t.id))?.state).toBe('created');
-    expect(await repo.listRules()).toEqual([{ matchKey: 'cp:in:company11', action: 'customer_advance', party: acme, hits: 1, lastUsed: t.receivedAt }]);
+    expect(await repo.listRules()).toEqual([{ matchKey: 'cp:in:company11', action: 'customer_advance', party: acme, hits: 1, lastUsed: t.receivedAt, auto: false, maxAmountMinor: t.amountMinor, currency: 'INR' }]);
     expect(useFlowStore.getState().drafts[t.id]).toBeUndefined();
   });
 

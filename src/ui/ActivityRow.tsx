@@ -15,6 +15,8 @@ export interface ActivityRowProps {
   /** One line per ERPNext document: a friendly kind ("Payment entry") and its id in small monospace text. */
   docs: { kind: string; id: string }[];
   status: { label: string; tone: StatusTone };
+  /** A second chip beside the status, for example "Done automatically". */
+  badge?: { label: string; tone: StatusTone } | null;
   /** Short explanation under the status, for example what "Not found" means. */
   hint?: string;
   actions: ActivityAction[];
@@ -23,7 +25,7 @@ export interface ActivityRowProps {
 }
 
 /** One processed message: who, how much, which ERPNext documents, where it stands and what can be done. */
-export function ActivityRow({ title, amount, direction, date, docs, status, hint, actions, busy, testID }: ActivityRowProps) {
+export function ActivityRow({ title, amount, direction, date, docs, status, badge, hint, actions, busy, testID }: ActivityRowProps) {
   return (
     <View testID={testID} className="mb-3 rounded-2xl border border-line bg-surface p-4 dark:border-line-dark dark:bg-surface-dark">
       <View className="flex-row items-start justify-between">
@@ -47,8 +49,9 @@ export function ActivityRow({ title, amount, direction, date, docs, status, hint
           </Text>
         </View>
       ))}
-      <View className="mt-3">
+      <View className="mt-3 flex-row flex-wrap gap-2">
         <StatusChip label={status.label} tone={status.tone} />
+        {badge ? <StatusChip label={badge.label} tone={badge.tone} /> : null}
       </View>
       {hint ? <Text className="mt-2 text-sm leading-5 text-muted dark:text-muted-dark">{hint}</Text> : null}
       {actions.length ? (

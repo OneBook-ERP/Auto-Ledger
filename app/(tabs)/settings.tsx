@@ -154,6 +154,18 @@ export default function Settings() {
         ) : null}
       </Card>
 
+      <Card title="Answers">
+        <Pressable
+          onPress={() => router.push('/rules')}
+          accessibilityRole="button"
+          accessibilityLabel="Automatic rules"
+          accessibilityHint="Shows the answers AutoLedger remembers and which it gives by itself"
+          className="min-h-[56px] justify-center">
+          <Text className="text-base font-semibold text-accent dark:text-accent-dark">Automatic rules</Text>
+          <Text className="mt-0.5 text-sm text-muted dark:text-muted-dark">Remembered answers, and which payments are answered by themselves.</Text>
+        </Pressable>
+      </Card>
+
       <Card title="About">
         <Text className="text-base text-ink dark:text-ink-dark">AutoLedger version {version}</Text>
       </Card>

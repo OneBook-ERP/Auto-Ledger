@@ -47,6 +47,12 @@ export interface ActionPlan { steps: PlanStep[]; summary: string[]; needsInrAmou
 export type Rule = {
   matchKey: string; action: ActionChoice['type']; party?: PartyRef; account?: string;
   hits: number; lastUsed: number;
+  /** The user confirmed this pattern may be answered automatically (wave 3 K). Absent or false: never automatic. */
+  auto?: boolean;
+  /** Largest amount (minor units of `currency`) the user confirmed with this answer; bounds automatic answers. */
+  maxAmountMinor?: number;
+  /** Currency of `maxAmountMinor`; only rupee ('INR') amounts are recorded. */
+  currency?: string;
 };
 
 export type OpenInvoice = { doctype: string; name: string; outstandingMinor: number; dueDate: string };

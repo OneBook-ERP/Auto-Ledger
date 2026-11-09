@@ -57,7 +57,14 @@ export type AfterCycleDeps = {
    * The "may already be booked" check (warn only, src/ingest/dupCheck.ts). Runs only when ERPNext answered
    * during the cycle, after Home is invalidated; a failure is swallowed and never blocks the cycle.
    */
-  checkDuplicates?: () => Promise<void>;
+  checkDuplicates?: () => Promise<boolean | void>;
+  /**
+   * Automatic answers for confirmed patterns (src/ingest/autoApply.ts), after the duplicate check so its warnings
+   * are fresh. Runs only when that check really ran in this cycle (it resolved true), inside the cycle, so never
+   * next to another step.
+   * Resolves to how many items were answered; a failure is swallowed.
+   */
+  autoApply?: () => Promise<number | void>;
 };
 
 /**
@@ -81,11 +88,24 @@ export async function afterCycle(summary: CycleOutcome | null, d: AfterCycleDeps
     } catch {
       // best effort
     }
-    if (d.checkDuplicates && summary?.erpReached === true && !summary.skipped) {
+    const reached = summary?.erpReached === true && !summary.skipped;
+    let dupChecked = false;
+    if (d.checkDuplicates && reached) {
       try {
-        await d.checkDuplicates();
+        dupChecked = (await d.checkDuplicates()) === true;
       } catch {
         // warnings are best effort
+      }
+    }
+    if (d.autoApply && reached && dupChecked) {
+      try {
+        const n = await d.autoApply();
+        if (n) {
+          const r = d.invalidateHome();
+          if (r && typeof (r as Promise<unknown>).then === 'function') (r as Promise<unknown>).catch(() => undefined);
+        }
+      } catch {
+        // automatic answers are best effort; the items wait in the Inbox
       }
     }
   }

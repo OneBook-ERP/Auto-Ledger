@@ -8,12 +8,14 @@ export interface ChoiceRowProps {
   /** 'radio' for pick-one lists, 'checkbox' for on/off rows. */
   role?: 'radio' | 'checkbox';
   disabled?: boolean;
+  testID?: string;
 }
 
 /** Full-width pick row with a leading mark. */
-export function ChoiceRow({ title, subtitle, selected, onPress, role = 'radio', disabled }: ChoiceRowProps) {
+export function ChoiceRow({ title, subtitle, selected, onPress, role = 'radio', disabled, testID }: ChoiceRowProps) {
   return (
     <Pressable
+      testID={testID}
       onPress={onPress}
       disabled={disabled}
       accessibilityRole={role}

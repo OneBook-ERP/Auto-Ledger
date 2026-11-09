@@ -7,7 +7,10 @@ import { logoutSession, type Session } from '../erp/auth';
 import type { ErpClient } from '../erp/client';
 import type { Repo, SqlDriver } from '../data/repo';
 import { NEEDS_LOGIN_SINCE_KEY } from '../ingest/drain';
+import { runAutoApply } from '../ingest/autoApply';
 import { dupCheckWith } from '../ingest/dupCheck';
+import { makeInboxErp } from '../inbox/erp';
+import { runPlan } from '../outbox/runner';
 import { runForegroundCycle, type CycleSummary } from '../ingest/pipeline';
 import { getAppRepo } from './appRepo';
 import { TEMPLATES_URL } from './config';
@@ -150,7 +153,15 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
             checkDuplicates: async () => {
               const r = repoRef.current;
               const s = sessionRef.current;
-              if (r && s && (await siteMatches(r, s.siteUrl))) await dupCheckWith(r, buildErp(s, { fetchImpl }).client)();
+              if (r && s && (await siteMatches(r, s.siteUrl))) return dupCheckWith(r, buildErp(s, { fetchImpl }).client)();
+              return false;
+            },
+            // Answers for patterns the user made automatic: signed in, same site, after the check above.
+            autoApply: async () => {
+              const r = repoRef.current;
+              const s = sessionRef.current;
+              if (!r || !s || !(await siteMatches(r, s.siteUrl))) return 0;
+              return (await runAutoApply({ repo: r, erp: makeInboxErp(buildErp(s, { fetchImpl }).client), runPlan, now })).done.length;
             },
           }),
       }),

@@ -151,8 +151,28 @@ describe('mappings, rules, outbox, settings', () => {
     await r.saveRule({ ...a, hits: 2 });
     const got = await r.listRules();
     expect(got).toHaveLength(2);
-    expect(got.find((x) => x.matchKey === 'k1')).toEqual({ ...a, hits: 2 });
-    expect(got.find((x) => x.matchKey === 'k2')).toEqual(b);
+    expect(got.find((x) => x.matchKey === 'k1')).toEqual({ ...a, hits: 2, auto: false });
+    expect(got.find((x) => x.matchKey === 'k2')).toEqual({ ...b, auto: false });
+  });
+  it('deleteRule removes one rule by its pattern and nothing else', async () => {
+    const r = await mk();
+    await r.saveRule({ matchKey: 'k1', action: 'personal', hits: 1, lastUsed: 1 });
+    await r.saveRule({ matchKey: 'k2', action: 'ignore', hits: 1, lastUsed: 1 });
+    await r.deleteRule('k1');
+    await r.deleteRule('missing');
+    expect((await r.listRules()).map((x) => x.matchKey)).toEqual(['k2']);
+  });
+  it('rules round-trip the trust fields (automatic switch, largest confirmed amount, its currency)', async () => {
+    const r = await mk();
+    const a: Rule = { matchKey: 'm:out:facebook', action: 'expense', account: 'Ads', hits: 3, lastUsed: 5, auto: true, maxAmountMinor: 123456, currency: 'INR' };
+    await r.saveRule(a);
+    expect(await r.listRules()).toEqual([a]);
+    await r.saveRule({ ...a, auto: false, maxAmountMinor: undefined, currency: undefined });
+    const [back] = await r.listRules();
+    expect(back.auto).toBe(false);
+    expect(back.maxAmountMinor).toBeUndefined();
+    expect(back.currency).toBeUndefined();
+    expect('maxAmountMinor' in back).toBe(false);
   });
   it('outbox: oldest pending first, markOutbox patches', async () => {
     const r = await mk();
@@ -321,10 +341,30 @@ describe('migrations', () => {
     await d.exec(`INSERT INTO settings (key, value) VALUES (?,?)`, ['k', 'v']);
     await migrate(d);
     expect(await d.all<{ version: number }>('SELECT version FROM schema_version')).toEqual([{ version: SCHEMA_VERSION }]);
-    expect(SCHEMA_VERSION).toBe(2);
+    expect(SCHEMA_VERSION).toBe(3);
     expect(await d.all("SELECT name FROM sqlite_master WHERE name='idx_pending_state'")).toHaveLength(1);
     expect(await d.all('SELECT id FROM pending_txn')).toEqual([{ id: 't1' }]);
     expect(await d.all('SELECT value FROM settings')).toEqual([{ value: 'v' }]);
+  });
+  it('v2 -> v3 keeps existing rules, not automatic and without an amount, and they round-trip the new fields', async () => {
+    const d = createTestDriver();
+    await migrate(d, 2);
+    await d.exec(
+      'INSERT INTO rule (match_key, action, party, account, hits, last_used) VALUES (?,?,?,?,?,?)',
+      ['m:out:facebook', 'expense', null, 'Ads', 7, 9],
+    );
+    await d.exec(
+      'INSERT INTO rule (match_key, action, party, account, hits, last_used) VALUES (?,?,?,?,?,?)',
+      ['cp:out:s', 'supplier_payment', JSON.stringify({ doctype: 'Supplier', name: 'S' }), null, 1, 2],
+    );
+    const r = await createRepo(d);
+    expect(await d.all<{ version: number }>('SELECT version FROM schema_version')).toEqual([{ version: 3 }]);
+    expect(await r.listRules()).toEqual([
+      { matchKey: 'cp:out:s', action: 'supplier_payment', party: { doctype: 'Supplier', name: 'S' }, hits: 1, lastUsed: 2, auto: false },
+      { matchKey: 'm:out:facebook', action: 'expense', account: 'Ads', hits: 7, lastUsed: 9, auto: false },
+    ]);
+    await r.saveRule({ matchKey: 'm:out:facebook', action: 'expense', account: 'Ads', hits: 8, lastUsed: 10, auto: true, maxAmountMinor: 5000, currency: 'INR' });
+    expect((await r.listRules())[1]).toEqual({ matchKey: 'm:out:facebook', action: 'expense', account: 'Ads', hits: 8, lastUsed: 10, auto: true, maxAmountMinor: 5000, currency: 'INR' });
   });
   it('migrate is idempotent', async () => {
     const d = createTestDriver();

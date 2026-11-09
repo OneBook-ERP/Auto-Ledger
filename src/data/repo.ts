@@ -33,6 +33,8 @@ export interface Repo {
   listMappings(): Promise<AccountMapping[]>;
   saveRule(r: Rule): Promise<void>;
   listRules(): Promise<Rule[]>;
+  /** Removes the rule of one pattern (no-op when absent). Documents already created are not touched. */
+  deleteRule(matchKey: string): Promise<void>;
   /** Inserts `op` and, in the same transaction, marks every OTHER pending item of op.txnId 'superseded'. */
   enqueue(op: OutboxOp): Promise<void>;
   nextOutbox(): Promise<OutboxOp | null>;
@@ -221,20 +223,31 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
     },
     async saveRule(r) {
       await d.exec(
-        `INSERT INTO rule (match_key, action, party, account, hits, last_used) VALUES (?,?,?,?,?,?)
+        `INSERT INTO rule (match_key, action, party, account, hits, last_used, auto, max_amount_minor, currency)
+         VALUES (?,?,?,?,?,?,?,?,?)
          ON CONFLICT(match_key) DO UPDATE SET action=excluded.action, party=excluded.party,
-           account=excluded.account, hits=excluded.hits, last_used=excluded.last_used`,
-        [r.matchKey, r.action, r.party ? JSON.stringify(r.party) : null, r.account ?? null, r.hits, r.lastUsed],
+           account=excluded.account, hits=excluded.hits, last_used=excluded.last_used, auto=excluded.auto,
+           max_amount_minor=excluded.max_amount_minor, currency=excluded.currency`,
+        [r.matchKey, r.action, r.party ? JSON.stringify(r.party) : null, r.account ?? null, r.hits, r.lastUsed,
+          r.auto ? 1 : 0, r.maxAmountMinor ?? null, r.currency ?? null],
       );
     },
+    async deleteRule(matchKey) {
+      await d.exec('DELETE FROM rule WHERE match_key = ?', [matchKey]);
+    },
     async listRules() {
-      const rows = await d.all<{ match_key: string; action: Rule['action']; party: string | null; account: string | null; hits: number; last_used: number }>(
-        'SELECT * FROM rule ORDER BY match_key');
+      const rows = await d.all<{
+        match_key: string; action: Rule['action']; party: string | null; account: string | null; hits: number; last_used: number;
+        auto: number | null; max_amount_minor: number | null; currency: string | null;
+      }>('SELECT match_key, action, party, account, hits, last_used, auto, max_amount_minor, currency FROM rule ORDER BY match_key');
       return rows.map((r) => {
-        const rule: Rule = { matchKey: r.match_key, action: r.action, hits: r.hits, lastUsed: r.last_used };
+        // `auto` is always explicit: a rule from before the trust fields (NULL) is not automatic.
+        const rule: Rule = { matchKey: r.match_key, action: r.action, hits: r.hits, lastUsed: r.last_used, auto: r.auto === 1 };
         const party = r.party ? safeParse<Rule['party'] | null>(r.party, null) : null;
         if (party) rule.party = party;
         if (r.account !== null) rule.account = r.account;
+        if (r.max_amount_minor !== null) rule.maxAmountMinor = r.max_amount_minor;
+        if (r.currency !== null) rule.currency = r.currency;
         return rule;
       });
     },

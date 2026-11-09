@@ -1,6 +1,7 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { Pressable, Text, View, useColorScheme } from 'react-native';
+import { AUTO_NEW_COUNT_KEY } from '../../src/ingest/autoApply';
 import { unrecognisedAccountKey } from '../../src/ingest/pipeline';
 import { useInboxDeps } from '../../src/inbox/deps';
 import { useInboxData, useTapGuard } from '../../src/inbox/hooks';
@@ -9,7 +10,7 @@ import { useFlowStore } from '../../src/inbox/store';
 import type { ChipView } from '../../src/inbox/suggestions';
 import type { ActivityPeriod } from '../../src/state/activityModel';
 import {
-  Banner, Chip, DEFAULT_FILTERS, EmptyState, FilterSheet, Gap, Icon, Pill, RefreshList, Row, Screen, SearchField, Txt, TxnRow, activeFilterCount,
+  Banner, Button, Chip, DEFAULT_FILTERS, EmptyState, FilterSheet, Gap, GroupCard, Icon, Pill, RefreshList, Row, Screen, SearchField, Txt, TxnRow, activeFilterCount,
   type ActivityFilters,
 } from '../../src/ui';
 
@@ -18,6 +19,8 @@ export const EMPTY_TITLE = 'No transactions to classify';
 /** Rows shown at first and added each time the end of the list is reached. */
 export const PAGE_ROWS = 50;
 export const NO_MATCH_MESSAGE = 'Nothing matches. Try a different search or period.';
+/** Group cards shown before "Show more groups". */
+export const GROUPS_SHOWN = 3;
 const PERIODS: { key: ActivityPeriod; label: string }[] = [
   { key: 'this_month', label: 'This month' },
   { key: 'last_month', label: 'Last month' },
@@ -81,8 +84,25 @@ export default function Inbox() {
   useEffect(() => setRowLimit(PAGE_ROWS), [filter]);
   const items = useMemo<InboxItem[]>(() => (model ? pageItems(model.sections, rowLimit) : []), [model, rowLimit]);
   const open = useCallback((id: string) => tap(() => router.push({ pathname: '/txn/[id]', params: { id } })), [tap, router]);
+  const [allGroups, setAllGroups] = useState(false);
+  const groups = model?.groups ?? [];
+  const shownGroups = allGroups ? groups : groups.slice(0, GROUPS_SHOWN);
+  // The bulk screen shows the same items as the card: same pattern, same search and filters.
+  const openGroup = (key: string) => tap(() => router.push({ pathname: '/txn/bulk', params: { key, filter: JSON.stringify(filter) } }));
   const nFilters = activeFilterCount(filters);
   const filtersLabel = nFilters ? `Filters (${nFilters})` : 'Filters';
+
+  const [hideAutoFailed, setHideAutoFailed] = useState(false);
+  const autoFailed = model?.autoFailed ?? [];
+  const seenAuto = async (then?: () => void) => {
+    try {
+      await repo.setSetting(AUTO_NEW_COUNT_KEY, '0');
+    } catch {
+      // the notice may come back once; nothing else depends on it
+    }
+    then?.();
+    await reload().catch(() => undefined);
+  };
 
   const dismissAll = async (last4s: string[]) => {
     await Promise.all(last4s.map((l) => repo.deleteSetting(unrecognisedAccountKey(l))));
@@ -132,6 +152,25 @@ export default function Inbox() {
         header={
           <View>
             {flash ? <Banner tone="warn" message={flash} actionLabel="Dismiss" onAction={() => useFlowStore.getState().setFlash(null)} testID="flash" /> : null}
+            {model?.autoDoneText ? (
+              <Banner
+                tone="ok" message={model.autoDoneText}
+                actionLabel="See Activity" onAction={() => void seenAuto(() => router.navigate('/(tabs)/activity'))}
+                secondaryLabel="Dismiss" onSecondary={() => void seenAuto()}
+                testID="auto-done" />
+            ) : null}
+            {autoFailed.length && !hideAutoFailed ? (
+              <Banner
+                tone="warn"
+                title={autoFailed.length === 1 ? '1 payment was not done automatically' : `${autoFailed.length} payments were not done automatically`}
+                message={[
+                  ...autoFailed.slice(0, 3).map((f) => f.text),
+                  autoFailed.length > 3 ? `And ${autoFailed.length - 3} more, marked in the list.` : '',
+                  'They wait here. Open each one to answer it.',
+                ].filter(Boolean).join('\n\n')}
+                actionLabel="Dismiss" onAction={() => setHideAutoFailed(true)}
+                testID="auto-failed" />
+            ) : null}
             {model?.unreadText ? (
               <Banner tone="warn" message={model.unreadText} actionLabel="Open Settings" onAction={() => router.navigate('/(tabs)/settings')} testID="unread" />
             ) : null}
@@ -146,6 +185,22 @@ export default function Inbox() {
               <EmptyState title={EMPTY_TITLE} message="When a bank message arrives, it shows up here with one question: what was this for? Pull down to check for new messages." />
             ) : null}
             {model?.noMatch ? <Text className="px-2 py-8 text-center text-base text-muted dark:text-muted-dark">{NO_MATCH_MESSAGE}</Text> : null}
+            {shownGroups.length ? (
+              <View testID="groups" className="pt-1">
+                <Txt variant="section" header>Similar payments</Txt>
+                <Gap size={2} />
+                {shownGroups.map((g) => (
+                  <GroupCard key={g.key} testID={`group-${g.key}`} title={g.title} answer={g.answer} onPress={() => openGroup(g.key)} />
+                ))}
+                {groups.length > GROUPS_SHOWN ? (
+                  <Button
+                    variant="quiet"
+                    label={allGroups ? 'Show fewer groups' : `Show ${groups.length - GROUPS_SHOWN} more group${groups.length - GROUPS_SHOWN === 1 ? '' : 's'}`}
+                    onPress={() => setAllGroups((v) => !v)}
+                  />
+                ) : null}
+              </View>
+            ) : null}
           </View>
         }
       />
