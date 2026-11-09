@@ -9,7 +9,7 @@ Package: `app.onebook.autoledger` (app.json). Permissions declared in `modules/s
 | Permission | Used for | Code |
 |---|---|---|
 | `RECEIVE_SMS` | A broadcast receiver is told when a new SMS arrives, including when the app is not running, so the transaction can be queued and a notification posted. | `SmsReceiver.kt` |
-| `READ_SMS` | One-off backfill: when the app is opened it can read the phone's SMS inbox for a period the user chooses (1 week by default, up to 6 months), from the configured bank senders only, to catch alerts that arrived while the phone was off or the app lacked permission. It does not read the inbox continuously and does not read other senders. | `SmsIngestModule.kt` (`backfill`), `Ingest.kt` (`MessageClassifier.keep`) |
+| `READ_SMS` | One-off backfill: when the app is opened it can read the phone's SMS inbox for a period the user chooses (1 week by default, up to 6 months or all time), from the configured bank senders only, to catch alerts that arrived while the phone was off or the app lacked permission. It does not read the inbox continuously and does not read other senders. | `SmsIngestModule.kt` (`backfill`), `Ingest.kt` (`MessageClassifier.keep`) |
 
 ## 2. Core functionality statement (paste into "core functionality")
 
@@ -68,7 +68,7 @@ These strings are the exported constants `DISCLOSURE_TITLE` and `DISCLOSURE_POIN
 
 ### Differences between the app copy and the Play text (report, do not paper over)
 
-1. Disclosure point 1 now covers the READ_SMS backfill: it states that only the senders you set up are read and only for the period you choose (1 week, 1 month, 3 months or 6 months; default 1 week), changeable in Settings. The setup step shows the choice under the disclosure before the Continue button.
+1. Disclosure point 1 now covers the READ_SMS backfill: it states that only the senders you set up are read and only for the period you choose (1 week, 1 month, 3 months, 6 months or all time; default 1 week; all time reads the newest 5,000 matching messages), changeable in Settings. The setup step shows the choice under the disclosure before the Continue button.
 2. Point 3 says OTPs are "never stored". True for the native queue and the database (`Ingest.kt` drops them before `append`). Not verified on hardware: spike report C.5 row "C.2 #3 OTP-like message: NOT VERIFIED ON DEVICE" (covered by JUnit classifier tests only).
 3. Point 4 says only the amount, date and a few details are kept. True of the database; the native queue briefly holds the full text of accepted messages until acknowledged (section 5). The Play text above says so explicitly; the app copy is a simplification. Consider "kept" -> "kept long term".
 4. "The last step" assumes the account step precedes permissions, which it does (`step 4 of 4`; accounts step before).

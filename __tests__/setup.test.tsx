@@ -217,11 +217,32 @@ describe('permissions step', () => {
     const app = await fakeApp();
     await render(<app.Wrap><Permissions /></app.Wrap>);
     expect(screen.getByText('How far back should we look?')).toBeTruthy();
-    for (const l of ['1 week', '1 month', '3 months', '6 months']) expect(screen.getByRole('button', { name: l })).toBeTruthy();
+    for (const l of ['1 week', '1 month', '3 months', '6 months', 'All time']) expect(screen.getByRole('button', { name: l })).toBeTruthy();
     expect(screen.getByRole('button', { name: '1 week' }).props.accessibilityState).toMatchObject({ selected: true });
     await press('3 months');
     await waitFor(async () => expect(await app.repo.getSetting('backfill_days')).toBe('90'));
     expect(screen.getByRole('button', { name: '3 months' }).props.accessibilityState).toMatchObject({ selected: true });
+  });
+
+  it('All time changes the disclosure to all messages from the set-up banks and saves 0', async () => {
+    const app = await fakeApp();
+    await render(<app.Wrap><Permissions /></app.Wrap>);
+    await press('All time');
+    expect(screen.getByText(/all your messages from the banks you set up/)).toBeTruthy();
+    await waitFor(async () => expect(await app.repo.getSetting('backfill_days')).toBe('0'));
+  });
+
+  it('says so when the all-time scan was cut off at 5,000 messages', async () => {
+    const app = await fakeApp();
+    await app.repo.saveMapping({ bankAccount: 'IDFC', glAccount: 'IDFC - ZP', kind: 'bank', senderIds: ['IDFCFB'], last4: ['6507'], modeOfPayment: 'Wire Transfer' });
+    (app.mocks.backfill as jest.Mock).mockResolvedValue({ messages: [], truncated: true });
+    await render(<app.Wrap><Permissions /></app.Wrap>);
+    await press('All time');
+    await press('Continue');
+    await screen.findByText('Receive SMS');
+    await press('Finish setup');
+    expect(await screen.findByText('No transactions found. Showing the newest 5,000 messages. Older ones were not read.')).toBeTruthy();
+    expect(app.mocks.backfill).toHaveBeenCalledWith(0, ['IDFCFB']);
   });
 
   it('disclosure no longer fixes the period at 7 days and says only your set up senders are read', async () => {
@@ -237,7 +258,7 @@ describe('permissions step', () => {
     const app = await fakeApp();
     await app.repo.saveMapping({ bankAccount: 'IDFC', glAccount: 'IDFC - ZP', kind: 'bank', senderIds: ['IDFCFB'], last4: ['6507'], modeOfPayment: 'Wire Transfer' });
     const fx = (require('../fixtures/sms/idfc.json') as { id: string; sender: string; body: string; receivedAt: number }[]).find((f) => f.id === 'idfc-001')!;
-    (app.mocks.backfill as jest.Mock).mockResolvedValue([{ sender: fx.sender, body: fx.body, receivedAt: fx.receivedAt }]);
+    (app.mocks.backfill as jest.Mock).mockResolvedValue({ messages: [{ sender: fx.sender, body: fx.body, receivedAt: fx.receivedAt }], truncated: false });
     await render(<app.Wrap><Permissions /></app.Wrap>);
     await press('1 month');
     await press('Continue');

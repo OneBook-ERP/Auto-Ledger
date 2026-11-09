@@ -36,7 +36,7 @@ import { correlate } from '../core/correlate';
 import { parseSms } from '../core/parser';
 import type { Repo } from '../data/repo';
 import type {
-  EngineHealth, PermissionState, QueuedSms, RawSms, TemplatesInfo,
+  BackfillScan, EngineHealth, PermissionState, QueuedSms, RawSms, TemplatesInfo,
 } from '../../modules/sms-ingest/src';
 import { loadTemplates } from './templates';
 import { drainOutbox, type DrainErp, type DrainResult } from './drain';
@@ -48,7 +48,7 @@ export type { DrainErp, DrainResult } from './drain';
 export interface NativeBridge {
   peek(): Promise<QueuedSms[]>;
   ack(ids: string[]): Promise<void>;
-  backfill(days: number, senderPatterns: string[]): Promise<RawSms[]>;
+  backfill(days: number, senderPatterns: string[]): Promise<BackfillScan>;
   setSenderPatterns(patterns: string[]): Promise<void>;
   getSenderPatterns(): Promise<string[]>;
   setTemplates(json: string): Promise<boolean>;
@@ -64,10 +64,13 @@ export type IngestResult = {
   inserted: number; enriched: number; duplicates: number; ignored: number; unrecognised: number;
   unmappedAccounts: string[]; errors: number;
 };
-export type BackfillResult = IngestResult & { backfillSkipped?: 'no_permission' | 'no_mappings' };
+/** `truncated` is set (true) only when the native scan stopped at its cap and older messages were not read. */
+export type BackfillResult = IngestResult & { backfillSkipped?: 'no_permission' | 'no_mappings'; truncated?: boolean };
 
 export const BACKFILL_DAYS_KEY = 'backfill_days';
-export const BACKFILL_CHOICES = [7, 30, 90, 180] as const;
+/** Offered windows in days; 0 means all time (no date limit). The one place this list is defined. */
+export const BACKFILL_CHOICES = [7, 30, 90, 180, 0] as const;
+export const ALL_TIME_DAYS = 0;
 export const DEFAULT_BACKFILL_DAYS = 7;
 const DAY_MS = 86_400_000;
 /** Alias of the default, kept so existing imports compile. */
@@ -75,7 +78,9 @@ export const BACKFILL_DAYS = DEFAULT_BACKFILL_DAYS;
 
 /** The saved window in days; anything that is not one of the offered choices means the default. */
 export async function getBackfillDays(repo: Pick<Repo, 'getSetting'>): Promise<number> {
-  const n = Number(await repo.getSetting(BACKFILL_DAYS_KEY));
+  const raw = await repo.getSetting(BACKFILL_DAYS_KEY);
+  if (raw === null || raw.trim() === '') return DEFAULT_BACKFILL_DAYS; // Number(null) is 0, which now means all time
+  const n = Number(raw);
   return (BACKFILL_CHOICES as readonly number[]).includes(n) ? n : DEFAULT_BACKFILL_DAYS;
 }
 export const UNRECOGNISED_COUNT_KEY = 'unrecognised_count';
@@ -281,7 +286,7 @@ export function ingest(deps: { repo: Repo; native: Pick<NativeBridge, 'peek' | '
 }
 
 /**
- * Reads the last N days (setting `backfill_days`, default 7) of the inbox for the configured senders and runs every message through the same
+ * Reads the last N days (setting `backfill_days`, default 7; 0 = all time, no date limit) of the inbox for the configured senders and runs every message through the same
  * path as live items (nothing is acked: backfilled SMS are not in the native queue; rawHash dedupe makes the
  * overlap harmless). Runs after setup and on every app open; records `backfill_done_at`. The full chosen window is read only with `fullWindow` (setup, Settings change) or when no
  * run was recorded yet; routine runs read max(7 days, days since the last run + 1) capped at the chosen window. Skips silently
@@ -296,15 +301,18 @@ export function ensureBackfill(deps: {
     const patterns = senderPatternsOf(await deps.repo.listMappings());
     if (!patterns.length) return { ...emptyResult(), backfillSkipped: 'no_mappings' as const };
     const chosen = await getBackfillDays(deps.repo);
+    const allTime = chosen === ALL_TIME_DAYS;
     let days = chosen;
     if (!opts?.fullWindow) {
       const doneAt = Number(await deps.repo.getSetting(BACKFILL_DONE_AT_KEY));
       if (Number.isFinite(doneAt) && doneAt > 0) {
         const sinceDone = Math.ceil(Math.max(0, deps.now() - doneAt) / DAY_MS) + 1; // +1 day overlap
-        days = Math.min(chosen, Math.max(DEFAULT_BACKFILL_DAYS, sinceDone));
+        const routine = Math.max(DEFAULT_BACKFILL_DAYS, sinceDone);
+        days = allTime ? routine : Math.min(chosen, routine); // all time is read only by setup and the Settings change
       }
     }
-    const raws = await deps.native.backfill(days, patterns);
+    const scan = await deps.native.backfill(days, patterns);
+    const raws = scan?.messages ?? [];
     const batch = new Batch(deps.repo, deps.now);
     await batch.load();
     for (const raw of oldestFirst(raws)) {
@@ -316,7 +324,7 @@ export function ensureBackfill(deps: {
       }
     }
     await deps.repo.setSetting(BACKFILL_DONE_AT_KEY, String(deps.now()));
-    return batch.result;
+    return scan?.truncated ? { ...batch.result, truncated: true } : batch.result;
   });
 }
 

@@ -90,7 +90,7 @@ function DebugReceiverScreen() {
     },
     {
       title: 'Backfill 7 days',
-      fn: async () => `backfill: ${(await sms.backfill(7, patterns())).length} messages`,
+      fn: async () => `backfill: ${(await sms.backfill(7, patterns())).messages.length} messages`,
     },
   ];
 

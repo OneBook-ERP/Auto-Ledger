@@ -1,7 +1,7 @@
 // Pure helpers for the setup wizard (spec 7.2): turning ERPNext Bank Accounts plus the user's choices into
 // AccountMappings. No I/O here.
 import type { AccountMapping } from '../core/types';
-import { DEFAULT_BACKFILL_DAYS } from '../ingest/pipeline';
+import { ALL_TIME_DAYS, BACKFILL_CHOICES, DEFAULT_BACKFILL_DAYS } from '../ingest/pipeline';
 
 export type AccountDraft = {
   bankAccount: string;
@@ -99,14 +99,29 @@ export const BACKFILL_OPTIONS: { days: number; label: string }[] = [
   { days: 30, label: '1 month' },
   { days: 90, label: '3 months' },
   { days: 180, label: '6 months' },
+  { days: ALL_TIME_DAYS, label: 'All time' },
 ];
+// Keep the labelled options and the pipeline choices in step (BACKFILL_CHOICES is the one definition).
+if (BACKFILL_OPTIONS.some((o, i) => o.days !== BACKFILL_CHOICES[i]) || BACKFILL_OPTIONS.length !== BACKFILL_CHOICES.length) {
+  throw new Error('BACKFILL_OPTIONS must match BACKFILL_CHOICES');
+}
+
+export const TRUNCATED_NOTICE = 'Showing the newest 5,000 messages. Older ones were not read.';
+
+/** First point of the SMS disclosure for the chosen window. Always limited to the senders the user set up. */
+export function windowDisclosure(days: number): string {
+  if (days === ALL_TIME_DAYS) {
+    return 'It reads all your messages from the banks you set up in the last step, however old, and never messages from anyone else. You can change it later in Settings.';
+  }
+  return 'It reads only text messages from the bank senders you set up in the last step, and only from the period you choose below. You can change it later in Settings.';
+}
 
 export const backfillLabel = (days: number): string =>
   (BACKFILL_OPTIONS.find((o) => o.days === days) ?? BACKFILL_OPTIONS.find((o) => o.days === DEFAULT_BACKFILL_DAYS)!).label;
 
 /** "Found N transactions" from the counts a backfill returns (everything it read, new or already known). */
-export function foundMessage(r: { inserted: number; enriched: number; duplicates: number }): string {
+export function foundMessage(r: { inserted: number; enriched: number; duplicates: number; truncated?: boolean }): string {
   const n = r.inserted + r.enriched + r.duplicates;
-  if (n === 0) return 'No transactions found';
-  return `Found ${n} ${n === 1 ? 'transaction' : 'transactions'}`;
+  const base = n === 0 ? 'No transactions found' : `Found ${n} ${n === 1 ? 'transaction' : 'transactions'}`;
+  return r.truncated ? `${base}. ${TRUNCATED_NOTICE}` : base;
 }

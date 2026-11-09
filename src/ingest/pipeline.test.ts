@@ -44,6 +44,7 @@ class FakeNative implements NativeBridge {
   perm: PermissionState = { receive: true, read: true, notifications: true };
   backfillCalls: [number, string[]][] = [];
   failAck = 0;
+  truncated = false;
   log: string[] = [];
   private seq = 0;
 
@@ -62,7 +63,7 @@ class FakeNative implements NativeBridge {
   async backfill(days: number, senderPatterns: string[]) {
     this.log.push('backfill');
     this.backfillCalls.push([days, senderPatterns]);
-    return this.inbox.map((r) => ({ ...r }));
+    return { messages: this.inbox.map((r) => ({ ...r })), truncated: this.truncated };
   }
   async setSenderPatterns(p: string[]) { this.log.push('setSenderPatterns'); this.patterns = [...p]; }
   async getSenderPatterns() { return this.patterns ?? []; }
@@ -483,7 +484,7 @@ describe('ensureBackfill', () => {
     await repo.setSetting('backfill_days', '180');
     await ensureBackfill(deps, { fullWindow: true });
     expect(native.backfillCalls.map((c) => c[0])).toEqual([90, 7, 7, 180]);
-    expect(BACKFILL_CHOICES).toEqual([7, 30, 90, 180]);
+    expect(BACKFILL_CHOICES).toEqual([7, 30, 90, 180, 0]);
     expect(DEFAULT_BACKFILL_DAYS).toBe(7);
     expect(BACKFILL_DAYS_KEY).toBe('backfill_days');
   });
@@ -498,6 +499,39 @@ describe('ensureBackfill', () => {
     await ensureBackfill({ ...deps, now: () => NOW + 500 * DAY }); // long gap, capped
     await ensureBackfill(deps, { fullWindow: true });
     expect(native.backfillCalls.map((c) => c[0])).toEqual([90, 7, 22, 90, 90]);
+  });
+
+  it('a missing or blank setting is the default 7 days, not all time', async () => {
+    const { deps, native, repo } = await setup();
+    await ensureBackfill(deps, { fullWindow: true });
+    await repo.setSetting('backfill_days', '');
+    await ensureBackfill(deps, { fullWindow: true });
+    expect(native.backfillCalls.map((c) => c[0])).toEqual([7, 7]);
+  });
+
+  it('setting 0 (all time) calls native.backfill(0, patterns) for a full-window run', async () => {
+    const { deps, native, repo } = await setup();
+    await repo.setSetting('backfill_days', '0');
+    await ensureBackfill(deps, { fullWindow: true });
+    expect(native.backfillCalls).toEqual([[0, ['IDFCFB']]]);
+  });
+
+  it('routine runs never read all time: after a run they read the short window or the days since the last run', async () => {
+    const { deps, native, repo } = await setup();
+    const DAY = 86_400_000;
+    await repo.setSetting('backfill_days', '0');
+    await ensureBackfill(deps, { fullWindow: true });
+    await ensureBackfill({ ...deps, now: () => NOW + HOUR });
+    await ensureBackfill({ ...deps, now: () => NOW + HOUR + 20 * DAY + HOUR });
+    expect(native.backfillCalls.map((c) => c[0])).toEqual([0, 7, 22]);
+  });
+
+  it('reports truncated only when the native scan hit its cap', async () => {
+    const { deps, native } = await setup();
+    native.inbox = [fx('idfc-001')];
+    expect(await ensureBackfill(deps)).not.toHaveProperty('truncated');
+    native.truncated = true;
+    expect(await ensureBackfill(deps)).toMatchObject({ truncated: true });
   });
 
   it('a larger window after items were answered creates no duplicates and reopens nothing', async () => {

@@ -105,35 +105,39 @@ class SmsIngestModule : Module() {
     }
   }
 
-  private fun backfill(days: Int, senderPatterns: List<String>): List<Map<String, Any>> {
+  private fun backfill(days: Int, senderPatterns: List<String>): Map<String, Any> {
     val ctx = context
-    if (!Perms.granted(ctx, Manifest.permission.READ_SMS)) return emptyList()
+    val none = mapOf<String, Any>("messages" to emptyList<Map<String, Any>>(), "truncated" to false)
+    if (!Perms.granted(ctx, Manifest.permission.READ_SMS)) return none
     val filter = SenderFilter(senderPatterns)
-    if (!filter.hasPatterns || days <= 0) return emptyList()
+    // days == 0 is all time (no date bound); only a negative window or no sender patterns reads nothing.
+    if (!filter.hasPatterns || !BackfillQuery.reads(days)) return none
     val loaded = EngineProvider.get(ctx)
     val classifier = MessageClassifier(filter, loaded.engine, loaded.usable)
-    val since = System.currentTimeMillis() - days.coerceAtMost(3650).toLong() * 86_400_000L
+    val bounds = BackfillQuery.bounds(days, System.currentTimeMillis(), Telephony.Sms.DATE)
     val out = ArrayList<Map<String, Any>>()
+    var truncated = false
     val cols = arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE)
     ctx.contentResolver.query(
       Telephony.Sms.Inbox.CONTENT_URI,
       cols,
-      "${Telephony.Sms.DATE} >= ?",
-      arrayOf(since.toString()),
+      bounds.selection,
+      bounds.args,
       "${Telephony.Sms.DATE} DESC",
     )?.use { c ->
-      while (out.size < BACKFILL_CAP && c.moveToNext()) {
+      while (c.moveToNext()) {
         val sender = c.getString(0) ?: continue
         val body = c.getString(1) ?: continue
         val date = c.getLong(2)
         if (!classifier.keep(sender, body)) continue
+        // One more kept message beyond the cap proves older ones exist.
+        if (out.size >= BackfillQuery.CAP) {
+          truncated = true
+          break
+        }
         out.add(mapOf("sender" to sender, "body" to body, "receivedAt" to date.toDouble()))
       }
     }
-    return out
-  }
-
-  companion object {
-    private const val BACKFILL_CAP = 5000
+    return mapOf("messages" to out, "truncated" to truncated)
   }
 }
