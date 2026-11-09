@@ -306,7 +306,8 @@ describe('party step', () => {
     await fireEvent.press(row);
     await fireEvent.press(screen.getByRole('button', { name: 'Continue' }));
     expect(useFlowStore.getState().drafts[t.id].party).toEqual({ doctype: 'Customer', name: 'CUST-0011', displayName: 'Company Eleven' });
-    expect(lastPush()).toEqual({ pathname: '/txn/confirm', params: { id: t.id } });
+    // An existing customer's advance asks which Sales Order it is for next (wave 2, A3).
+    expect(lastPush()).toEqual({ pathname: '/txn/order', params: { id: t.id } });
   });
 
   it('create new: name prefilled, required fields asked, and the plan gets a create_party step', async () => {

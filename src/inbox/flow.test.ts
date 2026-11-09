@@ -1,6 +1,7 @@
 import { PlanError } from '../core/plan';
 import {
-  PLAUSIBLE_INR_PER_UNIT, buildNewParty, foreignAmountCheck, defaultAllocation, effectiveAmountMinor, parseRupees, planFor, toPaise, validateAllocations, validateNewParty,
+  ORDERS_OVER_PAYMENT, PLAUSIBLE_INR_PER_UNIT, buildNewParty, chooseOrders, foreignAmountCheck, defaultAllocation, effectiveAmountMinor, parseRupees, planFor,
+  skipOrders, toPaise, validateAllocations, validateNewParty,
 } from './flow';
 import { BANK, CARD, txnFrom } from './testData';
 
@@ -118,6 +119,56 @@ describe('allocations', () => {
     expect(validateAllocations(100_00, [inv('A', 60_00, 70_00)]).errors.A).toBe('More than the ₹60.00 still due on A.');
     expect(validateAllocations(100_00, [inv('A', 60_00, 0)]).errors.A).toBe('Enter an amount above zero.');
     expect(validateAllocations(100_00, []).total).toBe('Choose at least one invoice.');
+  });
+});
+
+describe('advance for a Sales Order (orders step)', () => {
+  const credit = txnFrom('idfc-006'); // ₹30,000.00 in
+  const acme = { doctype: 'Customer' as const, name: 'Acme Test Traders' };
+  const row = (name: string, remainingMinor: number, allocatedMinor: number) => ({ name, remainingMinor, allocatedMinor });
+
+  it('the flow keeps the selected orders: the choice and the plan carry them', () => {
+    const orders = [{ name: 'SAL-ORD-2026-2027-00004', allocatedMinor: 2_500_000 }];
+    const { plan, choice } = planFor(credit, { mapping: BANK, action: 'customer_advance', party: acme, orders }, settings);
+    expect(choice).toEqual({ type: 'customer_advance', party: acme, orders });
+    expect(plan.steps[0].body.references).toEqual([{ reference_doctype: 'Sales Order', reference_name: 'SAL-ORD-2026-2027-00004', allocated_amount: 25000 }]);
+  });
+  it('chooseOrders: a valid pick becomes the orders patch', () => {
+    const r = chooseOrders(credit.amountMinor, [row('SO-1', 2_000_000, 2_000_000), row('SO-2', 5_000_000, 1_000_000)]);
+    expect(r.check.ok).toBe(true);
+    expect(r.check.totalMinor).toBe(3_000_000);
+    expect(r.patch).toEqual({ orders: [{ name: 'SO-1', allocatedMinor: 2_000_000 }, { name: 'SO-2', allocatedMinor: 1_000_000 }] });
+  });
+  it('Skip, no order clears them: a plain advance', () => {
+    expect(skipOrders()).toEqual({ orders: [] });
+    const d = { mapping: BANK, action: 'customer_advance' as const, party: acme, orders: [{ name: 'SO-1', allocatedMinor: 100 }] };
+    const { plan, choice } = planFor(credit, { ...d, ...skipOrders() }, settings);
+    expect(choice).toEqual({ type: 'customer_advance', party: acme });
+    expect(plan.steps[0].body.references).toBeUndefined();
+  });
+  it('allocations above the payment are rejected with a plain message', () => {
+    expect(ORDERS_OVER_PAYMENT).toBe('That is more than this payment. Lower the amount for an order.');
+    const r = chooseOrders(credit.amountMinor, [row('SO-1', 2_000_000, 2_000_000), row('SO-2', 2_000_000, 1_000_001)]);
+    expect(r.check.ok).toBe(false);
+    expect(r.check.total).toBe(ORDERS_OVER_PAYMENT);
+    expect(r.patch).toBeNull();
+    // exactly the payment is fine
+    expect(chooseOrders(credit.amountMinor, [row('SO-1', 2_000_000, 2_000_000), row('SO-2', 2_000_000, 1_000_000)]).check.ok).toBe(true);
+  });
+  it('more than an order still needs, zero, or nothing chosen is blocked per order', () => {
+    const over = chooseOrders(credit.amountMinor, [row('SO-1', 1_000_000, 1_000_001)]);
+    expect(over.patch).toBeNull();
+    expect(over.check.errors['SO-1']).toBe('More than the ₹10,000.00 left to pay on SO-1.');
+    expect(chooseOrders(credit.amountMinor, [row('SO-1', 1_000_000, 0)]).check.errors['SO-1']).toBe('Enter an amount above zero.');
+    const none = chooseOrders(credit.amountMinor, []);
+    expect(none.patch).toBeNull();
+    expect(none.check.total).toBe('Choose an order, or tap Skip if this is not for an order.');
+  });
+  it('allocation defaults to min(remaining, payment left) in paise', () => {
+    expect(defaultAllocation(3_000_000, 2_000_000, [])).toBe(2_000_000);
+    expect(defaultAllocation(3_000_000, 2_000_000, [2_000_000])).toBe(1_000_000);
+    expect(defaultAllocation(3_000_000, 2_000_000, [3_000_000])).toBe(0);
+    expect(defaultAllocation(3_000_001, 3_000_001, [])).toBe(3_000_001);
   });
 });
 
