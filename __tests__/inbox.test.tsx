@@ -225,6 +225,23 @@ describe('Inbox search and filters', () => {
   });
 });
 
+describe('Inbox with thousands of items', () => {
+  it('renders only the first page, then more on reaching the end; the count still says 3000', async () => {
+    const txns = Array.from({ length: 3000 }, (_, k) =>
+      txnFrom('idfc-006', { id: `t${k}`, rawHash: `h${k}`, receivedAt: 1000 + k, occurredOn: '2026-11-08' }));
+    const { Wrap } = await setup({ txns });
+    await render(<Wrap><Inbox /></Wrap>);
+    await screen.findByTestId('row-t2999');
+    expect(screen.getByTestId('count')).toHaveTextContent('3000 to answer');
+    const rendered = () => screen.queryAllByTestId(/^row-/).length;
+    expect(rendered()).toBeLessThanOrEqual(50);
+    expect(screen.queryByTestId('row-t2900')).toBeNull(); // beyond the first page of 50
+    await fireEvent(screen.getByTestId('inbox-list'), 'endReached');
+    await waitFor(() => expect(screen.getByTestId('inbox-list').props.data.filter((x: { type: string }) => x.type === 'row')).toHaveLength(100));
+    expect(rendered()).toBeLessThanOrEqual(100);
+  }, 60_000);
+});
+
 // ---------------------------------------------------------------- Transaction screen
 
 describe('Transaction screen', () => {

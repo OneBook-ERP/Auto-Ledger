@@ -25,7 +25,7 @@ export { DetailCard } from './DetailCard';
 export type { Detail } from './DetailCard';
 export { ToggleRow } from './ToggleRow';
 export { BackLink } from './BackLink';
-export { RefreshScroll } from './RefreshScroll';
+export { RefreshScroll, RefreshList } from './RefreshScroll';
 export { ActionSheet, SuggestionCard } from './ActionSheet';
 export type { ActionSheetItem } from './ActionSheet';
 export { confirmDialog, openExternal } from './dialogs';

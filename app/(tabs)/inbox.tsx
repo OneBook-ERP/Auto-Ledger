@@ -1,17 +1,22 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useDeferredValue, useMemo, useState } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { Pressable, Text, View, useColorScheme } from 'react-native';
 import { unrecognisedAccountKey } from '../../src/ingest/pipeline';
 import { useInboxDeps } from '../../src/inbox/deps';
 import { useInboxData, useTapGuard } from '../../src/inbox/hooks';
+import { pageItems, type InboxItem, type InboxRow } from '../../src/inbox/model';
 import { useFlowStore } from '../../src/inbox/store';
+import type { ChipView } from '../../src/inbox/suggestions';
 import type { ActivityPeriod } from '../../src/state/activityModel';
 import {
-  Banner, Chip, DEFAULT_FILTERS, EmptyState, FilterSheet, Gap, Icon, Pill, RefreshScroll, Row, Screen, SearchField, Stack, Txt, TxnRow, activeFilterCount,
+  Banner, Chip, DEFAULT_FILTERS, EmptyState, FilterSheet, Gap, Icon, Pill, RefreshList, Row, Screen, SearchField, Txt, TxnRow, activeFilterCount,
   type ActivityFilters,
 } from '../../src/ui';
 
+const NO_CHIP: ChipView = { text: 'Who is this?', tone: 'plain' };
 export const EMPTY_TITLE = 'No transactions to classify';
+/** Rows shown at first and added each time the end of the list is reached. */
+export const PAGE_ROWS = 50;
 export const NO_MATCH_MESSAGE = 'Nothing matches. Try a different search or period.';
 const PERIODS: { key: ActivityPeriod; label: string }[] = [
   { key: 'this_month', label: 'This month' },
@@ -19,6 +24,17 @@ const PERIODS: { key: ActivityPeriod; label: string }[] = [
   { key: 'this_fy', label: 'This financial year' },
   { key: 'all', label: 'All time' },
 ];
+
+type ItemProps = { row: InboxRow; chip: ChipView; onOpen: (id: string) => void };
+// A row redraws only when what it shows changes, not when the list is rebuilt after answering another item.
+const InboxItemRow = memo(
+  function InboxItemRow({ row, chip, onOpen }: ItemProps) {
+    return <TxnRow testID={`row-${row.id}`} {...row} chip={chip} onPress={() => onOpen(row.id)} />;
+  },
+  (a, b) =>
+    a.onOpen === b.onOpen && a.chip.text === b.chip.text && a.chip.tone === b.chip.tone && a.row.id === b.row.id && a.row.title === b.row.title &&
+    a.row.subtitle === b.row.subtitle && a.row.amountText === b.row.amountText && a.row.kindIcon === b.row.kindIcon,
+);
 
 /**
  * Pending bank transactions, newest first. Reached by the tab and by the autoledger://inbox deep link: that
@@ -61,6 +77,10 @@ export default function Inbox() {
     }
   };
 
+  const [rowLimit, setRowLimit] = useState(PAGE_ROWS);
+  useEffect(() => setRowLimit(PAGE_ROWS), [filter]);
+  const items = useMemo<InboxItem[]>(() => (model ? pageItems(model.sections, rowLimit) : []), [model, rowLimit]);
+  const open = useCallback((id: string) => tap(() => router.push({ pathname: '/txn/[id]', params: { id } })), [tap, router]);
   const nFilters = activeFilterCount(filters);
   const filtersLabel = nFilters ? `Filters (${nFilters})` : 'Filters';
 
@@ -95,34 +115,40 @@ export default function Inbox() {
           </View>
         </>
       ) : null}
-      <RefreshScroll refreshing={refreshing} onRefresh={onRefresh} testID="inbox-list">
-        {flash ? <Banner tone="warn" message={flash} actionLabel="Dismiss" onAction={() => useFlowStore.getState().setFlash(null)} testID="flash" /> : null}
-        {model?.unreadText ? (
-          <Banner tone="warn" message={model.unreadText} actionLabel="Open Settings" onAction={() => router.navigate('/(tabs)/settings')} testID="unread" />
-        ) : null}
-        {model?.accountsNotice ? (
-          <Banner
-            compact tone="warn" message={model.accountsNotice.text}
-            actionLabel="Open Settings" onAction={() => router.navigate('/(tabs)/settings')}
-            secondaryLabel="Dismiss all" onSecondary={() => void dismissAll(model.accountsNotice?.last4s ?? [])}
-            testID="unknown-accounts" />
-        ) : null}
-        {model?.empty ? (
-          <EmptyState title={EMPTY_TITLE} message="When a bank message arrives, it shows up here with one question: what was this for? Pull down to check for new messages." />
-        ) : null}
-        {model?.noMatch ? <Text className="px-2 py-8 text-center text-base text-muted dark:text-muted-dark">{NO_MATCH_MESSAGE}</Text> : null}
-        {model?.sections.map((s) => (
-          <Stack key={s.title} gap={2}>
-            <Txt variant="section" header>{s.title}</Txt>
-            <Stack gap={1}>
-              {s.rows.map((r) => (
-                <TxnRow key={r.id} testID={`row-${r.id}`} {...r} onPress={() => tap(() => router.push({ pathname: '/txn/[id]', params: { id: r.id } }))} />
-              ))}
-            </Stack>
-            <Gap size={3} />
-          </Stack>
-        ))}
-      </RefreshScroll>
+      <RefreshList
+        testID="inbox-list"
+        data={items}
+        keyExtractor={(x) => x.key}
+        renderItem={({ item }) =>
+          item.type === 'header' ? (
+            <View className="pt-1"><Txt variant="section" header>{item.title}</Txt></View>
+          ) : (
+            <InboxItemRow row={item.row} chip={model?.chipOf(item.row.id) ?? NO_CHIP} onOpen={open} />
+          )
+        }
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+        onEndReached={() => setRowLimit((n) => (model && n < model.rows.length ? n + PAGE_ROWS : n))}
+        header={
+          <View>
+            {flash ? <Banner tone="warn" message={flash} actionLabel="Dismiss" onAction={() => useFlowStore.getState().setFlash(null)} testID="flash" /> : null}
+            {model?.unreadText ? (
+              <Banner tone="warn" message={model.unreadText} actionLabel="Open Settings" onAction={() => router.navigate('/(tabs)/settings')} testID="unread" />
+            ) : null}
+            {model?.accountsNotice ? (
+              <Banner
+                compact tone="warn" message={model.accountsNotice.text}
+                actionLabel="Open Settings" onAction={() => router.navigate('/(tabs)/settings')}
+                secondaryLabel="Dismiss all" onSecondary={() => void dismissAll(model.accountsNotice?.last4s ?? [])}
+                testID="unknown-accounts" />
+            ) : null}
+            {model?.empty ? (
+              <EmptyState title={EMPTY_TITLE} message="When a bank message arrives, it shows up here with one question: what was this for? Pull down to check for new messages." />
+            ) : null}
+            {model?.noMatch ? <Text className="px-2 py-8 text-center text-base text-muted dark:text-muted-dark">{NO_MATCH_MESSAGE}</Text> : null}
+          </View>
+        }
+      />
       <FilterSheet
         mode="inbox"
         visible={sheetOpen}

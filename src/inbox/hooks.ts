@@ -9,7 +9,7 @@ import type { Step } from './actions';
 import { useInboxDeps } from './deps';
 import type { FlowDraft } from './flow';
 import type { InboxFilter } from './inboxFilter';
-import { LAST_SYNCED_KEY, buildInboxModel, newestFirst, type InboxInputs, type InboxModel } from './model';
+import { LAST_SYNCED_KEY, buildInboxModel, createChipCache, newestFirst, type InboxInputs, type InboxModel } from './model';
 import { useFlowStore } from './store';
 import { createTapGuard } from './tapGuard';
 
@@ -18,7 +18,9 @@ const EMPTY: FlowDraft = {};
 
 export function useInboxData(filter?: InboxFilter) {
   const { repo, now } = useInboxDeps();
-  const [inputs, setInputs] = useState<Omit<InboxInputs, 'filter'> | null>(null);
+  const [inputs, setInputs] = useState<Omit<InboxInputs, 'filter' | 'chips'> | null>(null);
+  // Suggestions survive a reload: answering one item must not recompute them for all the others.
+  const [chips] = useState(createChipCache);
   const reload = useCallback(async () => {
     const [pending, created, rules, mappings, unread, flags, synced, queuedIds] = await Promise.all([
       repo.listPending('new'), repo.listPending('created'), repo.listRules(), repo.listMappings(),
@@ -30,14 +32,15 @@ export function useInboxData(filter?: InboxFilter) {
     const stale = flags.filter((f) => covered(f.key.slice(UNKNOWN_PREFIX.length)));
     await Promise.all(stale.map((f) => repo.deleteSetting(f.key)));
     const live = flags.filter((f) => !stale.includes(f));
+    chips.prune(new Set(pending.map((t) => t.id)));
     setInputs({
       pending, mappings, rules, createdCount: created.length, unreadCount: Number(unread) || 0,
       unknownAccounts: live.filter((f) => f.value !== '').map((f) => f.key.slice(UNKNOWN_PREFIX.length)),
       lastSyncedAt: synced ? Number(synced) || null : null, now: now(), queuedIds,
     });
-  }, [repo, now]);
+  }, [repo, now, chips]);
   // A changed search or filter only re-filters what is already loaded; nothing is read again.
-  const model = useMemo<InboxModel | null>(() => (inputs ? buildInboxModel({ ...inputs, filter }) : null), [inputs, filter]);
+  const model = useMemo<InboxModel | null>(() => (inputs ? buildInboxModel({ ...inputs, filter, chips }) : null), [inputs, filter, chips]);
   return { model, reload };
 }
 
