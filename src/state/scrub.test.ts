@@ -255,3 +255,78 @@ describe('scrubEvent: keys and contexts (T20A review)', () => {
     expect(out.contexts.trace.trace_id).toBe('UTR <ref>');
   });
 });
+
+describe('scrubber round 2 (T20A)', () => {
+  it.each([
+    // more money words, before and after the number
+    ['debit 500 credit 600 debited 7', 'debit <amount> credit <amount> debited <amount>'],
+    ['received 300, refunded 20, sent 15, deposited 9, withdrawn 4', 'received <amount>, refunded <amount>, sent <amount>, deposited <amount>, withdrawn <amount>'],
+    ['withdrawal of 42 and payment 77', 'withdrawal of <amount> and payment <amount>'],
+    ['500 received and 20 refunded', '<amount> received and <amount> refunded'],
+    // decimals with 3+ digits
+    ['rate 1234.567 applied', 'rate <amount> applied'],
+    // ISO dates and timestamps are kept
+    ['posted 2026-11-09 at 2026-11-09T10:30:00.123Z', 'posted 2026-11-09 at 2026-11-09T10:30:00.123Z'],
+    ['boot 2026-11-09T10:30:00+05:30', 'boot 2026-11-09T10:30:00+05:30'],
+    // two-part versions after a version word are kept
+    ['Android 15.1, iOS 18.2, v1.2, version 2.5, build 7.3', 'Android 15.1, iOS 18.2, v1.2, version 2.5, build 7.3'],
+    ['but fee 15.1 is an amount', 'but fee <amount> is an amount'],
+    // reverse-DNS names are code, not a site; a real host still is
+    ['com.autoledger.app crashed at erp.example.com', 'com.autoledger.app crashed at <site>'],
+    ['in /data/app/~~a==/com.autoledger.app-1/base.apk', 'in /data/app/~~a==/com.autoledger.app-1/base.apk'],
+  ])('%s', (input, want) => expect(scrubText(input)).toBe(want));
+
+  it('a URL inside a URL is scrubbed in one pass (idempotent)', () => {
+    const once = scrubText('see http://http://erp.zp.in/x?q=1 and https://a.example.app/https://b.example.app/y');
+    expect(once).toBe('see http://<site>//<site>/x and https://<site>/https://<site>/y');
+    expect(scrubText(once)).toBe(once);
+  });
+
+  it('keeps device/os/app context strings (versions, builds, identifiers, boot time) and frame code paths', () => {
+    const e = {
+      contexts: {
+        os: { name: 'Android', version: '15.1', build: 'AP3A.241105.008', kernel_version: '6.1.75' },
+        app: { app_build: '58', app_identifier: 'com.autoledger.app', app_version: '1.0' },
+        device: { boot_time: '2026-11-09T04:12:55Z', memory_size: 8000000000 },
+      },
+      exception: { values: [{ type: 'Error', value: 'x', stacktrace: { frames: [
+        { filename: '/data/app/~~QvKc9a1B2c3D4e5F6g==/com.autoledger.app-Xy12AbCd34EfGh==/base.apk', lineno: 1 },
+        { filename: 'app:///index.android.bundle', abs_path: 'app:///index.android.bundle', lineno: 2 },
+      ] } }] },
+    };
+    const out = scrubEvent(e) as any;
+    expect(out.contexts).toEqual(e.contexts);
+    expect(out.exception.values[0].stacktrace.frames).toEqual(e.exception.values[0].stacktrace.frames);
+    expect(scrubEvent(out)).toEqual(out);
+    // other contexts still get the number patterns
+    expect((scrubEvent({ contexts: { erp: { v: '15.1', when: '2026-11-09' } } }) as any).contexts.erp).toEqual({ v: '<amount>', when: '2026-11-09' });
+    // a frame "path" with whitespace is ordinary text
+    expect((scrubEvent({ extra: { filename: '/x paid 500' } }) as any).extra.filename).toBe('/x paid <amount>');
+  });
+
+  it('caps the scrubbed text per event (256 KB): later strings become <truncated>', () => {
+    const big = 'word '.repeat(1600); // 8000 chars
+    const extra: Record<string, string> = {};
+    for (let i = 0; i < 40; i++) extra[`k${i}`] = `${big}IDFB6292M4509651`;
+    const out = scrubEvent({ extra }) as any;
+    const vals = Object.values(out.extra) as string[];
+    expect(vals.filter((v) => v === '<truncated>').length).toBeGreaterThan(0);
+    expect(vals.filter((v) => v !== '<truncated>').length).toBeLessThanOrEqual(33);
+    expect(JSON.stringify(out)).not.toContain('IDFB6292M4509651');
+  });
+
+  const kb8 = (unit: string) => unit.repeat(Math.ceil(8192 / unit.length)).slice(0, 8192);
+  it.each([
+    ['500 strings of x', () => ({ extra: Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`k${i}`, kb8('x')])) })],
+    ['1,1,1,…', () => ({ message: kb8('1,'), extra: { a: kb8('1,'), b: kb8('Rs1,'), c: kb8('amount 1,') } })],
+    ['1.1.1…', () => ({ message: kb8('1.'), extra: { a: kb8('1.'), b: kb8('v1.1 '), c: kb8('1,1.1 ') } })],
+    ['long digit runs', () => ({ message: kb8('1'), extra: { a: kb8('1'), b: kb8('1 '), c: kb8('+1'), d: kb8('X1') } })],
+    ['token-ish runs', () => ({ message: kb8('a@'), extra: { a: kb8('a.'), b: kb8('a-a.'), c: kb8('XX'), d: kb8('a1'), e: kb8('http://'), f: kb8('2026-11-09') } })],
+  ])('a pathological event (%s) is scrubbed in under 1 s', (_l, make) => {
+    const e = make();
+    const t0 = Date.now();
+    const out = scrubEvent(e);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(out).not.toBeNull();
+  });
+});
