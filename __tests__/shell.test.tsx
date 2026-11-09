@@ -17,6 +17,7 @@ jest.mock('expo-router', () => {
   });
   return {
     useRouter: () => ({ push: mockPush, replace: mockReplace }),
+    useFocusEffect: (cb: () => void) => require('react').useEffect(cb, [cb]),
     Redirect: ({ href }: { href: string }) => <T testID="redirect">{href}</T>,
     Tabs,
   };
@@ -48,8 +49,9 @@ describe('tabs shell', () => {
     expect(screen.getByTestId('redirect').props.children).toBe('/(setup)/company');
   });
   it('placeholders have clear empty states', async () => {
-    await render(<Inbox />);
-    expect(screen.getByText('No transactions to classify')).toBeTruthy();
+    const { Wrap } = await fakeApp();
+    await render(<Wrap><Inbox /></Wrap>);
+    expect(await screen.findByText('No transactions to classify')).toBeTruthy();
     // Activity is no longer a placeholder: see src/state/activityScreen.test.tsx.
   });
 });
