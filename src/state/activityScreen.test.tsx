@@ -81,8 +81,10 @@ describe('Activity screen', () => {
     expect(screen.getByText('Ignored (1)')).toBeTruthy();
     const r2 = screen.getByTestId('activity-row-2');
     expect(within(r2).getByText('Vendor Two')).toBeTruthy();
-    expect(within(r2).getByText('-₹500.00')).toBeTruthy();
-    expect(within(r2).getByText('Payment Entry PE-2')).toBeTruthy();
+    expect(within(r2).getByText('\u2212₹500.00')).toBeTruthy();
+    expect(within(r2).getByText('Payment entry')).toBeTruthy();
+    expect(within(r2).getByText('PE-2')).toBeTruthy();
+    expect(within(r2).getByText('5 Nov 2026')).toBeTruthy();
     expect(within(r2).getByText('Draft')).toBeTruthy();
     expect(within(screen.getByTestId('activity-row-3')).getByText('Submitted')).toBeTruthy();
     expect(within(screen.getByTestId('activity-row-1')).getByText('+₹12,345.00')).toBeTruthy();

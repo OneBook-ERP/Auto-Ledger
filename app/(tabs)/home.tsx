@@ -1,8 +1,28 @@
 import { useRouter } from 'expo-router';
-import { Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useHome } from '../../src/home/useHome';
 import { MISMATCH_REASON } from '../../src/core/trust';
 import { Banner, Button, Card, EmptyState, Figure, Screen } from '../../src/ui';
+
+/** One line of text plus one action, for warnings that sit below the balance. */
+function CompactNotice({ tone, message, a11yPrefix, actionLabel, onAction, testID }: { tone: 'warn' | 'info'; message: string; a11yPrefix?: string; actionLabel?: string; onAction?: () => void; testID?: string }) {
+  const box = tone === 'warn' ? 'bg-warn-soft dark:bg-warn-soft-dark' : 'bg-accent-soft dark:bg-accent-soft-dark';
+  const txt = tone === 'warn' ? 'text-warn dark:text-warn-dark' : 'text-accent dark:text-accent-dark';
+  return (
+    <View
+      testID={testID}
+      accessibilityRole={tone === 'warn' ? 'alert' : undefined}
+      accessibilityLiveRegion="polite"
+      className={`mb-4 flex-row items-center rounded-xl px-4 py-1 ${box}`}>
+      <Text accessibilityLabel={a11yPrefix ? `${a11yPrefix}. ${message}` : undefined} className="flex-1 py-2 text-[15px] leading-5 text-ink dark:text-ink-dark">{message}</Text>
+      {actionLabel && onAction ? (
+        <Pressable onPress={onAction} accessibilityRole="button" accessibilityLabel={actionLabel} className="ml-3 min-h-[48px] justify-center">
+          <Text className={`text-base font-semibold ${txt}`}>{actionLabel}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
 
 export default function Home() {
   const router = useRouter();
@@ -46,24 +66,6 @@ export default function Home() {
   const single = m.bank.accounts[0];
   return (
     <Screen title="Home" subtitle={h.company ?? undefined} refresh={{ refreshing: h.refreshing, onRefresh: () => void h.refresh() }}>
-      {m.trust.incomplete && incompleteReason ? (
-        <Banner
-          testID="banner-incomplete"
-          tone="warn"
-          title="These figures may be incomplete"
-          message={`${incompleteReason}.`}
-          actionLabel={m.unclassifiedCount > 0 ? 'Answer messages' : undefined}
-          onAction={m.unclassifiedCount > 0 ? () => router.push('/(tabs)/inbox') : undefined}
-        />
-      ) : null}
-      {m.trust.mismatch ? (
-        <Banner
-          testID="banner-mismatch"
-          tone="info"
-          title="Balance differs from your latest bank message"
-          message="This may be because a draft is waiting or a message is unanswered."
-        />
-      ) : null}
       {expired ? (
         <Banner tone="warn" title="Your ERPNext sign-in has expired" message="These figures could not be refreshed. Your entries stay on this phone." actionLabel="Sign in again" onAction={signIn} />
       ) : null}
@@ -93,13 +95,30 @@ export default function Home() {
             caption={m.asOfLabel ?? undefined}
           />
         )}
+        {m.trustLine ? (
+          <Text testID="trust-line" className={`mt-2 text-sm ${m.trust.mismatch ? 'text-warn dark:text-warn-dark' : 'text-ok dark:text-ok-dark'}`}>{m.trustLine}</Text>
+        ) : null}
       </Card>
 
-      <View className="mb-4 flex-row gap-3">
-        <View className="flex-1 rounded-2xl border border-line bg-surface p-4 dark:border-line-dark dark:bg-surface-dark">
+      {m.trust.incomplete && incompleteReason ? (
+        <CompactNotice
+          testID="banner-incomplete"
+          tone="warn"
+          a11yPrefix="These figures may be incomplete"
+          message={`${incompleteReason}.`}
+          actionLabel={m.unclassifiedCount > 0 ? 'Answer messages' : undefined}
+          onAction={m.unclassifiedCount > 0 ? () => router.push('/(tabs)/inbox') : undefined}
+        />
+      ) : null}
+      {m.trust.mismatch ? (
+        <CompactNotice testID="banner-mismatch" tone="info" message="This may be because a draft is waiting or a message is unanswered." />
+      ) : null}
+
+      <View className="mb-4 flex-row items-stretch gap-3">
+        <View className="flex-1 justify-between rounded-2xl border border-line bg-surface p-4 dark:border-line-dark dark:bg-surface-dark">
           <Figure testID="to-receive" label={m.receivable.label} value={m.receivable.text} caption="After advances" />
         </View>
-        <View className="flex-1 rounded-2xl border border-line bg-surface p-4 dark:border-line-dark dark:bg-surface-dark">
+        <View className="flex-1 justify-between rounded-2xl border border-line bg-surface p-4 dark:border-line-dark dark:bg-surface-dark">
           <Figure testID="to-pay" label={m.payable.label} value={m.payable.text} caption="After advances" />
         </View>
       </View>

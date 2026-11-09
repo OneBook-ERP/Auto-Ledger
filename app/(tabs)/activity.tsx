@@ -6,12 +6,12 @@ import { NEEDS_LOGIN_SINCE_KEY } from '../../src/ingest/drain';
 import { bringBack, pollStatuses } from '../../src/ingest/statusPoller';
 import { undoTxn, type UndoResult } from '../../src/outbox/runner';
 import {
-  PAGE_SIZE, UNDO_CONFIRM_MESSAGE, canPutBack, canUndo, confirmText, docLines, docUrl, groupActivity, removalPlan, signedAmount, statusOf, titleOf,
+  PAGE_SIZE, UNDO_CONFIRM_MESSAGE, canPutBack, canUndo, confirmText, docUrl, groupActivity, removalPlan, statusOf, titleOf,
 } from '../../src/state/activityModel';
 import { siteMatches, useApp } from '../../src/state/AppProvider';
 import { useUiStore } from '../../src/state/store';
 import { useErpOps } from '../../src/state/useErpOps';
-import { ActivityRow, Banner, Button, EmptyState, Screen, SectionHeader, formatMoney, type ActivityAction } from '../../src/ui';
+import { ActivityRow, Banner, Button, EmptyState, Screen, SectionHeader, formatDate, friendlyDoctype, signedMoney, type ActivityAction } from '../../src/ui';
 
 export { UNDO_CONFIRM_MESSAGE };
 export const OFFLINE_MESSAGE = 'No connection. Nothing was removed yet.';
@@ -173,9 +173,9 @@ export default function Activity() {
         key={t.id}
         testID={`activity-row-${t.id}`}
         title={titleOf(t)}
-        amount={signedAmount(t, formatMoney)}
-        date={t.occurredOn}
-        docs={docLines(t.createdDocs)}
+        amount={signedMoney(t.amountMinor, t.currency, t.direction)}
+        date={formatDate(t.occurredOn)}
+        docs={t.createdDocs.map((d) => ({ kind: friendlyDoctype(d.doctype), id: d.name }))}
         status={{ label: s.label, tone: s.tone }}
         hint={s.hint}
         actions={actionsFor(t)}

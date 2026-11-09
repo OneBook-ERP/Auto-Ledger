@@ -1,4 +1,4 @@
-import { Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { Button } from './Button';
 import { StatusChip, type StatusTone } from './StatusChip';
 
@@ -8,9 +8,10 @@ export interface ActivityRowProps {
   title: string;
   /** Already formatted and signed, for example "+₹1,234.00". */
   amount: string;
+  /** Already formatted, for example "8 Nov 2026". */
   date: string;
-  /** "Payment Entry ACC-PAY-0001" lines, shown in a monospace face. */
-  docs: string[];
+  /** One line per ERPNext document: a friendly kind ("Payment entry") and its id in small monospace text. */
+  docs: { kind: string; id: string }[];
   status: { label: string; tone: StatusTone };
   /** Short explanation under the status, for example what "Not found" means. */
   hint?: string;
@@ -31,9 +32,12 @@ export function ActivityRow({ title, amount, date, docs, status, hint, actions, 
         <Text className="text-base font-semibold text-ink dark:text-ink-dark">{amount}</Text>
       </View>
       {docs.map((d) => (
-        <Text key={d} selectable className="mt-2 text-sm text-ink dark:text-ink-dark" style={{ fontFamily: 'monospace' }}>
-          {d}
-        </Text>
+        <View key={`${d.kind}-${d.id}`} className="mt-2 flex-row items-baseline">
+          <Text className="text-sm text-ink dark:text-ink-dark">{d.kind}</Text>
+          <Text selectable className="ml-2 text-xs text-muted dark:text-muted-dark" style={{ fontFamily: 'monospace' }}>
+            {d.id}
+          </Text>
+        </View>
       ))}
       <View className="mt-3">
         <StatusChip label={status.label} tone={status.tone} />
@@ -41,9 +45,24 @@ export function ActivityRow({ title, amount, date, docs, status, hint, actions, 
       {hint ? <Text className="mt-2 text-sm leading-5 text-muted dark:text-muted-dark">{hint}</Text> : null}
       {actions.length ? (
         <View className="mt-3 gap-2">
-          {actions.map((a) => (
-            <Button key={a.label} testID={a.testID} label={a.label} variant={a.variant ?? 'secondary'} onPress={a.onPress} disabled={busy} loading={busy && a.variant === 'danger'} />
-          ))}
+          {actions.map((a) =>
+            a.variant === 'danger' ? (
+              // Undo is quiet: error-coloured text, not a large outlined button.
+              <Pressable
+                key={a.label}
+                testID={a.testID}
+                onPress={a.onPress}
+                disabled={busy}
+                accessibilityRole="button"
+                accessibilityLabel={a.label}
+                accessibilityState={{ disabled: !!busy, busy: !!busy }}
+                className={`min-h-[48px] justify-center self-start ${busy ? 'opacity-50' : ''}`}>
+                <Text className="text-base font-semibold text-danger dark:text-danger-dark">{a.label}</Text>
+              </Pressable>
+            ) : (
+              <Button key={a.label} testID={a.testID} label={a.label} variant={a.variant ?? 'secondary'} onPress={a.onPress} disabled={busy} />
+            ),
+          )}
         </View>
       ) : null}
     </View>

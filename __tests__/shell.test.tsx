@@ -115,9 +115,12 @@ describe('settings', () => {
     expect(screen.getByText('https://atom.example.app')).toBeTruthy();
     expect(screen.getByText('a@b.co')).toBeTruthy();
     expect(await screen.findByText('Messages that could not be read: 3')).toBeTruthy();
+    expect(screen.getByText(/^AutoLedger version /)).toBeTruthy();
     expect(screen.getByText('IDFC Credit Card - ZP')).toBeTruthy();
     expect(screen.getByText('Card, ending 3455, 8129, from IDFCFB')).toBeTruthy();
     await waitFor(() => expect(screen.getByText('SMS reading: Working')).toBeTruthy());
+    await fireEvent.press(screen.getByRole('button', { name: 'Edit IDFC Credit Card - ZP' }));
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/(setup)/accounts', params: { account: 'IDFC Credit Card - ZP' } });
     await fireEvent.press(screen.getByRole('button', { name: 'Run setup again' }));
     expect(mockPush).toHaveBeenCalledWith('/(setup)/company');
 
@@ -126,6 +129,14 @@ describe('settings', () => {
     await waitFor(() => expect(app.value.signOut).toHaveBeenCalled());
     expect(mockReplace).toHaveBeenCalledWith('/');
     alert.mockRestore();
+  });
+
+  it('hides the unread-messages line when there are none', async () => {
+    reset(signedIn);
+    const app = await fakeApp();
+    await render(<app.Wrap><Settings /></app.Wrap>);
+    await waitFor(() => expect(screen.getByText('SMS reading: Working')).toBeTruthy());
+    expect(screen.queryByText(/could not be read/)).toBeNull();
   });
 
   it('offers "Grant SMS permission" when SMS is off, requests it and shows the new status', async () => {

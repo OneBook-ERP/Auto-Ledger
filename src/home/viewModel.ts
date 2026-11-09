@@ -48,11 +48,25 @@ export type HomeModel = {
   unclassifiedCount: number;
   smsBalanceMinor: number | null;
   trust: Trust;
+  /** Under the balance: whether the latest bank message agrees. Null with several bank accounts or no message balance. */
+  trustLine: string | null;
   /** "as of 1 hour ago" when the figures are from the cache. */
   asOfLabel: string | null;
   couldNotRefresh: boolean;
   lastSyncedText: string;
 };
+
+/** "IDFC First - Zen Pivot - IDFC First" -> "IDFC First, Zen Pivot": repeated parts (bank, company suffix) are shown once. */
+export function bankDisplayName(name: string): string {
+  const seen = new Set<string>();
+  const parts = name.split(' - ').map((p) => p.trim()).filter((p) => {
+    const k = p.toLowerCase();
+    if (!p || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return parts.length ? parts.join(', ') : name;
+}
 
 const inrText = (m: number | null) => (m === null || !Number.isFinite(m) ? DASH : formatInr(m));
 /** Whole rupees for the tiles, rounding half away from zero; a real but tiny amount is never shown as zero. */
@@ -91,7 +105,7 @@ export function buildHomeModel(i: HomeInputs): HomeModel {
   const accounts = banks.map((m) => {
     const raw = i.figures?.balances[m.glAccount];
     const minor = typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
-    return { name: m.bankAccount, glAccount: m.glAccount, minor, text: inrText(minor) };
+    return { name: bankDisplayName(m.bankAccount), glAccount: m.glAccount, minor, text: inrText(minor) };
   });
   const totalMinor = accounts.length > 1 && accounts.every((a) => a.minor !== null) ? accounts.reduce((s, a) => s + (a.minor as number), 0) : null;
   const total = accounts.length > 1 ? { minor: totalMinor, text: inrText(totalMinor) } : null;
@@ -157,6 +171,12 @@ export function buildHomeModel(i: HomeInputs): HomeModel {
     unclassifiedCount,
     smsBalanceMinor: pair?.sms ?? null,
     trust,
+    trustLine:
+      banks.length !== 1 || !pair
+        ? null
+        : pair.computed === pair.sms
+          ? 'Matches the balance in the latest bank message'
+          : `Last bank message shows ${formatInr(pair.sms)}`,
     asOfLabel: i.figuresStale && i.figuresAt !== null ? `as of ${relativeTime(i.now, i.figuresAt)}` : null,
     couldNotRefresh: i.figuresStale,
     lastSyncedText: i.lastSyncedAt === null ? 'Not synced yet' : `Last synced ${relativeTime(i.now, i.lastSyncedAt)}`,

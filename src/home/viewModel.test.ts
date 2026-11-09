@@ -1,5 +1,5 @@
 import type { AccountMapping, PendingTxn } from '../core/types';
-import { buildHomeModel, cycleCountsAsSynced, wholeText, parseHomeCache, relativeTime, serializeHomeCache, type HomeInputs } from './viewModel';
+import { bankDisplayName, buildHomeModel, cycleCountsAsSynced, wholeText, parseHomeCache, relativeTime, serializeHomeCache, type HomeInputs } from './viewModel';
 
 const acc = (n: string, kind: 'bank' | 'card', last4: string): AccountMapping => ({ bankAccount: n, glAccount: `${n} - GL`, kind, senderIds: ['X'], last4: [last4], modeOfPayment: 'Bank' });
 const txn = (o: Partial<PendingTxn>): PendingTxn => ({
@@ -165,7 +165,7 @@ describe('tiles', () => {
   it('rounds half away from zero and never shows a tiny amount as zero', () => {
     expect(wholeText(150)).toBe('₹2');
     expect(wholeText(149)).toBe('₹1');
-    expect(wholeText(-150)).toBe('-₹2');
+    expect(wholeText(-150)).toBe('\u2212₹2');
     expect(wholeText(49)).toBe('under ₹1');
     expect(wholeText(-49)).toBe('under ₹1');
     expect(wholeText(0)).toBe('₹0');
@@ -187,4 +187,19 @@ describe('cycleCountsAsSynced', () => {
     [{ ...ok, drain: { ran: 0, stoppedBecause: 'retry_later' as const } }, false], [{ ...ok, drain: { ran: 0, stoppedBecause: 'needs_login' as const } }, false],
     [{ ...ok, failedSteps: ['ingest' as const] }, false], [{ ...ok, skipped: 'site_mismatch' }, false], [{ failedSteps: [] }, false], [null, false],
   ])('%j -> %s', (s, want) => expect(cycleCountsAsSynced(s as never)).toBe(want));
+});
+
+describe('bank label and trust line', () => {
+  it('shows a repeated bank or company name once', () => {
+    expect(bankDisplayName('IDFC First - Zen Pivot - IDFC First')).toBe('IDFC First, Zen Pivot');
+    expect(bankDisplayName('IDFC')).toBe('IDFC');
+    expect(bankDisplayName('HDFC - ZP')).toBe('HDFC, ZP');
+  });
+  it('trust line: matches, differs, or absent', () => {
+    const base = inputs({ pending: [txn({ state: 'submitted', balanceMinor: 51293276, receivedAt: 5 })] });
+    expect(buildHomeModel(base).trustLine).toBe('Matches the balance in the latest bank message');
+    const diff = inputs({ pending: [txn({ state: 'submitted', balanceMinor: 100000, receivedAt: 5 })] });
+    expect(buildHomeModel(diff).trustLine).toBe('Last bank message shows ₹1,000.00');
+    expect(buildHomeModel(inputs()).trustLine).toBeNull();
+  });
 });
