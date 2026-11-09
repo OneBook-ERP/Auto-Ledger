@@ -1,4 +1,4 @@
-import { findSimilar, type BookedEntry } from './similar';
+import { findSimilar, findSimilarIn, indexBooked, type BookedEntry } from './similar';
 import type { PendingTxn } from './types';
 
 const txn = (over: Partial<PendingTxn> = {}): PendingTxn => ({
@@ -122,5 +122,36 @@ describe('findSimilar', () => {
 
   it('no entries, no hit', () => {
     expect(findSimilar(txn(), [])).toBeNull();
+  });
+});
+
+describe('indexBooked / findSimilarIn (one index per check, not pending x entries)', () => {
+  const isoDay = (i: number) => new Date(Date.UTC(2025, 0, 1) + (i % 600) * 86_400_000).toISOString().slice(0, 10);
+
+  it('gives the same answer as findSimilar', () => {
+    const entries = [
+      entry({ name: 'A', amountMinor: 50000, postingDate: '2026-11-06', party: null }),
+      entry({ name: 'B', amountMinor: 50000, postingDate: '2026-11-08' }),
+      entry({ name: 'C', amountMinor: 999, reference: '123456789012', postingDate: '2026-01-01' }),
+      entry({ name: 'D', amountMinor: 50000, postingDate: 'not a date' }),
+    ];
+    const index = indexBooked(entries);
+    for (const t of [txn(), txn({ utr: '123456789012' }), txn({ amountMinor: 7 }), txn({ occurredOn: '2026-11-05', merchant: null })]) {
+      expect(findSimilarIn(t, index)).toEqual(findSimilar(t, entries));
+    }
+  });
+
+  it('2,000 pending x 4,500 entries compares each item only with its amount and reference buckets', () => {
+    const entries = Array.from({ length: 4500 }, (_, i) =>
+      entry({ name: `PE-${i}`, amountMinor: 10_000 + i * 7, postingDate: isoDay(i), party: `Party ${i % 50}`, reference: `R${i}` }));
+    const pending = Array.from({ length: 2000 }, (_, i) =>
+      txn({ id: `t${i}`, rawHash: `h${i}`, amountMinor: 10_000 + i * 11, occurredOn: isoDay(i), merchant: `Party ${i % 50}`, utr: `R${i * 3}` }));
+    const started = Date.now();
+    const index = indexBooked(entries);
+    let hits = 0;
+    for (const t of pending) if (findSimilarIn(t, index)) hits++;
+    expect(index.comparisons).toBeLessThan(20_000);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(hits).toBeGreaterThan(0);
   });
 });
