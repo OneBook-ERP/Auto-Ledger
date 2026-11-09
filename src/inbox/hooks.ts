@@ -24,9 +24,14 @@ export function useInboxData() {
       repo.getSetting(UNRECOGNISED_COUNT_KEY), repo.listSettings(UNKNOWN_PREFIX), repo.getSetting(LAST_SYNCED_KEY),
       repo.listQueuedTxnIds(),
     ]);
+    // A flag raised before the account was saved in Settings must not linger: drop flags a mapping now covers.
+    const covered = (l4: string) => mappings.some((m) => m.last4.includes(l4));
+    const stale = flags.filter((f) => covered(f.key.slice(UNKNOWN_PREFIX.length)));
+    await Promise.all(stale.map((f) => repo.deleteSetting(f.key)));
+    const live = flags.filter((f) => !stale.includes(f));
     setModel(buildInboxModel({
       pending, mappings, rules, createdCount: created.length, unreadCount: Number(unread) || 0,
-      unknownAccounts: flags.filter((f) => f.value !== '').map((f) => f.key.slice(UNKNOWN_PREFIX.length)),
+      unknownAccounts: live.filter((f) => f.value !== '').map((f) => f.key.slice(UNKNOWN_PREFIX.length)),
       lastSyncedAt: synced ? Number(synced) || null : null, now: now(), queuedIds,
     }));
   }, [repo, now]);

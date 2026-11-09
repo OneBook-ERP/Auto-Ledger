@@ -6,6 +6,10 @@ export interface BannerProps {
   message: string;
   actionLabel?: string;
   onAction?: () => void;
+  /** One or two lines: tight padding, actions inline. */
+  compact?: boolean;
+  secondaryLabel?: string;
+  onSecondary?: () => void;
   testID?: string;
 }
 
@@ -23,7 +27,28 @@ const TITLE = {
 } as const;
 
 /** Inline notice. Errors and warnings are announced to screen readers. */
-export function Banner({ tone = 'info', title, message, actionLabel, onAction, testID }: BannerProps) {
+export function Banner({ tone = 'info', title, message, actionLabel, onAction, compact, secondaryLabel, onSecondary, testID }: BannerProps) {
+  if (compact) {
+    return (
+      <View
+        testID={testID}
+        accessibilityRole={tone === 'error' || tone === 'warn' ? 'alert' : undefined}
+        accessibilityLiveRegion={tone === 'error' ? 'assertive' : 'polite'}
+        className={`mb-3 flex-row flex-wrap items-center rounded-xl px-4 py-1 ${BOX[tone]}`}>
+        <Text className="mr-3 min-w-[60%] flex-1 py-2 text-[14px] leading-5 text-ink dark:text-ink-dark">{message}</Text>
+        {actionLabel && onAction ? (
+          <Pressable onPress={onAction} accessibilityRole="button" accessibilityLabel={actionLabel} className="min-h-[48px] justify-center pr-3">
+            <Text className={`text-[14px] font-semibold ${TITLE[tone]}`}>{actionLabel}</Text>
+          </Pressable>
+        ) : null}
+        {secondaryLabel && onSecondary ? (
+          <Pressable onPress={onSecondary} accessibilityRole="button" accessibilityLabel={secondaryLabel} className="min-h-[48px] justify-center">
+            <Text className="text-[14px] font-semibold text-muted dark:text-muted-dark">{secondaryLabel}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  }
   return (
     <View
       testID={testID}

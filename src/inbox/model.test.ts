@@ -1,5 +1,5 @@
 import type { Rule } from '../core/types';
-import { buildInboxModel, type InboxInputs } from './model';
+import { buildInboxModel, kindIconOf, type InboxInputs } from './model';
 import { BANK, CARD, NOW, txnFrom } from './testData';
 
 const base = (over: Partial<InboxInputs> = {}): InboxInputs => ({
@@ -58,7 +58,24 @@ describe('buildInboxModel', () => {
     const m = buildInboxModel(base({ unreadCount: 2, unknownAccounts: ['4321'] }));
     expect(m.unreadText).toBe('2 messages could not be read');
     expect(m.unknownAccounts).toEqual([{ last4: '4321', text: 'Unrecognised account ending 4321: add it in Settings' }]);
+    expect(m.accountsNotice).toEqual({ last4s: ['4321'], text: '1 account is not set up: 4321' });
+    expect(buildInboxModel(base({ unknownAccounts: ['3455', '6507'] })).accountsNotice?.text).toBe('2 accounts are not set up: 3455, 6507');
+    expect(buildInboxModel(base()).accountsNotice).toBeNull();
     expect(buildInboxModel(base({ unreadCount: 1 })).unreadText).toBe('1 message could not be read');
     expect(buildInboxModel(base()).unreadText).toBeNull();
+  });
+  it('merchant rows ask "What was this?", people keep "Who is this?"', () => {
+    const card = txnFrom('idfc-034', { id: 'm' }); // card spend, merchant only
+    expect(card.merchant).toBeTruthy();
+    expect(card.counterparty).toBeNull();
+    const m = buildInboxModel(base({ pending: [card, txnFrom('idfc-006', { id: 'p' })] }));
+    expect(m.rows.find((r) => r.id === 'm')?.chip.text).toBe('What was this?');
+    expect(m.rows.find((r) => r.id === 'p')?.chip.text).toBe('Who is this?');
+  });
+  it('leading icon by kind', () => {
+    expect(kindIconOf({ kind: 'card_spend', counterparty: null })).toBe('card');
+    expect(kindIconOf({ kind: 'card_si_paid', counterparty: null })).toBe('card');
+    expect(kindIconOf({ kind: 'neft_confirm', counterparty: 'ACME' })).toBe('bank');
+    expect(kindIconOf({ kind: 'ca_debit', counterparty: 'ravi@okbank' })).toBe('upi');
   });
 });
