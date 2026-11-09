@@ -1,5 +1,6 @@
 // ERPNext document operations. Contract: docs/spike-report.md section B. ErpClient does not encode
 // paths, so every document path segment goes through encodeSegment.
+import type { BookedEntry } from '../core/similar';
 import type { OpenInvoice, PartyRef } from '../core/types';
 import { ErpClient, ErpValidationError, encodeSegment, unexpectedResponse } from './client';
 
@@ -283,6 +284,74 @@ export async function deleteDraft(c: ErpClient, doctype: string, name: string): 
   if (typeof docstatus !== 'number') throw unexpectedResponse();
   if (docstatus !== 0) throw new NotDraftError(doctype, name, docstatus);
   await c.delete(path);
+}
+
+/** Rows per request when reading booked entries; at most BOOKED_MAX_PAGES requests per doctype. */
+export const BOOKED_PAGE_SIZE = 500;
+const BOOKED_MAX_PAGES = 3;
+
+type BookedRow = Record<string, unknown> & { name: string; docstatus: number; company?: string | null; posting_date?: string | null };
+
+const BOOKED_SOURCES: {
+  doctype: string;
+  fields: string[];
+  map: (r: BookedRow) => Pick<BookedEntry, 'amountMinor' | 'direction' | 'party' | 'reference'>;
+}[] = [
+  {
+    doctype: 'Payment Entry',
+    fields: ['name', 'posting_date', 'payment_type', 'paid_amount', 'received_amount', 'party', 'party_name', 'reference_no', 'docstatus', 'company'],
+    // The amount on the bank side: paid from it (Pay) or received into it (Receive).
+    map: (r) => ({
+      amountMinor: minorOf(r.payment_type === 'Receive' ? r.received_amount : r.paid_amount) ?? 0,
+      direction: r.payment_type === 'Receive' ? 'in' : r.payment_type === 'Pay' ? 'out' : null,
+      party: str(r.party_name) ?? str(r.party),
+      reference: str(r.reference_no),
+    }),
+  },
+  {
+    doctype: 'Journal Entry',
+    fields: ['name', 'posting_date', 'total_debit', 'cheque_no', 'docstatus', 'company'],
+    map: (r) => ({ amountMinor: minorOf(r.total_debit) ?? 0, direction: null, party: null, reference: str(r.cheque_no) }),
+  },
+  {
+    doctype: 'Purchase Invoice',
+    fields: ['name', 'posting_date', 'base_grand_total', 'base_rounded_total', 'supplier', 'supplier_name', 'bill_no', 'docstatus', 'company'],
+    // Company currency; rounded_total is 0 when rounding is off.
+    map: (r) => ({
+      amountMinor: (minorOf(r.base_rounded_total) || null) ?? minorOf(r.base_grand_total) ?? 0,
+      direction: 'out',
+      party: str(r.supplier_name) ?? str(r.supplier),
+      reference: str(r.bill_no),
+    }),
+  },
+];
+
+/**
+ * Draft and submitted (never cancelled) Payment Entries, Journal Entries and Purchase Invoices of `company`
+ * posted between `fromDate` and `toDate` (inclusive, YYYY-MM-DD), newest first per doctype. Paged
+ * BOOKED_PAGE_SIZE rows at a time, at most BOOKED_MAX_PAGES requests per doctype (older rows beyond that are not
+ * read). Rows of another company or with another docstatus are dropped even if the server returns them.
+ * Money in paise. Read-only; used only for the "may already be booked" warning.
+ */
+export async function listBookedEntries(c: ErpClient, company: string, fromDate: string, toDate: string): Promise<BookedEntry[]> {
+  const out: BookedEntry[] = [];
+  for (const src of BOOKED_SOURCES) {
+    for (let page = 0; page < BOOKED_MAX_PAGES; page += 1) {
+      const rows = await list<BookedRow>(c, src.doctype, {
+        fields: src.fields,
+        filters: [['company', '=', company], ['docstatus', 'in', [0, 1]], ['posting_date', '>=', fromDate], ['posting_date', '<=', toDate]],
+        order_by: 'posting_date desc, name asc',
+        limit_start: page * BOOKED_PAGE_SIZE,
+        limit_page_length: BOOKED_PAGE_SIZE,
+      });
+      for (const r of rows) {
+        if (r.company !== company || (r.docstatus !== 0 && r.docstatus !== 1) || typeof r.posting_date !== 'string') continue;
+        out.push({ doctype: src.doctype, name: r.name, postingDate: r.posting_date, docstatus: r.docstatus, ...src.map(r) });
+      }
+      if (rows.length < BOOKED_PAGE_SIZE) break;
+    }
+  }
+  return out;
 }
 
 const STATUS_CHUNK = 50;

@@ -12,6 +12,8 @@ import {
   getReceivablesPayables,
   getRequiredFields,
   listBankAccounts,
+  listBookedEntries,
+  BOOKED_PAGE_SIZE,
   listCompanies,
   listLedgerAccounts,
   listModesOfPayment,
@@ -586,5 +588,90 @@ describe('getReceivablesPayables', () => {
     expect(await getReceivablesPayables(empty.c, 'ZP')).toEqual({ receivableMinor: 0, payableMinor: 0 });
     const bad = setup({ body: { message: { columns: arColumns, result: [ar.result[0]] } } });
     await expect(getReceivablesPayables(bad.c, 'ZP')).rejects.toThrow();
+  });
+});
+
+describe('listBookedEntries', () => {
+  // Answers by doctype; each doctype gets its replies in order (the last one repeats).
+  function routed(byType: Record<string, unknown[][]>) {
+    const calls: { doctype: string; params: Record<string, unknown> }[] = [];
+    const seen: Record<string, number> = {};
+    const impl = (async (url: string) => {
+      const u = new URL(url);
+      const doctype = decodeURIComponent(u.pathname.replace('/api/resource/', ''));
+      const params: Record<string, unknown> = {};
+      u.searchParams.forEach((v, k) => {
+        try {
+          params[k] = JSON.parse(v);
+        } catch {
+          params[k] = v;
+        }
+      });
+      calls.push({ doctype, params });
+      const pages = byType[doctype] ?? [[]];
+      const i = seen[doctype] ?? 0;
+      seen[doctype] = i + 1;
+      return new Response(JSON.stringify({ data: pages[Math.min(i, pages.length - 1)] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    return { c: new ErpClient({ siteUrl: BASE, apiKey: 'k', apiSecret: 's', fetchImpl: impl }), calls };
+  }
+
+  const pe = (o: Record<string, unknown> = {}) => ({
+    name: 'PE-1', posting_date: '2026-11-08', payment_type: 'Pay', paid_amount: 500, received_amount: 500,
+    party: 'SUP-1', party_name: 'HP Fuel', reference_no: 'R1', docstatus: 0, company: 'ZP', ...o,
+  });
+
+  it('reads Payment Entries, Journal Entries and Purchase Invoices of the company in the date range', async () => {
+    const { c, calls } = routed({
+      'Payment Entry': [[pe(), pe({ name: 'PE-2', payment_type: 'Receive', paid_amount: 1000.4, received_amount: 1000.4, docstatus: 1 }), pe({ name: 'PE-3', payment_type: 'Internal Transfer', party: null, party_name: null, reference_no: null })]],
+      'Journal Entry': [[{ name: 'JE-1', posting_date: '2026-11-07', total_debit: 250.5, cheque_no: 'C1', docstatus: 0, company: 'ZP' }]],
+      'Purchase Invoice': [[
+        { name: 'PI-1', posting_date: '2026-11-06', base_grand_total: 118, base_rounded_total: 0, supplier: 'SUP-2', supplier_name: 'Facebook', bill_no: 'B9', docstatus: 1, company: 'ZP' },
+        { name: 'PI-2', posting_date: '2026-11-06', base_grand_total: 117.6, base_rounded_total: 118, supplier: 'SUP-2', supplier_name: '', bill_no: '', docstatus: 0, company: 'ZP' },
+      ]],
+    });
+    const r = await listBookedEntries(c, 'ZP', '2026-11-01', '2026-11-30');
+    expect(r).toEqual([
+      { doctype: 'Payment Entry', name: 'PE-1', postingDate: '2026-11-08', amountMinor: 50000, direction: 'out', party: 'HP Fuel', reference: 'R1', docstatus: 0 },
+      { doctype: 'Payment Entry', name: 'PE-2', postingDate: '2026-11-08', amountMinor: 100040, direction: 'in', party: 'HP Fuel', reference: 'R1', docstatus: 1 },
+      { doctype: 'Payment Entry', name: 'PE-3', postingDate: '2026-11-08', amountMinor: 50000, direction: null, party: null, reference: null, docstatus: 0 },
+      { doctype: 'Journal Entry', name: 'JE-1', postingDate: '2026-11-07', amountMinor: 25050, direction: null, party: null, reference: 'C1', docstatus: 0 },
+      { doctype: 'Purchase Invoice', name: 'PI-1', postingDate: '2026-11-06', amountMinor: 11800, direction: 'out', party: 'Facebook', reference: 'B9', docstatus: 1 },
+      { doctype: 'Purchase Invoice', name: 'PI-2', postingDate: '2026-11-06', amountMinor: 11800, direction: 'out', party: 'SUP-2', reference: null, docstatus: 0 },
+    ]);
+    expect(calls.map((x) => x.doctype)).toEqual(['Payment Entry', 'Journal Entry', 'Purchase Invoice']);
+    for (const call of calls) {
+      expect(call.params.filters).toEqual([
+        ['company', '=', 'ZP'],
+        ['docstatus', 'in', [0, 1]],
+        ['posting_date', '>=', '2026-11-01'],
+        ['posting_date', '<=', '2026-11-30'],
+      ]);
+      expect(call.params.limit_start).toBe(0);
+    }
+  });
+
+  it('ignores rows of another company or cancelled rows even if the server returns them', async () => {
+    const { c } = routed({
+      'Payment Entry': [[pe({ company: 'Other Co' }), pe({ name: 'PE-X', docstatus: 2 }), pe({ name: 'PE-OK' })]],
+    });
+    expect((await listBookedEntries(c, 'ZP', '2026-11-01', '2026-11-30')).map((e) => e.name)).toEqual(['PE-OK']);
+  });
+
+  it('pages, at most 3 requests per doctype', async () => {
+    const full = (p: number) => Array.from({ length: BOOKED_PAGE_SIZE }, (_, i) => pe({ name: `PE-${p}-${i}` }));
+    const { c, calls } = routed({ 'Payment Entry': [full(0), full(1), full(2), full(3)], 'Journal Entry': [[]] });
+    const r = await listBookedEntries(c, 'ZP', '2026-11-01', '2026-11-30');
+    const peCalls = calls.filter((x) => x.doctype === 'Payment Entry');
+    expect(peCalls.map((x) => x.params.limit_start)).toEqual([0, BOOKED_PAGE_SIZE, 2 * BOOKED_PAGE_SIZE]);
+    expect(peCalls[0].params.limit_page_length).toBe(BOOKED_PAGE_SIZE);
+    expect(r).toHaveLength(3 * BOOKED_PAGE_SIZE);
+    // A short page ends the doctype after one request.
+    expect(calls.filter((x) => x.doctype === 'Journal Entry')).toHaveLength(1);
+  });
+
+  it('a failed request rejects', async () => {
+    const { c } = setup({ status: 500, body: {} });
+    await expect(listBookedEntries(c, 'ZP', '2026-11-01', '2026-11-30')).rejects.toThrow();
   });
 });

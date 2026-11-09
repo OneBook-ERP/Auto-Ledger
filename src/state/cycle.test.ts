@@ -104,3 +104,42 @@ describe('afterCycle (R50)', () => {
     expect(d.invalidateHome).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('afterCycle: possible-duplicate check', () => {
+  const synced = { failedSteps: [], drain: { ran: 0, stoppedBecause: 'empty' as const }, erpReached: true };
+  const deps = () => ({
+    repo: { setSetting: jest.fn(async () => undefined) },
+    now: () => 1,
+    refreshBanners: jest.fn(async () => undefined),
+    invalidateHome: jest.fn(),
+    checkDuplicates: jest.fn(async () => undefined),
+  });
+
+  it('runs once when ERPNext answered during the cycle', async () => {
+    const d = deps();
+    await afterCycle(synced, d);
+    expect(d.checkDuplicates).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not run when ERPNext did not answer, the cycle failed or was skipped', async () => {
+    const d = deps();
+    await afterCycle({ ...synced, erpReached: false }, d);
+    await afterCycle(null, d);
+    await afterCycle({ failedSteps: [], skipped: 'site_mismatch' }, d);
+    expect(d.checkDuplicates).not.toHaveBeenCalled();
+  });
+
+  it('a failing check never blocks the cycle and Home is still invalidated', async () => {
+    const d = deps();
+    d.checkDuplicates.mockRejectedValueOnce(new Error('offline'));
+    await expect(afterCycle(synced, d)).resolves.toBeUndefined();
+    expect(d.invalidateHome).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs even when the banner refresh rejects', async () => {
+    const d = deps();
+    d.refreshBanners.mockRejectedValueOnce(new Error('db'));
+    await expect(afterCycle(synced, d)).rejects.toThrow('db');
+    expect(d.checkDuplicates).toHaveBeenCalledTimes(1);
+  });
+});
