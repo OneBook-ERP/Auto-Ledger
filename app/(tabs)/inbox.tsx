@@ -1,6 +1,7 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { Pressable, Text, View, useColorScheme } from 'react-native';
+import { AUTO_NEW_COUNT_KEY } from '../../src/ingest/autoApply';
 import { unrecognisedAccountKey } from '../../src/ingest/pipeline';
 import { useInboxDeps } from '../../src/inbox/deps';
 import { useInboxData, useTapGuard } from '../../src/inbox/hooks';
@@ -91,6 +92,18 @@ export default function Inbox() {
   const nFilters = activeFilterCount(filters);
   const filtersLabel = nFilters ? `Filters (${nFilters})` : 'Filters';
 
+  const [hideAutoFailed, setHideAutoFailed] = useState(false);
+  const autoFailed = model?.autoFailed ?? [];
+  const seenAuto = async (then?: () => void) => {
+    try {
+      await repo.setSetting(AUTO_NEW_COUNT_KEY, '0');
+    } catch {
+      // the notice may come back once; nothing else depends on it
+    }
+    then?.();
+    await reload().catch(() => undefined);
+  };
+
   const dismissAll = async (last4s: string[]) => {
     await Promise.all(last4s.map((l) => repo.deleteSetting(unrecognisedAccountKey(l))));
     await reload();
@@ -139,6 +152,25 @@ export default function Inbox() {
         header={
           <View>
             {flash ? <Banner tone="warn" message={flash} actionLabel="Dismiss" onAction={() => useFlowStore.getState().setFlash(null)} testID="flash" /> : null}
+            {model?.autoDoneText ? (
+              <Banner
+                tone="ok" message={model.autoDoneText}
+                actionLabel="See Activity" onAction={() => void seenAuto(() => router.navigate('/(tabs)/activity'))}
+                secondaryLabel="Dismiss" onSecondary={() => void seenAuto()}
+                testID="auto-done" />
+            ) : null}
+            {autoFailed.length && !hideAutoFailed ? (
+              <Banner
+                tone="warn"
+                title={autoFailed.length === 1 ? '1 payment was not done automatically' : `${autoFailed.length} payments were not done automatically`}
+                message={[
+                  ...autoFailed.slice(0, 3).map((f) => f.text),
+                  autoFailed.length > 3 ? `And ${autoFailed.length - 3} more, marked in the list.` : '',
+                  'They wait here. Open each one to answer it.',
+                ].filter(Boolean).join('\n\n')}
+                actionLabel="Dismiss" onAction={() => setHideAutoFailed(true)}
+                testID="auto-failed" />
+            ) : null}
             {model?.unreadText ? (
               <Banner tone="warn" message={model.unreadText} actionLabel="Open Settings" onAction={() => router.navigate('/(tabs)/settings')} testID="unread" />
             ) : null}

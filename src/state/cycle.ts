@@ -58,6 +58,12 @@ export type AfterCycleDeps = {
    * during the cycle, after Home is invalidated; a failure is swallowed and never blocks the cycle.
    */
   checkDuplicates?: () => Promise<void>;
+  /**
+   * Automatic answers for confirmed patterns (src/ingest/autoApply.ts), after the duplicate check so its warnings
+   * are fresh. Same condition (ERPNext answered, same site); runs inside the cycle, so never next to another step.
+   * Resolves to how many items were answered; a failure is swallowed.
+   */
+  autoApply?: () => Promise<number | void>;
 };
 
 /**
@@ -81,11 +87,23 @@ export async function afterCycle(summary: CycleOutcome | null, d: AfterCycleDeps
     } catch {
       // best effort
     }
-    if (d.checkDuplicates && summary?.erpReached === true && !summary.skipped) {
+    const reached = summary?.erpReached === true && !summary.skipped;
+    if (d.checkDuplicates && reached) {
       try {
         await d.checkDuplicates();
       } catch {
         // warnings are best effort
+      }
+    }
+    if (d.autoApply && reached) {
+      try {
+        const n = await d.autoApply();
+        if (n) {
+          const r = d.invalidateHome();
+          if (r && typeof (r as Promise<unknown>).then === 'function') (r as Promise<unknown>).catch(() => undefined);
+        }
+      } catch {
+        // automatic answers are best effort; the items wait in the Inbox
       }
     }
   }

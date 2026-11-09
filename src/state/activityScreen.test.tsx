@@ -69,6 +69,16 @@ beforeEach(() => {
 afterEach(() => jest.restoreAllMocks());
 
 describe('Activity screen', () => {
+  it('an automatic answer shows "Done automatically" next to its status and keeps the normal Undo', async () => {
+    await open([txn('1'), txn('2')], { 'Payment Entry:PE-1': 0, 'Payment Entry:PE-2': 0 }, (repo) => {
+      void repo.setSetting('auto_done:1', JSON.stringify({ at: 1 }));
+    });
+    const row = await screen.findByTestId('activity-row-1');
+    await waitFor(() => expect(within(row).getByText('Done automatically')).toBeTruthy());
+    expect(within(row).getByRole('button', { name: 'Undo' })).toBeTruthy();
+    expect(within(screen.getByTestId('activity-row-2')).queryByText('Done automatically')).toBeNull();
+  });
+
   it('reads only handled rows from the repo and never the whole table', async () => {
     const news = Array.from({ length: 30 }, (_, i) => txn(`n${i}`, { state: 'new', createdDocs: [] }));
     let spy!: jest.SpyInstance;

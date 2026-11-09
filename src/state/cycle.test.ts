@@ -143,3 +143,59 @@ describe('afterCycle: possible-duplicate check', () => {
     expect(d.checkDuplicates).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('afterCycle: automatic answers', () => {
+  const synced = { failedSteps: [], drain: { ran: 0, stoppedBecause: 'empty' as const }, erpReached: true };
+  const deps = () => {
+    const order: string[] = [];
+    return {
+      order,
+      repo: { setSetting: jest.fn(async () => undefined) },
+      now: () => 1,
+      refreshBanners: jest.fn(async () => undefined),
+      invalidateHome: jest.fn(() => { order.push('home'); }),
+      checkDuplicates: jest.fn(async () => { order.push('dup'); }),
+      autoApply: jest.fn(async () => { order.push('auto'); return 0; }),
+    };
+  };
+
+  it('runs after the duplicate check (fresh warnings) and only when ERPNext answered', async () => {
+    const d = deps();
+    await afterCycle(synced, d);
+    expect(d.order).toEqual(['home', 'dup', 'auto']);
+    await afterCycle({ ...synced, erpReached: false }, d);
+    await afterCycle(null, d);
+    await afterCycle({ failedSteps: [], skipped: 'site_mismatch' }, d);
+    expect(d.autoApply).toHaveBeenCalledTimes(1);
+  });
+
+  it('Home is read again when something was answered automatically', async () => {
+    const d = deps();
+    d.autoApply.mockImplementationOnce(async () => 3);
+    await afterCycle(synced, d);
+    expect(d.invalidateHome).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failure never blocks the cycle, even when the duplicate check failed first', async () => {
+    const d = deps();
+    d.checkDuplicates.mockRejectedValueOnce(new Error('offline'));
+    d.autoApply.mockRejectedValueOnce(new Error('db'));
+    await expect(afterCycle(synced, d)).resolves.toBeUndefined();
+    expect(d.autoApply).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs inside the cycle: a second trigger meanwhile joins it, so no other step runs at the same time', async () => {
+    const d = deps();
+    let release: () => void = () => undefined;
+    d.autoApply.mockImplementationOnce(() => new Promise<number>((res) => { release = () => res(0); }));
+    const run = jest.fn(async () => synced);
+    const r = createCycleRunner({ run, after: (s) => afterCycle(s, d) });
+    const first = r.trigger();
+    await new Promise((res) => setTimeout(res, 0));
+    const second = r.trigger();
+    expect(run).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all([first, second]);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});

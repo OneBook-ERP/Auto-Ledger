@@ -1,5 +1,5 @@
 import {
-  canPutBack, canUndo, confirmText, docUrl, filterActivity, groupByRecency, removalPlan, sortActivity, statusOf, totalsOf, KEEP_ADOPTED_MESSAGE, UNDO_CONFIRM_MESSAGE,
+  autoChip, canPutBack, canUndo, confirmText, docUrl, filterActivity, groupByRecency, removalPlan, sortActivity, statusOf, totalsOf, KEEP_ADOPTED_MESSAGE, UNDO_CONFIRM_MESSAGE,
 } from './activityModel';
 import type { PendingTxn } from '../core/types';
 
@@ -141,3 +141,13 @@ describe('Activity filter, totals, grouping and sort', () => {
   });
 });
 
+
+describe('autoChip', () => {
+  const t = (state: PendingTxn['state']) => ({ id: 'x', state }) as PendingTxn;
+  it('"Done automatically" only for handled rows answered by the app', () => {
+    expect(autoChip(t('created'), new Set(['x']))).toEqual({ label: 'Done automatically', tone: 'neutral' });
+    expect(autoChip(t('ignored'), new Set(['x']))).toEqual({ label: 'Done automatically', tone: 'neutral' });
+    expect(autoChip(t('created'), new Set())).toBeNull();
+    expect(autoChip(t('new'), new Set(['x']))).toBeNull();
+  });
+});

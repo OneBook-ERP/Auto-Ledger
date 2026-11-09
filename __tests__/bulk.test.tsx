@@ -8,6 +8,7 @@ import { ErpValidationError } from '../src/erp/client';
 import { InboxDepsOverride } from '../src/inbox/deps';
 import { fakeInboxErp, type FakeInboxErp } from '../src/inbox/fakeErp';
 import { useFlowStore } from '../src/inbox/store';
+import { AUTO_NEW_COUNT_KEY, autoFailedKey } from '../src/ingest/autoApply';
 import { dupKey } from '../src/ingest/dupCheck';
 import { BANK, CARD, NOW, txnFrom } from '../src/inbox/testData';
 import { runPlan } from '../src/outbox/runner';
@@ -79,6 +80,32 @@ describe('Inbox group cards', () => {
     const { Wrap } = await setup({ txns: [fb('a', 100), fb('b', 200)] });
     await render(<Wrap><Inbox /></Wrap>);
     expect(within(await screen.findByTestId(`group-${KEY}`)).getByText('Choose what these were')).toBeTruthy();
+  });
+});
+
+describe('Inbox notices for automatic answers', () => {
+  it('"3 payments were done automatically. See Activity" opens Activity; Dismiss hides it for good', async () => {
+    const { Wrap, repo } = await setup();
+    await repo.setSetting(AUTO_NEW_COUNT_KEY, '3');
+    await render(<Wrap><Inbox /></Wrap>);
+    const banner = await screen.findByTestId('auto-done');
+    expect(banner).toHaveTextContent(/3 payments were done automatically\. See Activity\./);
+    await fireEvent.press(within(banner).getByRole('button', { name: 'See Activity' }));
+    await waitFor(() => expect(mockRouter.navigate).toHaveBeenCalledWith('/(tabs)/activity'));
+    await waitFor(() => expect(screen.queryByTestId('auto-done')).toBeNull());
+    expect(await repo.getSetting(AUTO_NEW_COUNT_KEY)).toBe('0');
+  });
+
+  it('a payment that could not be done automatically stays with its plain message and a marked row', async () => {
+    const { Wrap, repo } = await setup({ txns: [fb('a', 50_000)] });
+    await repo.setSetting(autoFailedKey('a'), 'An entry ACC-PAY-1 (Payment Entry) already exists for this reference.');
+    await render(<Wrap><Inbox /></Wrap>);
+    const banner = await screen.findByTestId('auto-failed');
+    expect(banner).toHaveTextContent(/1 payment was not done automatically/);
+    expect(banner).toHaveTextContent(/FACEBOOK SI, ₹500\.00: An entry already exists for this reference\./);
+    expect(within(screen.getByTestId('row-a')).getByText('Not done automatically. Open it to answer.')).toBeTruthy();
+    await fireEvent.press(within(banner).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByTestId('auto-failed')).toBeNull();
   });
 });
 

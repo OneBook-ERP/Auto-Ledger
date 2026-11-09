@@ -154,6 +154,14 @@ describe('mappings, rules, outbox, settings', () => {
     expect(got.find((x) => x.matchKey === 'k1')).toEqual({ ...a, hits: 2, auto: false });
     expect(got.find((x) => x.matchKey === 'k2')).toEqual({ ...b, auto: false });
   });
+  it('deleteRule removes one rule by its pattern and nothing else', async () => {
+    const r = await mk();
+    await r.saveRule({ matchKey: 'k1', action: 'personal', hits: 1, lastUsed: 1 });
+    await r.saveRule({ matchKey: 'k2', action: 'ignore', hits: 1, lastUsed: 1 });
+    await r.deleteRule('k1');
+    await r.deleteRule('missing');
+    expect((await r.listRules()).map((x) => x.matchKey)).toEqual(['k2']);
+  });
   it('rules round-trip the trust fields (automatic switch, largest confirmed amount, its currency)', async () => {
     const r = await mk();
     const a: Rule = { matchKey: 'm:out:facebook', action: 'expense', account: 'Ads', hits: 3, lastUsed: 5, auto: true, maxAmountMinor: 123456, currency: 'INR' };

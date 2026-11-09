@@ -3,6 +3,7 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { nameKey, suggest } from '../core/suggest';
 import type { AccountMapping, OpenInvoice, PartyRef, PendingTxn, Rule, Suggestion } from '../core/types';
+import { AUTO_FAILED_PREFIX, AUTO_NEW_COUNT_KEY } from '../ingest/autoApply';
 import { DUP_KEY_PREFIX } from '../ingest/dupCheck';
 import { UNRECOGNISED_COUNT_KEY, resolveMapping, unrecognisedAccountKey } from '../ingest/pipeline';
 import { COMPANY_KEY, DEFAULT_EXPENSE_KEY, DRAWINGS_KEY } from '../state/useSetting';
@@ -24,10 +25,10 @@ export function useInboxData(filter?: InboxFilter) {
   // Suggestions survive a reload: answering one item must not recompute them for all the others.
   const [chips] = useState(createChipCache);
   const reload = useCallback(async () => {
-    const [pending, createdCount, rules, mappings, unread, flags, synced, queuedIds] = await Promise.all([
+    const [pending, createdCount, rules, mappings, unread, flags, synced, queuedIds, autoFailedRows, autoNew] = await Promise.all([
       repo.listPending('new'), repo.countPending('created'), repo.listRules(), repo.listMappings(),
       repo.getSetting(UNRECOGNISED_COUNT_KEY), repo.listSettings(UNKNOWN_PREFIX), repo.getSetting(LAST_SYNCED_KEY),
-      repo.listQueuedTxnIds(),
+      repo.listQueuedTxnIds(), repo.listSettings(AUTO_FAILED_PREFIX), repo.getSetting(AUTO_NEW_COUNT_KEY),
     ]);
     // A flag raised before the account was saved in Settings must not linger: drop flags a mapping now covers.
     const covered = (l4: string) => mappings.some((m) => m.last4.includes(l4));
@@ -39,6 +40,8 @@ export function useInboxData(filter?: InboxFilter) {
       pending, mappings, rules, createdCount, unreadCount: Number(unread) || 0,
       unknownAccounts: live.filter((f) => f.value !== '').map((f) => f.key.slice(UNKNOWN_PREFIX.length)),
       lastSyncedAt: synced ? Number(synced) || null : null, now: now(), queuedIds,
+      autoFailed: Object.fromEntries(autoFailedRows.map((r) => [r.key.slice(AUTO_FAILED_PREFIX.length), r.value])),
+      autoDoneCount: Number(autoNew) || 0,
     });
   }, [repo, now, chips]);
   // A changed search or filter only re-filters what is already loaded; nothing is read again.

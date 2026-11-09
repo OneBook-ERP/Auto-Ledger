@@ -33,6 +33,8 @@ export interface Repo {
   listMappings(): Promise<AccountMapping[]>;
   saveRule(r: Rule): Promise<void>;
   listRules(): Promise<Rule[]>;
+  /** Removes the rule of one pattern (no-op when absent). Documents already created are not touched. */
+  deleteRule(matchKey: string): Promise<void>;
   /** Inserts `op` and, in the same transaction, marks every OTHER pending item of op.txnId 'superseded'. */
   enqueue(op: OutboxOp): Promise<void>;
   nextOutbox(): Promise<OutboxOp | null>;
@@ -229,6 +231,9 @@ export async function createRepo(d: SqlDriver): Promise<Repo> {
         [r.matchKey, r.action, r.party ? JSON.stringify(r.party) : null, r.account ?? null, r.hits, r.lastUsed,
           r.auto ? 1 : 0, r.maxAmountMinor ?? null, r.currency ?? null],
       );
+    },
+    async deleteRule(matchKey) {
+      await d.exec('DELETE FROM rule WHERE match_key = ?', [matchKey]);
     },
     async listRules() {
       const rows = await d.all<{

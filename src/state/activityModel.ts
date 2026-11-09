@@ -28,6 +28,14 @@ export function statusOf(t: PendingTxn): RowStatus {
   return { label: 'Draft', tone: 'info' };
 }
 
+export const AUTO_DONE_LABEL = 'Done automatically';
+
+/** The extra chip of a handled row the app answered by itself (ids from the `auto_done:` settings), else null. */
+export function autoChip(t: Pick<PendingTxn, 'id' | 'state'>, autoIds: ReadonlySet<string>): RowStatus | null {
+  if (t.state !== 'created' && t.state !== 'submitted' && t.state !== 'ignored') return null;
+  return autoIds.has(t.id) ? { label: AUTO_DONE_LABEL, tone: 'neutral' } : null;
+}
+
 /** Undo is offered only while every document is still a draft. */
 export const canUndo = (t: PendingTxn) => t.state === 'created' && t.createdDocs.length > 0 && t.createdDocs.every((d) => d.docstatus === 0);
 /** Cancelled or missing documents: the entry can go back to the Inbox without a deletion. */

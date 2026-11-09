@@ -34,6 +34,8 @@ export type InboxInputs = {
   chips?: ChipCache;
   /** Txn id -> why the app could not answer it automatically (it waits for the user). */
   autoFailed?: Record<string, string>;
+  /** Payments answered automatically since the user last dismissed the notice. */
+  autoDoneCount?: number;
 };
 
 /** Suggestion chips remembered by txn id and by the rules they were computed with. */
@@ -119,6 +121,8 @@ export type InboxModel = {
   groups: GroupCard[];
   /** Waiting items the app could not answer automatically, with the plain reason. */
   autoFailed: { id: string; text: string }[];
+  /** "3 payments were done automatically. See Activity.", or null. */
+  autoDoneText: string | null;
 };
 
 export type GroupCard = {
@@ -186,6 +190,9 @@ export function buildInboxModel(i: InboxInputs): InboxModel {
     },
     unknownAccounts: i.unknownAccounts.map((l) => ({ last4: l, text: `Unrecognised account ending ${l}: add it in Settings` })),
     groups: groupCards(shown.filter((t) => !queued.has(t.id)), i.rules),
+    autoDoneText: i.autoDoneCount && i.autoDoneCount > 0
+      ? `${i.autoDoneCount === 1 ? '1 payment was' : `${i.autoDoneCount} payments were`} done automatically. See Activity.`
+      : null,
     autoFailed: newestFirst(i.pending.filter((t) => autoFailed[t.id] !== undefined && !queued.has(t.id))).map((t) => ({
       id: t.id, text: `${titleOf(t)}, ${plainAmount(t)}: ${plainFailure(autoFailed[t.id])}`,
     })),

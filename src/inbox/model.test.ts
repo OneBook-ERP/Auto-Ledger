@@ -186,6 +186,12 @@ describe('group cards (wave 3 K3)', () => {
     expect(buildInboxModel(base({ pending: [fb('x', 100), usd] })).groups[0].title).toBe('2 payments to FACEBOOK SI');
   });
 
+  it('banner text for payments done automatically since the last dismiss', () => {
+    expect(buildInboxModel(base()).autoDoneText).toBeNull();
+    expect(buildInboxModel(base({ autoDoneCount: 1 })).autoDoneText).toBe('1 payment was done automatically. See Activity.');
+    expect(buildInboxModel(base({ autoDoneCount: 3 })).autoDoneText).toBe('3 payments were done automatically. See Activity.');
+  });
+
   it('a row whose automatic answer failed says so in its chip', () => {
     const a = fb('a', 100);
     const m = buildInboxModel(base({ pending: [a], autoFailed: { a: 'ERPNext needs these fields: Cost Center' } }));
