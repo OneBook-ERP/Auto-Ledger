@@ -16,11 +16,12 @@ export interface TxnRowProps {
   testID?: string;
 }
 
-// Theme-aware colours for SVG strokes (NativeWind classes do not reach them): ink / ok tokens of tailwind.config.js.
+// Theme-aware colours for SVG strokes (NativeWind classes do not reach them): ink / money-in / money-out tokens of tailwind.config.js.
 const INK = { light: '#0E1A2E', dark: '#EDF1F8' };
-const OK = { light: '#0F6B3F', dark: '#4ADE80' };
+const MONEY_IN = { light: '#0F6B3F', dark: '#4ADE80' };
+const MONEY_OUT = { light: '#A3203D', dark: '#FF8FA3' };
 
-/** One Inbox item: how it was paid, who, where and when, the signed amount (green in, plain out) and the suggestion. */
+/** One Inbox item: how it was paid, who, where and when, the signed amount (green in, rose out) and the suggestion. */
 export function TxnRow({ title, subtitle, amountText, amountA11y, direction, chip, kindIcon = 'bank', onPress, testID }: TxnRowProps) {
   const incoming = direction === 'in';
   const dark = useColorScheme() === 'dark';
@@ -42,11 +43,11 @@ export function TxnRow({ title, subtitle, amountText, amountA11y, direction, chi
         <Pill text={chip.text} tone={chip.tone} />
       </View>
       <View className="shrink-0 flex-row items-center gap-1">
-        <Icon name={incoming ? 'moneyIn' : 'moneyOut'} size={14} color={incoming ? OK[mode] : INK[mode]} />
+        <Icon name={incoming ? 'moneyIn' : 'moneyOut'} size={14} color={incoming ? MONEY_IN[mode] : MONEY_OUT[mode]} />
         <Text
           numberOfLines={1}
           style={{ fontVariant: ['tabular-nums'] }}
-          className={`text-base font-semibold ${incoming ? 'text-ok dark:text-ok-dark' : 'text-ink dark:text-ink-dark'}`}>
+          className={`text-base font-semibold ${incoming ? 'text-money-in dark:text-money-in-dark' : 'text-money-out dark:text-money-out-dark'}`}>
           {amountText}
         </Text>
       </View>

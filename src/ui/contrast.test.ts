@@ -22,14 +22,15 @@ const LIGHT: [string, string, number][] = [
   ['accent', 'surface', 4.5], ['accent', 'paper', 4.5], ['accent', 'accent.soft', 4.5], ['white', 'accent', 4.5],
   ['danger', 'surface', 4.5], ['danger', 'paper', 4.5], ['danger', 'danger.soft', 4.5], ['ink', 'danger.soft', 4.5],
   ['warn', 'warn.soft', 4.5], ['ink', 'warn.soft', 4.5], ['ok', 'surface', 4.5], ['ok', 'ok.soft', 4.5], ['ink', 'ok.soft', 4.5],
-  ['ink', 'accent.soft', 4.5],
+  ['ink', 'accent.soft', 4.5], ['money-in', 'surface', 4.5], ['money-out', 'surface', 4.5], ['money-in', 'paper', 4.5], ['money-out', 'paper', 4.5],
 ];
 const DARK: [string, string, number][] = [
   ['ink.dark', 'paper.dark', 4.5], ['ink.dark', 'surface.dark', 4.5], ['muted.dark', 'paper.dark', 4.5], ['muted.dark', 'surface.dark', 4.5],
   ['accent.dark', 'surface.dark', 4.5], ['accent.dark', 'paper.dark', 4.5], ['accent.dark', 'accent.soft-dark', 4.5], ['paper.dark', 'accent.dark', 4.5],
   ['danger.dark', 'surface.dark', 4.5], ['danger.dark', 'paper.dark', 4.5], ['danger.dark', 'danger.soft-dark', 4.5], ['ink.dark', 'danger.soft-dark', 4.5],
   ['warn.dark', 'warn.soft-dark', 4.5], ['ink.dark', 'warn.soft-dark', 4.5], ['ok.dark', 'surface.dark', 4.5], ['ok.dark', 'ok.soft-dark', 4.5], ['ink.dark', 'ok.soft-dark', 4.5],
-  ['ink.dark', 'accent.soft-dark', 4.5],
+  ['ink.dark', 'accent.soft-dark', 4.5], ['money-in.dark', 'surface.dark', 4.5], ['money-out.dark', 'surface.dark', 4.5],
+  ['money-in.dark', 'paper.dark', 4.5], ['money-out.dark', 'paper.dark', 4.5],
 ];
 
 describe('WCAG contrast of the colour tokens', () => {

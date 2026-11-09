@@ -14,6 +14,8 @@ module.exports = {
         accent: { DEFAULT: '#2447D1', dark: '#8EA6FF', soft: '#E6EBFC', 'soft-dark': '#1B2850' },
         danger: { DEFAULT: '#B42318', dark: '#F97066', soft: '#FDECEA', 'soft-dark': '#3A1714' },
         warn: { DEFAULT: '#8A5300', dark: '#F5B547', soft: '#FFF3DC', 'soft-dark': '#33260E' },
+        'money-in': { DEFAULT: '#0F6B3F', dark: '#4ADE80' },
+        'money-out': { DEFAULT: '#A3203D', dark: '#FF8FA3' },
         ok: { DEFAULT: '#0F6B3F', dark: '#4ADE80', soft: '#E3F5EA', 'soft-dark': '#10301F' },
       },
     },

@@ -8,6 +8,8 @@ export interface ActivityRowProps {
   title: string;
   /** Already formatted and signed, for example "+₹1,234.00". */
   amount: string;
+  /** Colours the amount; the sign in `amount` still carries the meaning. */
+  direction?: 'in' | 'out';
   /** Already formatted, for example "8 Nov 2026". */
   date: string;
   /** One line per ERPNext document: a friendly kind ("Payment entry") and its id in small monospace text. */
@@ -21,7 +23,7 @@ export interface ActivityRowProps {
 }
 
 /** One processed message: who, how much, which ERPNext documents, where it stands and what can be done. */
-export function ActivityRow({ title, amount, date, docs, status, hint, actions, busy, testID }: ActivityRowProps) {
+export function ActivityRow({ title, amount, direction, date, docs, status, hint, actions, busy, testID }: ActivityRowProps) {
   return (
     <View testID={testID} className="mb-3 rounded-2xl border border-line bg-surface p-4 dark:border-line-dark dark:bg-surface-dark">
       <View className="flex-row items-start justify-between">
@@ -29,7 +31,13 @@ export function ActivityRow({ title, amount, date, docs, status, hint, actions, 
           <Text className="text-base font-semibold text-ink dark:text-ink-dark">{title}</Text>
           <Text className="mt-0.5 text-sm text-muted dark:text-muted-dark">{date}</Text>
         </View>
-        <Text className="text-base font-semibold text-ink dark:text-ink-dark">{amount}</Text>
+        <Text
+          style={{ fontVariant: ['tabular-nums'] }}
+          className={`text-base font-semibold ${
+            direction === 'in' ? 'text-money-in dark:text-money-in-dark' : direction === 'out' ? 'text-money-out dark:text-money-out-dark' : 'text-ink dark:text-ink-dark'
+          }`}>
+          {amount}
+        </Text>
       </View>
       {docs.map((d) => (
         <View key={`${d.kind}-${d.id}`} className="mt-2 flex-row items-baseline">
