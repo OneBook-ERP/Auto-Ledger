@@ -13,7 +13,8 @@ export function normalizeKey(s: string): string {
   return /[\p{L}\p{N}]/u.test(k) ? k : '';
 }
 
-function nameKey(txn: PendingTxn): string | null {
+/** The pattern of a txn: normalised counterparty (else merchant) plus direction; null when it has no name. */
+export function nameKey(txn: PendingTxn): string | null {
   const cp = txn.counterparty ? normalizeKey(txn.counterparty) : '';
   if (cp) return `cp:${txn.direction}:${cp}`;
   const m = txn.merchant ? normalizeKey(txn.merchant) : '';
@@ -24,7 +25,7 @@ function utrKey(txn: PendingTxn): string | null {
 }
 
 // A rule yields a suggestion only if it can produce a complete choice for the planner.
-function ruleChoice(rule: Rule): Partial<ActionChoice> | null {
+export function ruleChoice(rule: Rule): Partial<ActionChoice> | null {
   switch (rule.action) {
     case 'customer_advance': case 'supplier_payment': case 'salary':
       if (!rule.party) return null; break;
@@ -114,26 +115,45 @@ export function suggest(txn: PendingTxn, rules: Rule[], openInvoices: OpenInvoic
   return result;
 }
 
-export function learnRule(txn: PendingTxn, choice: ActionChoice, existing: Rule[]): Rule[] {
+const RUPEE = 'INR';
+
+/**
+ * Records the answer for this txn's pattern. Same answer as the stored rule (same action, party and account): hits
+ * go up, the automatic switch is kept and the largest confirmed rupee amount is raised when this one is larger.
+ * A changed answer starts over: not automatic, and only this amount counts. `raiseMax: false` (an answer the app
+ * made by itself) counts the use but never raises the amount, so automatic answers cannot widen their own limit.
+ */
+export function learnRule(txn: PendingTxn, choice: ActionChoice, existing: Rule[], opts: { raiseMax?: boolean } = {}): Rule[] {
   if (NOT_LEARNED.has(choice.type)) return existing;
   const key = nameKey(txn) ?? utrKey(txn);
   if (!key) return existing;
 
   const party = 'party' in choice ? choice.party : undefined;
   const account = choice.type === 'expense' ? choice.expenseAccount : choice.type === 'other_income' ? choice.incomeAccount : undefined;
+  const raise = opts.raiseMax !== false;
+  const confirmed = raise && txn.currency === RUPEE && Number.isSafeInteger(txn.amountMinor) && txn.amountMinor > 0
+    ? txn.amountMinor : null;
   const idx = existing.findIndex((r) => r.matchKey === key && r.action === choice.type);
   const next = existing.slice();
+  const rule: Rule = { matchKey: key, action: choice.type, hits: 1, lastUsed: txn.receivedAt };
+  if (party) rule.party = party;
+  if (account !== undefined) rule.account = account;
+  let max: number | null = confirmed;
   if (idx >= 0) {
     const old = existing[idx];
-    const updated: Rule = { matchKey: key, action: choice.type, hits: old.hits + 1, lastUsed: txn.receivedAt };
-    if (party) updated.party = party;
-    if (account !== undefined) updated.account = account;
-    next[idx] = updated;
-  } else {
-    const created: Rule = { matchKey: key, action: choice.type, hits: 1, lastUsed: txn.receivedAt };
-    if (party) created.party = party;
-    if (account !== undefined) created.account = account;
-    next.push(created);
+    rule.hits = old.hits + 1;
+    const same = JSON.stringify(old.party ?? null) === JSON.stringify(party ?? null) && (old.account ?? null) === (account ?? null);
+    if (same) {
+      if (old.auto) rule.auto = true;
+      const oldMax = old.currency === RUPEE && old.maxAmountMinor !== undefined ? old.maxAmountMinor : null;
+      max = oldMax === null ? confirmed : confirmed === null ? oldMax : Math.max(oldMax, confirmed);
+    }
   }
+  if (max !== null) {
+    rule.maxAmountMinor = max;
+    rule.currency = RUPEE;
+  }
+  if (idx >= 0) next[idx] = rule;
+  else next.push(rule);
   return next;
 }

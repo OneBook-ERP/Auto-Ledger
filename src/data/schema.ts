@@ -61,8 +61,15 @@ const V2: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_pending_state ON pending_txn (state)`,
 ];
 
+// Rule trust fields (wave 3 K). Existing rules read as not automatic, with no confirmed amount.
+const V3: string[] = [
+  'ALTER TABLE rule ADD COLUMN auto INTEGER',
+  'ALTER TABLE rule ADD COLUMN max_amount_minor INTEGER',
+  'ALTER TABLE rule ADD COLUMN currency TEXT',
+];
+
 // MIGRATIONS[i] upgrades schema version i to i+1.
-export const MIGRATIONS: string[][] = [V1, V2];
+export const MIGRATIONS: string[][] = [V1, V2, V3];
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
 /** Apply pending migrations up to `target` (default: latest). Idempotent. */

@@ -142,7 +142,7 @@ describe('learnRule', () => {
   it('creates a new rule with hits 1', () => {
     const t = fb();
     const r = learnRule(t, exp, []);
-    expect(r).toEqual([{ matchKey: 'm:out:facebooksi', action: 'expense', account: 'Ads - ZP', hits: 1, lastUsed: t.receivedAt }]);
+    expect(r).toEqual([{ matchKey: 'm:out:facebooksi', action: 'expense', account: 'Ads - ZP', hits: 1, lastUsed: t.receivedAt, maxAmountMinor: t.amountMinor, currency: 'INR' }]);
   });
   it('increments hits on repeat and updates account', () => {
     const t = fb();
