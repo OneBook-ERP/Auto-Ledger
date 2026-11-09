@@ -282,26 +282,27 @@ describe('scrubber round 2 (T20A)', () => {
     expect(scrubText(once)).toBe(once);
   });
 
-  it('keeps device/os/app context strings (versions, builds, identifiers, boot time) and frame code paths', () => {
+  it('keeps device/os/app version/build/id fields and readable frame code paths (refs scrubbed in frames)', () => {
     const e = {
       contexts: {
         os: { name: 'Android', version: '15.1', build: 'AP3A.241105.008', kernel_version: '6.1.75' },
         app: { app_build: '58', app_identifier: 'com.autoledger.app', app_version: '1.0' },
-        device: { boot_time: '2026-11-09T04:12:55Z', memory_size: 8000000000 },
+        device: { boot_time: '2026-11-09T04:12:55Z', memory_size: 8000000000, model: 'Pixel 8' },
       },
       exception: { values: [{ type: 'Error', value: 'x', stacktrace: { frames: [
         { filename: '/data/app/~~QvKc9a1B2c3D4e5F6g==/com.autoledger.app-Xy12AbCd34EfGh==/base.apk', lineno: 1 },
-        { filename: 'app:///index.android.bundle', abs_path: 'app:///index.android.bundle', lineno: 2 },
+        { filename: 'app:///index.android.bundle', abs_path: 'app:///index.android.bundle', module: 'com.vendor.lib', lineno: 2 },
       ] } }] },
     };
     const out = scrubEvent(e) as any;
     expect(out.contexts).toEqual(e.contexts);
-    expect(out.exception.values[0].stacktrace.frames).toEqual(e.exception.values[0].stacktrace.frames);
+    expect(out.exception.values[0].stacktrace.frames).toEqual([
+      { filename: '/data/app/~~<ref>==/com.autoledger.app-<ref>==/base.apk', lineno: 1 },
+      { filename: 'app:///index.android.bundle', abs_path: 'app:///index.android.bundle', module: 'com.vendor.lib', lineno: 2 },
+    ]);
     expect(scrubEvent(out)).toEqual(out);
-    // other contexts still get the number patterns
+    // other contexts still get the decimal rule; ISO dates are kept everywhere
     expect((scrubEvent({ contexts: { erp: { v: '15.1', when: '2026-11-09' } } }) as any).contexts.erp).toEqual({ v: '<amount>', when: '2026-11-09' });
-    // a frame "path" with whitespace is ordinary text
-    expect((scrubEvent({ extra: { filename: '/x paid 500' } }) as any).extra.filename).toBe('/x paid <amount>');
   });
 
   it('caps the scrubbed text per event (256 KB): later strings become <truncated>', () => {
@@ -328,5 +329,52 @@ describe('scrubber round 2 (T20A)', () => {
     const out = scrubEvent(e);
     expect(Date.now() - t0).toBeLessThan(1000);
     expect(out).not.toBeNull();
+  });
+});
+
+describe('scrubber round 3 (T20A)', () => {
+  it.each([
+    ['transferred 500 and spent 20', 'transferred <amount> and spent <amount>'],
+    ['300 transferred, 40 spent', '<amount> transferred, <amount> spent'],
+    // ISO exemption only for a real month/day
+    ['on 2026-11-09 not 2026-13-09 nor 2026-11-32', 'on 2026-11-09 not <num> nor <num>'],
+    // a bare host that merely starts like reverse DNS is still a site in text
+    ['reach app.myco.com or dev.mybiz.in or com.example.com', 'reach <site> or <site> or <site>'],
+    // the app's own ids are kept in text
+    ['app.onebook.autoledger.MainActivity and com.autoledger.app', 'app.onebook.autoledger.MainActivity and com.autoledger.app'],
+  ])('%s', (input, want) => expect(scrubText(input)).toBe(want));
+
+  it('path fields are exempt only inside stack frames (exception and threads)', () => {
+    const p = '/data/app/~~x==/dev.mybiz.in-1/base.apk paid 500';
+    const out = scrubEvent({
+      extra: { filename: '/x paid 500', package: 'dev.mybiz.in' },
+      tags: { abs_path: '/tmp/IDFB6292M4509651' },
+      threads: { values: [{ stacktrace: { frames: [{ filename: '/data/app/~~x==/dev.mybiz.in-1/base.apk', package: '/data/app/123456789/x', vars: { filename: p, note: p } }] } }] },
+    }) as any;
+    expect(out.extra.filename).toBe('/x paid <amount>');
+    expect(out.extra.package).toBe('dev.mybiz.in'); // a code-name field keeps reverse-DNS names
+    expect(out.tags.abs_path).toBe('/tmp/<ref>');
+    const f = out.threads.values[0].stacktrace.frames[0];
+    expect(f.filename).toBe('/data/app/~~x==/dev.mybiz.in-1/base.apk');
+    expect(f.package).toBe('/data/app/<num>/x');
+    // vars are not frame fields: full scrubbing (a code-name key still keeps reverse-DNS names)
+    expect(f.vars.filename).toBe('/data/app/~~x==/dev.mybiz.in-1/base.apk paid <amount>');
+    expect(f.vars.note).toBe('/data/app/~~x==/<site>-1/base.apk paid <amount>');
+  });
+
+  it('device/os/app context strings still get money, currency and 6+ digit patterns (not decimals)', () => {
+    const out = scrubEvent({ contexts: {
+      device: { name: 'Ravi paid 500', note: '₹ 1,200 from 9876543210', screen: '1080.5', boot_time: '2026-11-09T04:12:55Z' },
+      app: { app_name: 'AutoLedger 98765 43210' },
+      os: { version: '15.1', rooted: false },
+    } }) as any;
+    expect(out.contexts.device).toEqual({ name: 'Ravi paid <amount>', note: '<amount> from <num>', screen: '1080.5', boot_time: '2026-11-09T04:12:55Z' });
+    expect(out.contexts.app).toEqual({ app_name: 'AutoLedger <num>' });
+    expect(out.contexts.os).toEqual({ version: '15.1', rooted: false });
+  });
+
+  it('a safe device field over 256 characters is scrubbed like any device string', () => {
+    const long = `${'a'.repeat(260)} 9876543210`;
+    expect((scrubEvent({ contexts: { os: { version: long } } }) as any).contexts.os.version).toBe(`${'a'.repeat(260)} <num>`);
   });
 });

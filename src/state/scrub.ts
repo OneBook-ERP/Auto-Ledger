@@ -17,8 +17,10 @@
 // Object keys go through the same text scrubbing as values. Strings over 8 KB are truncated first, and after
 // 256 KB of scrubbed text in one event every further string is replaced by "<truncated>". Every pattern is
 // anchored at the start of a token or number, so the cost is linear in the text.
-// Not rewritten: ISO dates/timestamps, two-part versions after a version word (Android 15.1), reverse-DNS
-// names (com.autoledger.app), stack frame code paths, and the number patterns in device/os/app contexts.
+// Not rewritten: ISO dates/timestamps (valid month/day), two-part versions after a version word (Android 15.1),
+// this app's ids (app.onebook.autoledger, com.autoledger.app) and other reverse-DNS names in code-name fields,
+// stack frame code paths (only refs, masked accounts and long digit runs are scrubbed there), decimals in
+// device/os/app context strings and their version/build/id fields.
 // Kept: event id, timestamps, platform, level, release, environment, sdk, debug_meta (symbolication), exception
 // type names, stack frame file names/functions/line numbers, trace/span ids, and the numbers of the
 // device/os/app contexts (memory, storage).
@@ -69,18 +71,21 @@ const NA = '(?![A-Za-z0-9])';
 const NUM_START = '(?<![A-Za-z0-9,.])';
 // A number written next to one of these words is an amount, whatever its size.
 const MONEY_WORD_BEFORE =
-  '(?:amounts?|amt|paid|credit(?:ed)?|debit(?:ed)?|received|refund(?:ed)?|sent|deposit(?:ed)?|withdrawn?|withdrawal|payments?|balance|bal|rs|inr|totals?|outstanding)';
-const MONEY_WORD_AFTER = '(?:paid|credited|debited|received|refunded|sent|deposited|withdrawn|outstanding)';
+  '(?:amounts?|amt|paid|credit(?:ed)?|debit(?:ed)?|received|refund(?:ed)?|sent|spent|transferred|deposit(?:ed)?|withdrawn?|withdrawal|payments?|balance|bal|rs|inr|totals?|outstanding)';
+const MONEY_WORD_AFTER = '(?:paid|credited|debited|received|refunded|sent|spent|transferred|deposited|withdrawn|outstanding)';
 const NUMBER = '-?\\d(?:[\\d,.]*\\d)?';
 
 const RE_URL = /\b(https?|wss?):\/\/([^\s/"'<>?#]+)([^\s"'<>?#]*)(?:\?[^\s<>#]*)?(?:#[^\s<>]*)?/gi;
 // Bounded local part and domain, and a match may only start at the beginning of a token: linear time.
 const RE_EMAIL = /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,24}/g;
 const RE_HOST = new RegExp(`(?<![a-z0-9.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:${TLDS})\\b(?![.\\w])`, 'gi');
-// Reverse-DNS names (com.autoledger.app, a package in a frame path) are code, not a site.
+// This app's own ids (app.json android.package, and the iOS/legacy id): code, not a site, wherever they appear.
+// Other reverse-DNS names (com.vendor.lib) are kept only in code-name fields (Mode 'code' / 'path').
+const APP_IDS = ['app.onebook.autoledger', 'com.autoledger.app'];
 const REVERSE_DNS_FIRST = new Set(['com', 'org', 'net', 'io', 'in', 'dev', 'app', 'co']);
+const isAppId = (m: string) => APP_IDS.some((id) => m.toLowerCase() === id || m.toLowerCase().startsWith(`${id}.`));
 // ISO dates and timestamps (2026-11-09, 2026-11-09T10:30:00.123Z): kept as they are.
-const RE_ISO = /(?<![\d-])\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?![\d-])/g;
+const RE_ISO = /(?<![\d-])\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?![\d-])/g;
 const RE_CURRENCY_BEFORE = new RegExp(`(?:₹|${NB}Rs\\.?|${NB}INR|${NB}USD|\\$)\\s*-?\\d[\\d,]*(?:\\.\\d+)?`, 'gi');
 const RE_CURRENCY_AFTER = new RegExp(`${NUM_START}\\d[\\d,]*(?:\\.\\d+)?\\s*(?:INR|USD|rupees?)${NA}`, 'gi');
 const RE_GROUPED = /(?<![\d.,])\d{1,3}(?:,\d{2,3})+(?:\.\d+)?(?![\d,]|\.\d)/g;
@@ -115,60 +120,78 @@ function cap(s: string): string {
 
 /** Scrubs one string. Exported for tests; idempotent. */
 export function scrubText(input: string, opts: ScrubOptions = {}): string {
-  return scrubTextIn(input, opts, false);
+  return scrubTextIn(input, opts, 'text');
 }
 
 /**
- * `device`: a value of the device/os/app contexts (versions, builds, sizes, boot time): the number patterns
- * (decimals, grouped numbers, digit runs, money words) are not applied there; everything else is.
+ * How a string is scrubbed:
+ *  - 'text': everything;
+ *  - 'device': a value of the device/os/app contexts: everything except the decimal rule (versions, sizes);
+ *  - 'code': a code-name field (app_identifier, package, module, ...): everything, but reverse-DNS names are
+ *    kept (com.vendor.lib is not a site);
+ *  - 'path': a stack frame's file/package path: only the site host, emails, masked accounts, UTR-like refs and
+ *    long digit runs, so bundle and module paths stay readable.
  */
-function scrubTextIn(input: string, opts: ScrubOptions, device: boolean): string {
+type Mode = 'text' | 'device' | 'code' | 'path';
+
+function scrubTextIn(input: string, opts: ScrubOptions, mode: Mode): string {
+  const path = mode === 'path';
   let s = cap(input);
   const hosts = (opts.hosts ?? []).filter((h) => h && h.length >= 3).sort((a, b) => b.length - a.length);
   for (const h of hosts) s = s.replace(new RegExp(escapeRe(h), 'gi'), SITE);
   // scheme://host[:port]/path?query#frag -> scheme://<site>/path (repeated: a URL inside a URL's path)
   for (let k = 0; k < 4; k++) {
+    if (path) break;
     const n = s.replace(RE_URL, scrubUrl);
     if (n === s) break;
     s = n;
   }
   s = s.replace(RE_EMAIL, EMAIL);
-  s = s.replace(RE_HOST, (m) => {
-    const labels = m.split('.');
-    return labels.length >= 3 && REVERSE_DNS_FIRST.has(labels[0].toLowerCase()) ? m : SITE;
-  });
+  if (!path) {
+    s = s.replace(RE_HOST, (m) => {
+      if (isAppId(m)) return m;
+      const labels = m.split('.');
+      return mode === 'code' && labels.length >= 3 && REVERSE_DNS_FIRST.has(labels[0].toLowerCase()) ? m : SITE;
+    });
+  }
   const held: string[] = [];
   s = s.replace(RE_ISO, (m) => (held.length < MAX_HOLDS ? `${String.fromCharCode(0xe100 + held.push(m) - 1)}` : m));
-  s = s.replace(RE_CURRENCY_BEFORE, AMOUNT);
-  s = s.replace(RE_CURRENCY_AFTER, AMOUNT);
-  if (!device) {
+  if (!path) {
+    s = s.replace(RE_CURRENCY_BEFORE, AMOUNT);
+    s = s.replace(RE_CURRENCY_AFTER, AMOUNT);
     s = s.replace(RE_GROUPED, AMOUNT); // 1,00,000 / 1,000,000.00
-    s = s.replace(RE_DECIMAL, (m, off: number, all: string) => (VERSION_BEFORE.test(all.slice(Math.max(0, off - 12), off)) ? m : AMOUNT));
+    if (mode !== 'device') {
+      s = s.replace(RE_DECIMAL, (m, off: number, all: string) => (VERSION_BEFORE.test(all.slice(Math.max(0, off - 12), off)) ? m : AMOUNT));
+    }
     s = s.replace(RE_MONEY_WORD_BEFORE, (_m, w: string, sep: string) => `${w}${sep}${AMOUNT}`);
     s = s.replace(RE_MONEY_WORD_AFTER, (_m, sp: string) => `${AMOUNT}${sp}`);
   }
   s = s.replace(RE_MASKED, ACCT); // XX6507, ****1234
   s = s.replace(RE_REF, REF); // UTR-like: letters and digits mixed, 10+ characters
-  if (!device) {
-    s = s.replace(RE_DIGIT_GROUPS, (m) => (m.replace(/\D/g, '').length >= 6 ? NUM : m));
-    s = s.replace(RE_LONG_DIGITS, NUM);
-  }
+  if (!path) s = s.replace(RE_DIGIT_GROUPS, (m) => (m.replace(/\D/g, '').length >= 6 ? NUM : m));
+  s = s.replace(RE_LONG_DIGITS, NUM);
   if (held.length) s = s.replace(HOLD, (_m, c: string) => held[c.charCodeAt(0) - 0xe100] ?? '');
   return cap(s);
 }
 
-type Ctx = { opts: ScrubOptions; seen: WeakMap<object, unknown>; budget: number };
+/** `stack`: walking exception values or threads, where `frames` arrays hold stack frames. */
+type Ctx = { opts: ScrubOptions; seen: WeakMap<object, unknown>; budget: number; stack?: boolean };
 
 /** Scrubs one string of the event, within the per-event budget. */
-function text(ctx: Ctx, s: string, device = false): string {
+function text(ctx: Ctx, s: string, mode: Mode = 'text'): string {
   if (ctx.budget <= 0) return TRUNCATED_ALL;
   ctx.budget -= Math.min(s.length, MAX_TEXT);
-  return scrubTextIn(s, ctx.opts, device);
+  return scrubTextIn(s, ctx.opts, mode);
 }
 
-// Stack frame code locations (app:///index.android.bundle, /data/app/~~x==/com.autoledger.app-1/base.apk).
+// Stack frame code locations (app:///index.android.bundle, /data/app/~~x==/com.autoledger.app-1/base.apk):
+// scrubbed in 'path' mode, only inside stack frames.
 const PATH_KEYS = new Set(['filename', 'abs_path', 'image_path', 'package']);
 const CODE_PATH = /^(?:app:\/\/\/|file:\/\/\/|\/)\S*$/;
+// Fields that name code (reverse-DNS names are kept there).
+const CODE_NAME_KEYS = new Set(['app_identifier', 'package', 'module', 'abs_path', 'filename']);
+// Device/os/app context fields left as they are (versions, builds, ids, boot time).
+const SAFE_DEVICE_KEYS = new Set(['app_build', 'app_identifier', 'app_version', 'build', 'version', 'kernel_version', 'boot_time', 'app_start_time']);
 
 function scrubNumber(key: string | null, n: number): unknown {
   if (key && KEEP_NUMBER_KEYS.has(key)) return n;
@@ -186,15 +209,16 @@ function setScrubbedKey(out: Record<string, unknown>, key: string, value: unknow
 }
 
 /**
- * `keepNums`: a device/os/app context: numbers are kept as they are (memory, storage, screen sizes) and
- * strings skip the number patterns (versions, builds, boot time).
+ * `keepNums`: a device/os/app context: numbers are kept as they are (memory, storage, screen sizes), the
+ * SAFE_DEVICE_KEYS strings too, and other strings are scrubbed in 'device' mode. `frame`: `value` is a stack
+ * frame (an element of a `frames` array under exception/threads): its path fields are scrubbed in 'path' mode.
  */
-function walk(value: unknown, key: string | null, ctx: Ctx, depth: number, keepNums = false): unknown {
+function walk(value: unknown, key: string | null, ctx: Ctx, depth: number, keepNums = false, frame = false): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value === 'string') {
     if (key && MONEY_KEY.test(key)) return REDACTED;
-    if (key && PATH_KEYS.has(key) && value.length <= MAX_TEXT && CODE_PATH.test(value)) return value;
-    return text(ctx, value, keepNums);
+    if (keepNums && key && SAFE_DEVICE_KEYS.has(key) && value.length <= 256) return value;
+    return text(ctx, value, keepNums ? 'device' : key && CODE_NAME_KEYS.has(key) ? 'code' : 'text');
   }
   if (typeof value === 'number') return keepNums ? value : scrubNumber(key, value);
   if (typeof value === 'boolean') return value;
@@ -205,7 +229,8 @@ function walk(value: unknown, key: string | null, ctx: Ctx, depth: number, keepN
   if (Array.isArray(value)) {
     const out: unknown[] = [];
     ctx.seen.set(value, out);
-    for (const v of value) out.push(walk(v, key, ctx, depth + 1, keepNums));
+    const frames = ctx.stack === true && key === 'frames';
+    for (const v of value) out.push(walk(v, key, ctx, depth + 1, keepNums, frames));
     return out;
   }
   const out: Record<string, unknown> = {};
@@ -218,7 +243,9 @@ function walk(value: unknown, key: string | null, ctx: Ctx, depth: number, keepN
     } catch {
       continue; // a throwing getter
     }
-    const w = walk(v, k, ctx, depth + 1, keepNums);
+    const w = frame && PATH_KEYS.has(k) && typeof v === 'string' && CODE_PATH.test(v)
+      ? text(ctx, v, 'path')
+      : walk(v, k, ctx, depth + 1, keepNums);
     if (w !== undefined) setScrubbedKey(out, k, w, ctx);
   }
   return out;
@@ -280,7 +307,9 @@ function scrubException(ex: unknown, ctx: Ctx): unknown {
     out.values = values.map((v) => {
       if (!isObj(v)) return walk(v, null, ctx, 2);
       const { value, type, ...other } = v;
+      ctx.stack = true;
       const o = walk(other, null, ctx, 2) as Record<string, unknown>;
+      ctx.stack = false;
       if (typeof type === 'string') o.type = text(ctx, type);
       if (typeof value === 'string') o.value = text(ctx, value);
       return o;
@@ -340,7 +369,9 @@ export function scrubEvent<T>(event: T, opts: ScrubOptions = {}): T | null {
         // dropped
       } else {
         // extra, contexts, tags, threads (stack frames with vars), transaction, fingerprint, ...
+        ctx.stack = k === 'threads';
         const w = k === 'contexts' ? scrubContexts(v, ctx) : walk(v, k === 'extra' || k === 'tags' ? null : k, ctx, 1);
+        ctx.stack = false;
         if (w !== undefined) out[k] = w;
       }
     }
