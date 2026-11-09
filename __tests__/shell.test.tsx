@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Alert } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Inbox from '../app/(tabs)/inbox';
 import Settings from '../app/(tabs)/settings';
 import TabsLayout from '../app/(tabs)/_layout';
@@ -13,7 +14,13 @@ const mockReplace = jest.fn();
 jest.mock('expo-router', () => {
   const { Text: T, View: V } = require('react-native');
   const Tabs = Object.assign(({ children }: { children: unknown }) => <V testID="tabs">{children as never}</V>, {
-    Screen: ({ name, options }: { name: string; options: { title: string } }) => <T testID={`tab-${name}`}>{options.title}</T>,
+    Screen: ({ name, options }: { name: string; options: { title: string; tabBarIcon?: (p: { color: string; focused: boolean; size: number }) => unknown; tabBarBadge?: string | number } }) => (
+      <V testID={`tabwrap-${name}`}>
+        {options.tabBarIcon?.({ color: '#123456', focused: name === 'home', size: 24 }) as never}
+        <T testID={`tab-${name}`}>{options.title}</T>
+        {options.tabBarBadge !== undefined ? <T testID={`badge-${name}`}>{String(options.tabBarBadge)}</T> : null}
+      </V>
+    ),
   });
   return {
     useRouter: () => ({ push: mockPush, replace: mockReplace }),
@@ -33,19 +40,41 @@ beforeEach(() => {
   reset();
 });
 
+const metrics = { frame: { x: 0, y: 0, width: 360, height: 800 }, insets: { top: 24, bottom: 16, left: 0, right: 0 } };
+const InShell = ({ children }: { children: React.ReactNode }) => <SafeAreaProvider initialMetrics={metrics}>{children}</SafeAreaProvider>;
+
 describe('tabs shell', () => {
   it('defines home, inbox (autoledger://inbox target), activity and settings', async () => {
     reset(signedIn);
-    await render(<TabsLayout />);
+    await render(<InShell><TabsLayout /></InShell>);
     expect(['home', 'inbox', 'activity', 'settings'].map((n) => screen.getByTestId(`tab-${n}`).props.children)).toEqual(['Home', 'Inbox', 'Activity', 'Settings']);
+  });
+  it('gives each of the four tabs an icon hidden from screen readers, next to its label', async () => {
+    reset(signedIn);
+    await render(<InShell><TabsLayout /></InShell>);
+    // one icon per tab, all hidden from screen readers (the mock renders each tab's icon before its label)
+    expect(screen.getAllByTestId(/^tab-/)).toHaveLength(4);
+    expect(JSON.stringify(screen.toJSON()).match(/"accessibilityElementsHidden":true,"importantForAccessibility":"no"|"importantForAccessibility":"no"/g)?.length).toBeGreaterThanOrEqual(4);
+  });
+  it('shows a count badge on Inbox only when answers are waiting', async () => {
+    reset(signedIn);
+    const app = await fakeApp();
+    const none = await render(<app.Wrap><InShell><TabsLayout /></InShell></app.Wrap>);
+    await act(async () => undefined);
+    expect(screen.queryByTestId('badge-inbox')).toBeNull();
+    await none.unmount();
+    jest.spyOn(app.repo, 'listPending').mockResolvedValue([{ id: 'a' }, { id: 'b' }, { id: 'c' }] as never);
+    await render(<app.Wrap><InShell><TabsLayout /></InShell></app.Wrap>);
+    await waitFor(() => expect(screen.getByTestId('badge-inbox').props.children).toBe('3'));
+    expect(screen.queryByTestId('badge-home')).toBeNull();
   });
   it('sends signed-out users to login and unfinished setup to the wizard', async () => {
     reset({ boot: 'ready', session: null });
-    const a = await render(<TabsLayout />);
+    const a = await render(<InShell><TabsLayout /></InShell>);
     expect(screen.getByTestId('redirect').props.children).toBe('/(auth)/login');
     await a.unmount();
     reset({ ...signedIn, setupDone: false });
-    await render(<TabsLayout />);
+    await render(<InShell><TabsLayout /></InShell>);
     expect(screen.getByTestId('redirect').props.children).toBe('/(setup)/company');
   });
   it('placeholders have clear empty states', async () => {
