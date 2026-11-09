@@ -119,4 +119,25 @@ describe('Activity filter, totals, grouping and sort', () => {
     expect(ids(sortActivity(l, 'name_az'))).toEqual(['2', '1', '3']);
     expect(l).toEqual(copy);
   });
+
+  it('filters by status: waiting (drafts), submitted, ignored', () => {
+    const l = [mk('1'), mk('2', { state: 'submitted' }), mk('3', { state: 'ignored' })];
+    expect(ids(filterActivity(l, f({ status: 'waiting' }), TODAY))).toEqual(['1']);
+    expect(ids(filterActivity(l, f({ status: 'submitted' }), TODAY))).toEqual(['2']);
+    expect(ids(filterActivity(l, f({ status: 'ignored' }), TODAY))).toEqual(['3']);
+    expect(ids(filterActivity(l, f(), TODAY))).toHaveLength(3);
+  });
+  it('search finds the sender when it is the visible title', () => {
+    const l = [mk('1', { sender: 'AX-IDFCFB' }), mk('2', { counterparty: 'Rent', sender: 'XX-OTHER' })];
+    expect(ids(filterActivity(l, f({ query: 'idfcfb' }), TODAY))).toEqual(['1']);
+  });
+  it('totals leave out ignored items and drafts cancelled or missing in ERPNext', () => {
+    const d = (docstatus: number) => [{ doctype: 'Payment Entry', name: 'X', docstatus }];
+    const l = [
+      mk('1', { amountMinor: 10, createdDocs: d(0) }), mk('2', { amountMinor: 20, createdDocs: d(1), state: 'submitted' }),
+      mk('3', { amountMinor: 1000, state: 'ignored' }), mk('4', { amountMinor: 2000, createdDocs: d(2) }), mk('5', { amountMinor: 4000, createdDocs: d(-1) }),
+    ];
+    expect(totalsOf(l)).toEqual({ inMinor: 30, outMinor: 0, netMinor: 30, foreignCount: 0 });
+  });
 });
+

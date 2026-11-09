@@ -1,14 +1,15 @@
-import { useState } from 'react';
+import { useContext, useState } from 'react';
+import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
-import type { ActivitySort } from '../state/activityModel';
+import type { ActivitySort, ActivityStatus } from '../state/activityModel';
 import { Button } from './Button';
 import { Chip } from './Chip';
 
-export type ActivityFilters = { direction?: 'in' | 'out'; accountLast4?: string; sort: ActivitySort };
+export type ActivityFilters = { direction?: 'in' | 'out'; accountLast4?: string; status?: ActivityStatus; sort: ActivitySort };
 export const DEFAULT_FILTERS: ActivityFilters = { sort: 'newest' };
 
 /** How many of the three settings differ from the defaults (shown on the Filters button). */
-export const activeFilterCount = (f: ActivityFilters) => (f.direction ? 1 : 0) + (f.accountLast4 ? 1 : 0) + (f.sort !== 'newest' ? 1 : 0);
+export const activeFilterCount = (f: ActivityFilters) => (f.direction ? 1 : 0) + (f.status ? 1 : 0) + (f.accountLast4 ? 1 : 0) + (f.sort !== 'newest' ? 1 : 0);
 
 const SORTS: { key: ActivitySort; label: string }[] = [
   { key: 'newest', label: 'Newest first' },
@@ -39,6 +40,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 
 /** Bottom sheet: money direction, account and sort order. Nothing changes until Apply. */
 export function FilterSheet({ visible, value, accounts, onApply, onReset, onClose }: FilterSheetProps) {
+  const bottom = useContext(SafeAreaInsetsContext)?.bottom ?? 0;
   const [draft, setDraft] = useState<ActivityFilters>(value);
   const [wasVisible, setWasVisible] = useState(false);
   // Start from what is applied every time the sheet opens.
@@ -50,13 +52,20 @@ export function FilterSheet({ visible, value, accounts, onApply, onReset, onClos
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable accessibilityLabel="Close filters" accessibilityRole="button" onPress={onClose} className="flex-1 bg-black/40" />
-      <View testID="filter-sheet" className="max-h-[80%] rounded-t-3xl bg-surface px-4 pb-6 pt-4 dark:bg-surface-dark">
+      <View testID="filter-sheet" style={{ paddingBottom: 24 + bottom }}
+        className="max-h-[80%] rounded-t-3xl bg-surface px-4 pt-4 dark:bg-surface-dark">
         <Text accessibilityRole="header" className="text-xl font-semibold text-ink dark:text-ink-dark">Filters</Text>
         <ScrollView>
           <Group title="Money">
             <Chip label="All" selected={!draft.direction} onPress={() => setDraft({ ...draft, direction: undefined })} />
             <Chip label="Money in" selected={draft.direction === 'in'} onPress={() => setDraft({ ...draft, direction: 'in' })} />
             <Chip label="Money out" selected={draft.direction === 'out'} onPress={() => setDraft({ ...draft, direction: 'out' })} />
+          </Group>
+          <Group title="Status">
+            <Chip label="All" selected={!draft.status} onPress={() => setDraft({ ...draft, status: undefined })} />
+            <Chip label="Waiting for your accountant" selected={draft.status === 'waiting'} onPress={() => setDraft({ ...draft, status: 'waiting' })} />
+            <Chip label="Submitted" selected={draft.status === 'submitted'} onPress={() => setDraft({ ...draft, status: 'submitted' })} />
+            <Chip label="Ignored" selected={draft.status === 'ignored'} onPress={() => setDraft({ ...draft, status: 'ignored' })} />
           </Group>
           {accounts.length > 1 ? (
             <Group title="Account">

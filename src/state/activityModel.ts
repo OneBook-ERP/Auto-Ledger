@@ -79,7 +79,10 @@ export function confirmText(plan: { remove: Doc[]; keep: Doc[] }): { title: stri
 
 export type ActivityPeriod = 'this_month' | 'last_month' | 'this_fy' | 'all';
 export type ActivitySort = 'newest' | 'oldest' | 'amount_high' | 'amount_low' | 'name_az';
-export type ActivityFilter = { query: string; period: ActivityPeriod; direction?: 'in' | 'out'; accountLast4?: string };
+export type ActivityStatus = 'waiting' | 'submitted' | 'ignored';
+export type ActivityFilter = { query: string; period: ActivityPeriod; direction?: 'in' | 'out'; accountLast4?: string; status?: ActivityStatus };
+
+const STATE_OF: Record<ActivityStatus, PendingTxn['state']> = { waiting: 'created', submitted: 'submitted', ignored: 'ignored' };
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
@@ -97,7 +100,7 @@ function periodRange(period: ActivityPeriod, today: string): [string, string] | 
   return [`${fy}-04-01`, `${fy + 1}-04-01`];
 }
 
-const searchText = (t: PendingTxn) => [t.counterparty, t.merchant, t.utr, ...t.createdDocs.map((d) => d.name)].filter(Boolean).join('\n').toLowerCase();
+const searchText = (t: PendingTxn) => [t.counterparty, t.merchant, t.sender, t.utr, ...t.createdDocs.map((d) => d.name)].filter(Boolean).join('\n').toLowerCase();
 
 /** Search (plain text, case-insensitive, trimmed), period, direction and account. Keeps the input order. */
 export function filterActivity(items: PendingTxn[], f: ActivityFilter, today: string): PendingTxn[] {
@@ -106,17 +109,20 @@ export function filterActivity(items: PendingTxn[], f: ActivityFilter, today: st
   return items.filter((t) => {
     if (range && (t.occurredOn < range[0] || t.occurredOn >= range[1])) return false;
     if (f.direction && t.direction !== f.direction) return false;
+    if (f.status && t.state !== STATE_OF[f.status]) return false;
     if (f.accountLast4 && t.accountLast4 !== f.accountLast4) return false;
     return !q || searchText(t).includes(q);
   });
 }
 
-/** Rupee totals in paise. Items in another currency are not added; they are counted in `foreignCount`. */
+/** Rupee totals in paise, for entries that count (not ignored, not cancelled or missing). Items in another currency are not added; they are counted in `foreignCount`. */
 export function totalsOf(items: PendingTxn[]): { inMinor: number; outMinor: number; netMinor: number; foreignCount: number } {
   let inMinor = 0;
   let outMinor = 0;
   let foreignCount = 0;
   for (const t of items) {
+    // Ignored items and drafts that were cancelled or are gone from ERPNext are not part of the books.
+    if (t.state === 'ignored' || t.createdDocs.some((d) => d.docstatus === 2 || d.docstatus === DOC_MISSING)) continue;
     if ((t.currency || 'INR').toUpperCase() !== 'INR') foreignCount += 1;
     else if (t.direction === 'in') inMinor += t.amountMinor;
     else outMinor += t.amountMinor;

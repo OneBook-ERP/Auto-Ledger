@@ -322,7 +322,8 @@ describe('Activity filter and sort sheet', () => {
     await open(data(), docs);
     await screen.findByTestId('activity-row-1');
     await fireEvent.press(screen.getByRole('button', { name: 'Filters' }));
-    for (const name of ['All', 'Money in', 'Money out', 'Account ending 3455', 'Account ending 9999', 'Highest amount', 'Name A to Z']) {
+    expect(screen.getAllByRole('radio', { name: 'All' })).toHaveLength(2);
+    for (const name of ['Waiting for your accountant', 'Money in', 'Money out', 'Account ending 3455', 'Account ending 9999', 'Highest amount', 'Name A to Z']) {
       expect(screen.getByRole('radio', { name })).toBeTruthy();
     }
     await fireEvent.press(screen.getByRole('radio', { name: 'Money out' }));
@@ -348,3 +349,37 @@ describe('Activity filter and sort sheet', () => {
   });
 });
 
+describe('Activity triage and totals honesty', () => {
+  const docs = { 'Payment Entry:PE-1': 0, 'Payment Entry:PE-2': 1, 'Payment Entry:PE-3': 0 };
+  const data = () => [
+    txn('1', { counterparty: 'Alpha' }),
+    txn('2', { counterparty: 'Bravo', state: 'submitted', createdDocs: [doc('PE-2', 1)] }),
+    txn('3', { counterparty: 'Charlie', state: 'ignored', createdDocs: [] }),
+  ];
+
+  it('says how many wait for the accountant; tapping applies the Waiting filter', async () => {
+    await open(data(), docs);
+    await screen.findByTestId('activity-row-1');
+    await fireEvent.press(screen.getByRole('button', { name: '1 waiting for your accountant' }));
+    expect(screen.getByTestId('activity-row-1')).toBeTruthy();
+    expect(screen.queryByTestId('activity-row-2')).toBeNull();
+    expect(screen.queryByTestId('activity-row-3')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Filters (1)' })).toBeTruthy();
+  });
+
+  it('the sheet has a status filter', async () => {
+    await open(data(), docs);
+    await screen.findByTestId('activity-row-1');
+    await fireEvent.press(screen.getByRole('button', { name: 'Filters' }));
+    await fireEvent.press(screen.getByRole('radio', { name: 'Ignored' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.getAllByTestId(/^activity-row-/).map((n) => n.props.testID)).toEqual(['activity-row-3']);
+  });
+
+  it('totals do not count ignored items', async () => {
+    await open(data(), docs);
+    await screen.findByTestId('activity-row-1');
+    // rows 1 and 2 are 12,345.00 each; the ignored row 3 is not added
+    expect(within(screen.getByTestId('activity-totals')).getAllByText('₹24,690.00').length).toBeGreaterThan(0);
+  });
+});
