@@ -1,4 +1,4 @@
-import { afterCycle, createCycleRunner } from './cycle';
+import { afterCycle, afterCycleBackground, createCycleRunner } from './cycle';
 import { LAST_SYNCED_KEY } from '../home/viewModel';
 
 const deferred = () => {
@@ -206,5 +206,66 @@ describe('afterCycle: automatic answers', () => {
     release();
     await Promise.all([first, second]);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('cycle runner: the slow steps after a cycle (duplicate check, automatic answers)', () => {
+  const synced = { failedSteps: [], drain: { ran: 0, stoppedBecause: 'empty' as const }, erpReached: true };
+
+  it('the trigger (pull-to-refresh) resolves after the cycle and banners, before a slow background step ends', async () => {
+    let release: () => void = () => undefined;
+    const background = jest.fn(() => new Promise<void>((res) => { release = res; }));
+    const after = jest.fn(async () => undefined);
+    const r = createCycleRunner({ run: async () => synced, after, background });
+    await r.trigger();
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(background).toHaveBeenCalledTimes(1);
+    expect(background).toHaveBeenCalledWith(synced);
+    release();
+    await r.idle();
+  });
+
+  it('a trigger while the background step runs starts neither a second cycle nor a second background step', async () => {
+    let release: () => void = () => undefined;
+    const background = jest.fn(() => new Promise<void>((res) => { release = res; }));
+    const run = jest.fn(async () => synced);
+    const r = createCycleRunner({ run, after: async () => undefined, background });
+    await r.trigger();
+    await r.trigger();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(background).toHaveBeenCalledTimes(1);
+    release();
+    await r.idle();
+    await r.trigger();
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(background).toHaveBeenCalledTimes(2);
+    release();
+    await r.idle();
+  });
+
+  it('a failing background step is swallowed and frees the runner', async () => {
+    const background = jest.fn(async () => { throw new Error('db'); });
+    const run = jest.fn(async () => synced);
+    const r = createCycleRunner({ run, after: async () => undefined, background });
+    await expect(r.trigger()).resolves.toBeUndefined();
+    await expect(r.idle()).resolves.toBeUndefined();
+    await r.trigger();
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it('afterCycleBackground: duplicate check then automatic answers, then the screens are refreshed', async () => {
+    const order: string[] = [];
+    const d = {
+      onDone: jest.fn((n: number) => { order.push(`refresh ${n}`); }),
+      checkDuplicates: jest.fn(async () => { order.push('dup'); return true; }),
+      autoApply: jest.fn(async () => { order.push('auto'); return 2; }),
+    };
+    await afterCycleBackground(synced, d);
+    expect(order).toEqual(['dup', 'auto', 'refresh 2']);
+    order.length = 0;
+    await afterCycleBackground({ ...synced, erpReached: false }, d);
+    expect(order).toEqual([]);
+    d.autoApply.mockRejectedValueOnce(new Error('db'));
+    await expect(afterCycleBackground(synced, d)).resolves.toBeUndefined();
   });
 });

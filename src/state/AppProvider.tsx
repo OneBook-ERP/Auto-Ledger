@@ -14,7 +14,7 @@ import { runPlan } from '../outbox/runner';
 import { runForegroundCycle, type CycleSummary } from '../ingest/pipeline';
 import { getAppRepo } from './appRepo';
 import { TEMPLATES_URL } from './config';
-import { afterCycle, attachAppStateCycle, createCycleRunner } from './cycle';
+import { afterCycle, afterCycleBackground, attachAppStateCycle, createCycleRunner } from './cycle';
 import { buildErp } from './erp';
 import { getNative, type SmsNative } from './native';
 import { clearSession, persistSession, restoreSession, summarize } from './session';
@@ -142,14 +142,22 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
           const { erp } = buildErp(s, { fetchImpl });
           return runForegroundCycle({ repo: r, native, erp, now, fetchImpl });
         },
-        // Home's "last synced" only after an ERPNext round-trip (R50); Home is invalidated whatever happens.
+        // Home's "last synced" only after an ERPNext round-trip (R50); Home and the Inbox re-read whatever happens.
+        // Pull-to-refresh waits for this much only.
         after: (summary) =>
           afterCycle(summary, {
             repo: repoRef.current,
             now,
             refreshBanners,
-            invalidateHome: () => queryClient.invalidateQueries({ queryKey: ['home'] }),
-            // Warn-only "may already be booked" flags; afterCycle runs it only when ERPNext answered.
+            invalidateHome: () => {
+              useUiStore.getState().bumpData();
+              return queryClient.invalidateQueries({ queryKey: ['home'] });
+            },
+          }),
+        // The slow steps, after pull-to-refresh has ended; the runner never starts a cycle while they run.
+        background: (summary) =>
+          afterCycleBackground(summary, {
+            // Warn-only "may already be booked" flags; runs only when ERPNext answered.
             checkDuplicates: async () => {
               const r = repoRef.current;
               const s = sessionRef.current;
@@ -162,6 +170,12 @@ export function AppProvider({ children, openDriver, native: nativeProp, fetchImp
               const s = sessionRef.current;
               if (!r || !s || !(await siteMatches(r, s.siteUrl))) return 0;
               return (await runAutoApply({ repo: r, erp: makeInboxErp(buildErp(s, { fetchImpl }).client), runPlan, now })).done.length;
+            },
+            // New warnings, held notes and answered items: the Inbox, Activity, Home and the banners re-read.
+            onDone: async () => {
+              useUiStore.getState().bumpData();
+              await refreshBanners().catch(() => undefined);
+              return queryClient.invalidateQueries({ queryKey: ['home'] });
             },
           }),
       }),

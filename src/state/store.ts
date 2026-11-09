@@ -11,6 +11,9 @@ export type UiState = {
   needsLogin: boolean;
   /** Set when the native SMS engine reports usable=false. */
   engineUnusable: boolean;
+  /** Bumped after each cycle and its background step: screens holding local data (Inbox, Activity) re-read. */
+  dataVersion: number;
+  bumpData(): void;
   setBoot(p: { session: SessionSummary | null; setupDone: boolean }): void;
   setSession(s: SessionSummary | null): void;
   setSetupDone(v: boolean): void;
@@ -24,6 +27,8 @@ export const useUiStore = create<UiState>((set) => ({
   setupDone: false,
   needsLogin: false,
   engineUnusable: false,
+  dataVersion: 0,
+  bumpData: () => set((s) => ({ dataVersion: s.dataVersion + 1 })),
   setBoot: ({ session, setupDone }) => set({ boot: 'ready', session, setupDone }),
   setSession: (session) => set({ session }),
   setSetupDone: (setupDone) => set({ setupDone }),
