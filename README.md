@@ -42,3 +42,9 @@ Status: NativeWind v4.2 + Tailwind 3.4 builds cleanly on Expo SDK 58 (RN 0.88); 
 the pilot phone and `ListRow` rendered with Tailwind classes. No fallback to React Native Paper was needed.
 `ListRow` is a hand-written NativeWind component in NativeWindUI's style; the NativeWindUI package itself
 (extra icon/font deps) was not pulled in. Add components to `src/ui/` as needed.
+
+## Releasing
+
+- `docs/release.md`: EAS profiles, cutting a pilot build, template-only vs code updates, rollback.
+- `docs/play-sms-declaration.md`: text for the Google Play SMS permission declaration and data safety form.
+- `docs/pilot-checklist.md`: the spec section 17 success criteria, how to measure them, and the on-device checks still owed. Read-only helpers: `npx tsx scripts/pilot-parse-rate.ts`, `npx tsx scripts/pilot-duplicates.ts` (stage only).
