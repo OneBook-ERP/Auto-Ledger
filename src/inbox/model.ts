@@ -3,6 +3,7 @@ import { suggest } from '../core/suggest';
 import type { AccountMapping, PendingTxn, Rule } from '../core/types';
 import { resolveMapping } from '../ingest/pipeline';
 import { amountA11y, accountLabel, istToday, kindLabel, relativeAgo, signedAmount, titleOf, whenLabel } from './format';
+import { filterPending, type InboxFilter } from './inboxFilter';
 import { chipFor, type ChipView } from './suggestions';
 
 /** Written by the provider after a fully successful cycle (Task 19). */
@@ -22,6 +23,8 @@ export type InboxInputs = {
   now: number;
   /** Txns whose answer is queued in the outbox (sent when back online). */
   queuedIds: string[];
+  /** Search, period and filters; rows, count and suggestions only cover what matches. */
+  filter?: InboxFilter;
 };
 
 export type InboxRow = {
@@ -37,7 +40,12 @@ export function kindIconOf(t: Pick<PendingTxn, 'kind' | 'counterparty'>): InboxR
   return 'bank';
 }
 export type InboxModel = {
+  /** Nothing is waiting at all (not the same as nothing matching the search or filters). */
   empty: boolean;
+  /** Something is waiting but the search or filters hide all of it. */
+  noMatch: boolean;
+  /** Last four digits of every account seen in the waiting items (for the filter sheet). */
+  accounts: string[];
   countLabel: string;
   trustLine: string;
   rows: InboxRow[];
@@ -59,7 +67,8 @@ export function buildInboxModel(i: InboxInputs): InboxModel {
   const bucket = (t: PendingTxn) => (t.occurredOn === today ? 0 : t.occurredOn === yesterday ? 1 : 2);
   // Newest first within a day group; every row of a group sits together (no "Today / Earlier / Today").
   const groups: PendingTxn[][] = [[], [], []];
-  for (const t of newestFirst(i.pending)) groups[bucket(t)].push(t);
+  const shown = i.filter ? filterPending(i.pending, i.filter, today) : i.pending;
+  for (const t of newestFirst(shown)) groups[bucket(t)].push(t);
   const toRow = (t: PendingTxn): InboxRow => {
     const mapping = resolveMapping(i.mappings, t);
     const chip: ChipView = queued.has(t.id)
@@ -84,7 +93,9 @@ export function buildInboxModel(i: InboxInputs): InboxModel {
   const drafts = `${i.createdCount} draft${i.createdCount === 1 ? '' : 's'} waiting for your accountant`;
   const synced = i.lastSyncedAt === null ? 'Not synced yet' : `Synced ${relativeAgo(i.now, i.lastSyncedAt)}`;
   return {
-    empty: n === 0,
+    empty: i.pending.length === 0,
+    noMatch: i.pending.length > 0 && n === 0,
+    accounts: [...new Set(i.pending.map((t) => t.accountLast4).filter((x): x is string => !!x))].sort(),
     countLabel: n === 0 ? 'Nothing to answer' : `${n} to answer`,
     trustLine: `${synced} · ${drafts}`,
     rows,

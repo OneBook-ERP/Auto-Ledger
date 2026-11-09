@@ -8,16 +8,17 @@ import { COMPANY_KEY, DEFAULT_EXPENSE_KEY, DRAWINGS_KEY } from '../state/useSett
 import type { Step } from './actions';
 import { useInboxDeps } from './deps';
 import type { FlowDraft } from './flow';
-import { LAST_SYNCED_KEY, buildInboxModel, newestFirst, type InboxModel } from './model';
+import type { InboxFilter } from './inboxFilter';
+import { LAST_SYNCED_KEY, buildInboxModel, newestFirst, type InboxInputs, type InboxModel } from './model';
 import { useFlowStore } from './store';
 import { createTapGuard } from './tapGuard';
 
 const UNKNOWN_PREFIX = unrecognisedAccountKey('');
 const EMPTY: FlowDraft = {};
 
-export function useInboxData() {
+export function useInboxData(filter?: InboxFilter) {
   const { repo, now } = useInboxDeps();
-  const [model, setModel] = useState<InboxModel | null>(null);
+  const [inputs, setInputs] = useState<Omit<InboxInputs, 'filter'> | null>(null);
   const reload = useCallback(async () => {
     const [pending, created, rules, mappings, unread, flags, synced, queuedIds] = await Promise.all([
       repo.listPending('new'), repo.listPending('created'), repo.listRules(), repo.listMappings(),
@@ -29,12 +30,14 @@ export function useInboxData() {
     const stale = flags.filter((f) => covered(f.key.slice(UNKNOWN_PREFIX.length)));
     await Promise.all(stale.map((f) => repo.deleteSetting(f.key)));
     const live = flags.filter((f) => !stale.includes(f));
-    setModel(buildInboxModel({
+    setInputs({
       pending, mappings, rules, createdCount: created.length, unreadCount: Number(unread) || 0,
       unknownAccounts: live.filter((f) => f.value !== '').map((f) => f.key.slice(UNKNOWN_PREFIX.length)),
       lastSyncedAt: synced ? Number(synced) || null : null, now: now(), queuedIds,
-    }));
+    });
   }, [repo, now]);
+  // A changed search or filter only re-filters what is already loaded; nothing is read again.
+  const model = useMemo<InboxModel | null>(() => (inputs ? buildInboxModel({ ...inputs, filter }) : null), [inputs, filter]);
   return { model, reload };
 }
 

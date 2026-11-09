@@ -5,11 +5,14 @@ import type { ActivitySort, ActivityStatus } from '../state/activityModel';
 import { Button } from './Button';
 import { Chip } from './Chip';
 
-export type ActivityFilters = { direction?: 'in' | 'out'; accountLast4?: string; status?: ActivityStatus; sort: ActivitySort };
+export type ActivityFilters = { direction?: 'in' | 'out'; accountLast4?: string; status?: ActivityStatus; sort: ActivitySort;
+  /** Inbox only: how the money moved. */
+  kind?: 'bank' | 'upi' | 'card';
+};
 export const DEFAULT_FILTERS: ActivityFilters = { sort: 'newest' };
 
 /** How many of the four settings differ from the defaults (shown on the Filters button). */
-export const activeFilterCount = (f: ActivityFilters) => (f.direction ? 1 : 0) + (f.status ? 1 : 0) + (f.accountLast4 ? 1 : 0) + (f.sort !== 'newest' ? 1 : 0);
+export const activeFilterCount = (f: ActivityFilters) => (f.direction ? 1 : 0) + (f.status ? 1 : 0) + (f.accountLast4 ? 1 : 0) + (f.kind ? 1 : 0) + (f.sort !== 'newest' ? 1 : 0);
 
 const SORTS: { key: ActivitySort; label: string }[] = [
   { key: 'newest', label: 'Newest first' },
@@ -27,6 +30,8 @@ export interface FilterSheetProps {
   onApply: (f: ActivityFilters) => void;
   onReset: () => void;
   onClose: () => void;
+  /** 'inbox' offers money, how it was paid and account only; 'activity' (default) offers money, status, account and sort. */
+  mode?: 'activity' | 'inbox';
 }
 
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
@@ -39,7 +44,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 }
 
 /** Bottom sheet: money direction, account and sort order. Nothing changes until Apply. */
-export function FilterSheet({ visible, value, accounts, onApply, onReset, onClose }: FilterSheetProps) {
+export function FilterSheet({ visible, value, accounts, onApply, onReset, onClose, mode = 'activity' }: FilterSheetProps) {
   const bottom = useContext(SafeAreaInsetsContext)?.bottom ?? 0;
   const [draft, setDraft] = useState<ActivityFilters>(value);
   const [wasVisible, setWasVisible] = useState(false);
@@ -61,12 +66,21 @@ export function FilterSheet({ visible, value, accounts, onApply, onReset, onClos
             <Chip label="Money in" selected={draft.direction === 'in'} onPress={() => setDraft({ ...draft, direction: 'in' })} />
             <Chip label="Money out" selected={draft.direction === 'out'} onPress={() => setDraft({ ...draft, direction: 'out' })} />
           </Group>
-          <Group title="Status">
-            <Chip label="All" selected={!draft.status} onPress={() => setDraft({ ...draft, status: undefined })} />
-            <Chip label="Waiting for your accountant" selected={draft.status === 'waiting'} onPress={() => setDraft({ ...draft, status: 'waiting' })} />
-            <Chip label="Submitted" selected={draft.status === 'submitted'} onPress={() => setDraft({ ...draft, status: 'submitted' })} />
-            <Chip label="Ignored" selected={draft.status === 'ignored'} onPress={() => setDraft({ ...draft, status: 'ignored' })} />
-          </Group>
+          {mode === 'inbox' ? (
+            <Group title="How it was paid">
+              <Chip label="All" selected={!draft.kind} onPress={() => setDraft({ ...draft, kind: undefined })} />
+              <Chip label="Bank" selected={draft.kind === 'bank'} onPress={() => setDraft({ ...draft, kind: 'bank' })} />
+              <Chip label="UPI" selected={draft.kind === 'upi'} onPress={() => setDraft({ ...draft, kind: 'upi' })} />
+              <Chip label="Card" selected={draft.kind === 'card'} onPress={() => setDraft({ ...draft, kind: 'card' })} />
+            </Group>
+          ) : (
+            <Group title="Status">
+              <Chip label="All" selected={!draft.status} onPress={() => setDraft({ ...draft, status: undefined })} />
+              <Chip label="Waiting for your accountant" selected={draft.status === 'waiting'} onPress={() => setDraft({ ...draft, status: 'waiting' })} />
+              <Chip label="Submitted" selected={draft.status === 'submitted'} onPress={() => setDraft({ ...draft, status: 'submitted' })} />
+              <Chip label="Ignored" selected={draft.status === 'ignored'} onPress={() => setDraft({ ...draft, status: 'ignored' })} />
+            </Group>
+          )}
           {accounts.length > 1 ? (
             <Group title="Account">
               <Chip label="All accounts" selected={!draft.accountLast4} onPress={() => setDraft({ ...draft, accountLast4: undefined })} />
@@ -75,11 +89,13 @@ export function FilterSheet({ visible, value, accounts, onApply, onReset, onClos
               ))}
             </Group>
           ) : null}
-          <Group title="Sort by">
-            {SORTS.map((s) => (
-              <Chip key={s.key} label={s.label} selected={draft.sort === s.key} onPress={() => setDraft({ ...draft, sort: s.key })} />
-            ))}
-          </Group>
+          {mode === 'activity' ? (
+            <Group title="Sort by">
+              {SORTS.map((s) => (
+                <Chip key={s.key} label={s.label} selected={draft.sort === s.key} onPress={() => setDraft({ ...draft, sort: s.key })} />
+              ))}
+            </Group>
+          ) : null}
         </ScrollView>
         <View className="mt-2 flex-row gap-3">
           <View className="flex-1"><Button variant="secondary" label="Reset" onPress={onReset} /></View>

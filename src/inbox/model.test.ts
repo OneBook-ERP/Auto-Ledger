@@ -8,6 +8,19 @@ const base = (over: Partial<InboxInputs> = {}): InboxInputs => ({
 });
 
 describe('buildInboxModel', () => {
+  it('filter: count, sections and suggestions follow the matching rows; no match differs from empty', () => {
+    const a = txnFrom('idfc-006', { id: 'a', counterparty: 'Fuel Station', occurredOn: '2026-11-08' });
+    const b = txnFrom('idfc-010', { id: 'b', counterparty: 'Old Shop', occurredOn: '2026-09-01' });
+    const m = buildInboxModel(base({ pending: [a, b], filter: { query: 'fuel', period: 'all' } }));
+    expect(m.rows.map((r) => r.id)).toEqual(['a']);
+    expect(m.countLabel).toBe('1 to answer');
+    expect(m.sections.map((s) => s.title)).toEqual(['Today']);
+    expect(m.empty).toBe(false);
+    expect(m.noMatch).toBe(false);
+    const none = buildInboxModel(base({ pending: [a, b], filter: { query: 'zzz', period: 'all' } }));
+    expect(none).toMatchObject({ empty: false, noMatch: true, countLabel: 'Nothing to answer' });
+    expect(buildInboxModel(base()).noMatch).toBe(false);
+  });
   it('empty inbox', () => {
     const m = buildInboxModel(base());
     expect(m.empty).toBe(true);

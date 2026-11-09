@@ -169,6 +169,62 @@ describe('Inbox', () => {
   });
 });
 
+describe('Inbox search and filters', () => {
+  const fuel = () => txnFrom('idfc-006', { id: 'fuel', counterparty: 'Fuel Station', occurredOn: '2026-11-08', receivedAt: 5, direction: 'out' });
+  const google = () => txnFrom('idfc-034', { id: 'goog', occurredOn: '2026-11-07', receivedAt: 4 });
+  const old = () => txnFrom('idfc-010', { id: 'old', counterparty: 'Old Shop', occurredOn: '2026-09-01', receivedAt: 3, direction: 'out' });
+  const rowIds = () => screen.queryAllByRole('button').map((b) => String(b.props.testID ?? '')).filter((x) => x.startsWith('row-'));
+
+  it('typing narrows the rows, the count and the section titles', async () => {
+    const { Wrap } = await setup({ txns: [fuel(), google(), old()] });
+    await render(<Wrap><Inbox /></Wrap>);
+    await screen.findByTestId('row-fuel');
+    expect(screen.getByTestId('count')).toHaveTextContent('3 to answer');
+    await fireEvent.changeText(screen.getByTestId('inbox-search'), '  FUEL ');
+    await waitFor(() => expect(rowIds()).toEqual(['row-fuel']));
+    expect(screen.getByTestId('count')).toHaveTextContent('1 to answer');
+    expect(screen.queryByText('Earlier')).toBeNull();
+    expect(screen.queryByText('Yesterday')).toBeNull();
+    await fireEvent.changeText(screen.getByTestId('inbox-search'), '(');
+    expect(await screen.findByText('Nothing matches. Try a different search or period.')).toBeTruthy();
+    expect(screen.queryByText(EMPTY_TITLE)).toBeNull();
+  });
+
+  it('period chips limit by date', async () => {
+    const { Wrap } = await setup({ txns: [fuel(), google(), old()] });
+    await render(<Wrap><Inbox /></Wrap>);
+    await screen.findByTestId('row-old');
+    await fireEvent.press(screen.getByRole('radio', { name: 'This month' }));
+    await waitFor(() => expect(rowIds().sort()).toEqual(['row-fuel', 'row-goog']));
+    await fireEvent.press(screen.getByRole('radio', { name: 'All time' }));
+    await waitFor(() => expect(rowIds()).toHaveLength(3));
+  });
+
+  it('the filter sheet filters by how it was paid and Reset clears it', async () => {
+    const { Wrap } = await setup({ txns: [fuel(), google(), old()] });
+    await render(<Wrap><Inbox /></Wrap>);
+    await screen.findByTestId('row-fuel');
+    await fireEvent.press(screen.getByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByTestId('filter-sheet');
+    expect(within(sheet).getByText('How it was paid')).toBeTruthy();
+    expect(within(sheet).queryByText('Sort by')).toBeNull();
+    await fireEvent.press(within(sheet).getByRole('radio', { name: 'Card' }));
+    await fireEvent.press(within(sheet).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(rowIds()).toEqual(['row-goog']));
+    await fireEvent.press(screen.getByRole('button', { name: 'Filters (1)' }));
+    await fireEvent.press(within(await screen.findByTestId('filter-sheet')).getByRole('button', { name: 'Reset' }));
+    await waitFor(() => expect(rowIds()).toHaveLength(3));
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
+  });
+
+  it('a truly empty Inbox keeps its own message and shows no filters', async () => {
+    const { Wrap } = await setup();
+    await render(<Wrap><Inbox /></Wrap>);
+    expect(await screen.findByText(EMPTY_TITLE)).toBeTruthy();
+    expect(screen.queryByTestId('inbox-search')).toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------- Transaction screen
 
 describe('Transaction screen', () => {
