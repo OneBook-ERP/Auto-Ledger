@@ -9,7 +9,7 @@ import { useFlowStore } from '../../src/inbox/store';
 import type { ChipView } from '../../src/inbox/suggestions';
 import type { ActivityPeriod } from '../../src/state/activityModel';
 import {
-  Banner, Chip, DEFAULT_FILTERS, EmptyState, FilterSheet, Gap, Icon, Pill, RefreshList, Row, Screen, SearchField, Txt, TxnRow, activeFilterCount,
+  Banner, Button, Chip, DEFAULT_FILTERS, EmptyState, FilterSheet, Gap, GroupCard, Icon, Pill, RefreshList, Row, Screen, SearchField, Txt, TxnRow, activeFilterCount,
   type ActivityFilters,
 } from '../../src/ui';
 
@@ -18,6 +18,8 @@ export const EMPTY_TITLE = 'No transactions to classify';
 /** Rows shown at first and added each time the end of the list is reached. */
 export const PAGE_ROWS = 50;
 export const NO_MATCH_MESSAGE = 'Nothing matches. Try a different search or period.';
+/** Group cards shown before "Show more groups". */
+export const GROUPS_SHOWN = 3;
 const PERIODS: { key: ActivityPeriod; label: string }[] = [
   { key: 'this_month', label: 'This month' },
   { key: 'last_month', label: 'Last month' },
@@ -81,6 +83,11 @@ export default function Inbox() {
   useEffect(() => setRowLimit(PAGE_ROWS), [filter]);
   const items = useMemo<InboxItem[]>(() => (model ? pageItems(model.sections, rowLimit) : []), [model, rowLimit]);
   const open = useCallback((id: string) => tap(() => router.push({ pathname: '/txn/[id]', params: { id } })), [tap, router]);
+  const [allGroups, setAllGroups] = useState(false);
+  const groups = model?.groups ?? [];
+  const shownGroups = allGroups ? groups : groups.slice(0, GROUPS_SHOWN);
+  // The bulk screen shows the same items as the card: same pattern, same search and filters.
+  const openGroup = (key: string) => tap(() => router.push({ pathname: '/txn/bulk', params: { key, filter: JSON.stringify(filter) } }));
   const nFilters = activeFilterCount(filters);
   const filtersLabel = nFilters ? `Filters (${nFilters})` : 'Filters';
 
@@ -146,6 +153,22 @@ export default function Inbox() {
               <EmptyState title={EMPTY_TITLE} message="When a bank message arrives, it shows up here with one question: what was this for? Pull down to check for new messages." />
             ) : null}
             {model?.noMatch ? <Text className="px-2 py-8 text-center text-base text-muted dark:text-muted-dark">{NO_MATCH_MESSAGE}</Text> : null}
+            {shownGroups.length ? (
+              <View testID="groups" className="pt-1">
+                <Txt variant="section" header>Similar payments</Txt>
+                <Gap size={2} />
+                {shownGroups.map((g) => (
+                  <GroupCard key={g.key} testID={`group-${g.key}`} title={g.title} answer={g.answer} onPress={() => openGroup(g.key)} />
+                ))}
+                {groups.length > GROUPS_SHOWN ? (
+                  <Button
+                    variant="quiet"
+                    label={allGroups ? 'Show fewer groups' : `Show ${groups.length - GROUPS_SHOWN} more group${groups.length - GROUPS_SHOWN === 1 ? '' : 's'}`}
+                    onPress={() => setAllGroups((v) => !v)}
+                  />
+                ) : null}
+              </View>
+            ) : null}
           </View>
         }
       />

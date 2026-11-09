@@ -1,8 +1,13 @@
 // Inbox view-model: rows, sections, header and notices from repo data. Pure; the clock is passed in.
-import { suggest } from '../core/suggest';
-import type { AccountMapping, PendingTxn, Rule } from '../core/types';
+import { AUTO_ACTIONS, groupSimilar } from '../core/classify';
+import { learnRule, nameKey, suggest } from '../core/suggest';
+import type { AccountMapping, ActionChoice, ActionPlan, PartyRef, PendingTxn, Rule } from '../core/types';
 import { resolveMapping } from '../ingest/pipeline';
-import { amountA11y, accountLabel, istToday, kindLabel, relativeAgo, signedAmount, titleOf, whenLabel } from './format';
+import { formatInr } from '../ui/format';
+import { actionsFor, actionLabel, type ActionItem } from './actions';
+import type { BulkResult } from './bulk';
+import { planFor, type FlowDraft } from './flow';
+import { amountA11y, accountLabel, istToday, kindLabel, plainAmount, relativeAgo, shortAccount, signedAmount, titleOf, whenLabel } from './format';
 import { filterPending, type InboxFilter } from './inboxFilter';
 import { chipFor, type ChipView } from './suggestions';
 
@@ -27,6 +32,8 @@ export type InboxInputs = {
   filter?: InboxFilter;
   /** Remembers suggestions between rebuilds (keep one per screen). Without it nothing is remembered. */
   chips?: ChipCache;
+  /** Txn id -> why the app could not answer it automatically (it waits for the user). */
+  autoFailed?: Record<string, string>;
 };
 
 /** Suggestion chips remembered by txn id and by the rules they were computed with. */
@@ -62,6 +69,7 @@ export function createChipCache(): ChipCache {
 export const rulesVersion = (rules: Rule[]) => rules.map((r) => `${r.matchKey}|${r.action}|${r.account ?? ''}|${r.party?.name ?? ''}|${r.hits}|${r.lastUsed}`).join(';');
 
 const QUEUED_CHIP: ChipView = { text: 'Answer saved, waiting to send', tone: 'plain' };
+const AUTO_FAILED_CHIP: ChipView = { text: 'Not done automatically. Open it to answer.', tone: 'warn' };
 
 export type InboxItem = { type: 'header'; key: string; title: string } | { type: 'row'; key: string; row: InboxRow };
 
@@ -107,6 +115,19 @@ export type InboxModel = {
   unknownAccounts: { last4: string; text: string }[];
   /** ONE compact notice for all unset accounts, or null. */
   accountsNotice: { text: string; last4s: string[] } | null;
+  /** Similar waiting payments (2 or more with the same name), largest group first; they can be answered together. */
+  groups: GroupCard[];
+  /** Waiting items the app could not answer automatically, with the plain reason. */
+  autoFailed: { id: string; text: string }[];
+};
+
+export type GroupCard = {
+  key: string;
+  count: number;
+  /** "40 payments to Facebook, ₹1,24,000.00 in total". */
+  title: string;
+  /** "Suggested: Expense, Advertising" or "Choose what these were". */
+  answer: string;
 };
 
 /** Newest first (receivedAt, then id for a stable order). */
@@ -137,8 +158,10 @@ export function buildInboxModel(i: InboxInputs): InboxModel {
   const chips = i.chips ?? createChipCache();
   const version = rulesVersion(i.rules);
   const byId = new Map(i.pending.map((t) => [t.id, t]));
+  const autoFailed = i.autoFailed ?? {};
   const chipOf = (id: string): ChipView => {
     if (queued.has(id)) return QUEUED_CHIP;
+    if (autoFailed[id] !== undefined) return AUTO_FAILED_CHIP;
     const t = byId.get(id);
     return t ? chips.get(t, i.rules, version) : { text: 'Who is this?', tone: 'plain' };
   };
@@ -162,5 +185,140 @@ export function buildInboxModel(i: InboxInputs): InboxModel {
       text: `${i.unknownAccounts.length} account${i.unknownAccounts.length === 1 ? ' is' : 's are'} not set up: ${i.unknownAccounts.join(', ')}`,
     },
     unknownAccounts: i.unknownAccounts.map((l) => ({ last4: l, text: `Unrecognised account ending ${l}: add it in Settings` })),
+    groups: groupCards(shown.filter((t) => !queued.has(t.id)), i.rules),
+    autoFailed: newestFirst(i.pending.filter((t) => autoFailed[t.id] !== undefined && !queued.has(t.id))).map((t) => ({
+      id: t.id, text: `${titleOf(t)}, ${plainAmount(t)}: ${plainFailure(autoFailed[t.id])}`,
+    })),
   };
+}
+
+// ---------- answering similar payments together (wave 3 K) ----------
+
+/** The answers that fit EVERY item and may be given in bulk (expense, supplier payment, other income, personal, ignore). */
+export function bulkActions(items: Pick<PendingTxn, 'direction' | 'accountType'>[]): ActionItem[] {
+  if (!items.length) return [];
+  const lists = items.map((t) => actionsFor(t.direction, t.accountType));
+  return lists[0].filter((a) => AUTO_ACTIONS.has(a.type) && lists.every((l) => l.some((x) => x.type === a.type)));
+}
+
+/** "Expense, Advertising", "Supplier payment, Meta Platforms", "Ignore this message". */
+export function answerText(c: Partial<ActionChoice>, direction: 'in' | 'out', kind: 'bank' | 'card'): string {
+  const label = c.type ? actionLabel(c.type, direction, kind) : 'Not chosen yet';
+  const r = c as { expenseAccount?: string; incomeAccount?: string; party?: PartyRef };
+  const account = r.expenseAccount ?? r.incomeAccount;
+  if (account) return `${label}, ${shortAccount(account)}`;
+  if (r.party) return `${label}, ${r.party.name}`;
+  return label;
+}
+
+const total = (items: PendingTxn[]): string | null => {
+  const cur = items[0]?.currency;
+  if (!cur || items.some((t) => t.currency !== cur)) return null;
+  return plainAmount({ amountMinor: items.reduce((a, t) => a + t.amountMinor, 0), currency: cur });
+};
+
+/** "40 payments to Facebook, ₹1,24,000.00 in total" (no total when the currencies differ). */
+export function groupTitle(items: PendingTxn[]): string {
+  const t = items[0];
+  const head = `${items.length} payment${items.length === 1 ? '' : 's'} ${t.direction === 'in' ? 'from' : 'to'} ${titleOf(t)}`;
+  const sum = total(items);
+  return sum ? `${head}, ${sum} in total` : head;
+}
+
+/** Cards for groups of similar items; the remembered answer is offered only when it can be given in bulk to all of them. */
+export function groupCards(items: PendingTxn[], rules: Rule[]): GroupCard[] {
+  return groupSimilar(items, rules).map((g) => {
+    const allowed = new Set(bulkActions(g.items).map((a) => a.type));
+    const s = g.suggestion && g.suggestion.type && allowed.has(g.suggestion.type) ? g.suggestion : null;
+    const first = g.items[0];
+    return {
+      key: g.key,
+      count: g.items.length,
+      title: groupTitle(g.items),
+      answer: s ? `Suggested: ${answerText(s, first.direction, first.accountType)}` : 'Choose what these were',
+    };
+  });
+}
+
+/** "₹20.00 to ₹12,000.00" over the rupee amounts (lowest to highest), "₹500.00" for one, null for none. */
+export function amountRange(items: Pick<PendingTxn, 'amountMinor' | 'currency'>[]): string | null {
+  const inr = items.filter((t) => t.currency === 'INR').map((t) => t.amountMinor);
+  if (!inr.length) return null;
+  const lo = Math.min(...inr);
+  const hi = Math.max(...inr);
+  return lo === hi ? formatInr(lo) : `${formatInr(lo)} to ${formatInr(hi)}`;
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** "3 done, 1 saved to send later, 2 need your attention" (ids are unique in a BulkResult). */
+export function bulkSummary(r: BulkResult): string {
+  const parts = [`${r.done.length} done`];
+  if (r.queued.length) parts.push(`${r.queued.length} saved to send later`);
+  if (r.failed.length) parts.push(plural(r.failed.length, 'needs your attention', 'need your attention'));
+  if (r.skipped.length) parts.push(plural(r.skipped.length, 'was already answered', 'were already answered'));
+  return parts.join(', ');
+}
+
+const DOCTYPE_NOTE = /\s*\((?:Payment Entry|Journal Entry|Purchase Invoice|Sales Invoice)\)/g;
+const DOC_ID = '[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\\d+';
+
+/** A runner or ERPNext message without document ids or document type names in brackets (shown as plain text). */
+export function plainFailure(message: string): string {
+  return message
+    .replace(DOCTYPE_NOTE, '')
+    .replace(/\b(?:the|a) (?:Payment Entry|Journal Entry)\b/g, 'the entry')
+    .replace(/\b(?:Payment Entry|Journal Entry)\b/g, 'entry')
+    .replace(new RegExp(`^${DOC_ID}(?:,\\s*${DOC_ID})*\\b`), 'An entry')
+    .replace(new RegExp(`(\\b[Aa]n entry)\\s+${DOC_ID}\\b`, 'g'), '$1')
+    .replace(new RegExp(`\\s*\\b${DOC_ID}\\b,?`, 'g'), '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+export type ChoiceSettings = { mappings: AccountMapping[]; company: string; drawingsAccount: string; today: string };
+
+/** The answers of the single flow for `choice` (each item keeps its own account). */
+function draftOf(txn: PendingTxn, choice: ActionChoice, mappings: AccountMapping[]): FlowDraft {
+  const d: FlowDraft = { action: choice.type };
+  const mapping = resolveMapping(mappings, txn);
+  if (mapping) d.mapping = mapping;
+  if (choice.type === 'expense') {
+    d.account = choice.expenseAccount;
+    if (choice.party) d.party = choice.party;
+  } else if (choice.type === 'other_income') d.account = choice.incomeAccount;
+  else if (choice.type === 'supplier_payment') d.party = choice.party;
+  return d;
+}
+
+/**
+ * The planner for answering many items with one choice, built exactly as the Confirm screen builds a plan
+ * (planFor: own account, company, drawings, today; a foreign amount without rupees throws). May throw PlanError.
+ */
+export function planChoice(s: ChoiceSettings): (txn: PendingTxn, choice: ActionChoice) => ActionPlan {
+  return (txn, choice) => planFor(txn, draftOf(txn, choice, s.mappings), { company: s.company, drawingsAccount: s.drawingsAccount, today: s.today }).plan;
+}
+
+/** True when rule `r` gives exactly answer `c` (same action, party and account). */
+export const ruleHasAnswer = (r: Rule, c: ActionChoice) => {
+  const party = 'party' in c ? c.party : undefined;
+  const account = c.type === 'expense' ? c.expenseAccount : c.type === 'other_income' ? c.incomeAccount : undefined;
+  return r.action === c.type && JSON.stringify(r.party ?? null) === JSON.stringify(party ?? null) && (r.account ?? null) === (account ?? null);
+};
+
+/**
+ * The rule to save when the user says "Do this automatically" for pattern `key` after answering `done` with
+ * `choice`: the stored rule with the same answer switched on, else one learned from the largest rupee item done.
+ * Null when the answer may not be automatic or nothing was done.
+ */
+export function automaticRule(rules: Rule[], key: string, choice: ActionChoice, done: PendingTxn[]): Rule | null {
+  if (!AUTO_ACTIONS.has(choice.type)) return null;
+  const mine = done.filter((t) => nameKey(t) === key);
+  if (!mine.length) return null;
+  const stored = rules.find((r) => r.matchKey === key);
+  if (stored && ruleHasAnswer(stored, choice) && stored.currency === 'INR' && stored.maxAmountMinor !== undefined) return { ...stored, auto: true };
+  const inr = mine.filter((t) => t.currency === 'INR');
+  const largest = (inr.length ? inr : mine).reduce((a, t) => (t.amountMinor > a.amountMinor ? t : a));
+  const learned = learnRule(largest, choice, rules).find((r) => r.matchKey === key && r.action === choice.type);
+  return learned ? { ...learned, auto: true } : null;
 }

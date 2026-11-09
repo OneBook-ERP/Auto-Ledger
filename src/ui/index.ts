@@ -21,6 +21,8 @@ export { Txt, Stack, Row, Gap } from './Txt';
 export { Pill } from './Pill';
 export type { PillTone } from './Pill';
 export { TxnRow } from './TxnRow';
+export { GroupCard } from './GroupCard';
+export type { GroupCardProps } from './GroupCard';
 export { DetailCard } from './DetailCard';
 export type { Detail } from './DetailCard';
 export { ToggleRow } from './ToggleRow';

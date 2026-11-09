@@ -1,6 +1,9 @@
 import type { PendingTxn, Rule } from '../core/types';
 import { suggest } from '../core/suggest';
-import { buildInboxModel, createChipCache, kindIconOf, pageItems, type InboxInputs } from './model';
+import {
+  amountRange, answerText, automaticRule, buildInboxModel, bulkActions, bulkSummary, createChipCache, kindIconOf, pageItems, planChoice, plainFailure,
+  type InboxInputs,
+} from './model';
 import { BANK, CARD, NOW, txnFrom } from './testData';
 
 const base = (over: Partial<InboxInputs> = {}): InboxInputs => ({
@@ -141,5 +144,117 @@ describe('fast model (Task I3)', () => {
     expect(pageItems(m.sections, 4).map((x) => (x.type === 'header' ? x.title : x.row.id))).toEqual(
       ['Today', 't6', 't3', 't0', 'Yesterday', 't7']);
     expect(pageItems(m.sections, 100).filter((x) => x.type === 'row')).toHaveLength(9);
+  });
+});
+
+describe('group cards (wave 3 K3)', () => {
+  const fb = (id: string, amountMinor: number, over: Partial<PendingTxn> = {}) =>
+    txnFrom('idfc-035', { id, rawHash: `h-${id}`, amountMinor, receivedAt: 1000 + amountMinor, ...over });
+
+  it('one card per pattern of 2 or more, with the count, the name and the rupee total', () => {
+    const items = [fb('a', 100_000), fb('b', 2_400_000), fb('c', 10_000_000), txnFrom('idfc-034')];
+    const m = buildInboxModel(base({ pending: items }));
+    expect(m.groups).toEqual([
+      expect.objectContaining({ key: 'm:out:facebooksi', count: 3, title: '3 payments to FACEBOOK SI, ₹1,25,000.00 in total', answer: 'Choose what these were' }),
+    ]);
+  });
+
+  it('shows the remembered answer when a rule exists for exactly this pattern', () => {
+    const rules: Rule[] = [{ matchKey: 'm:out:facebooksi', action: 'expense', account: 'Advertising - ZP', hits: 2, lastUsed: 1 }];
+    const m = buildInboxModel(base({ pending: [fb('a', 100), fb('b', 200)], rules }));
+    expect(m.groups[0].answer).toBe('Suggested: Expense, Advertising');
+  });
+
+  it('an answer that cannot be given in bulk is not suggested on the card', () => {
+    const rules: Rule[] = [{ matchKey: 'm:out:facebooksi', action: 'bill_paid_by_card', party: { doctype: 'Supplier', name: 'Meta' }, hits: 2, lastUsed: 1 }];
+    const m = buildInboxModel(base({ pending: [fb('a', 100), fb('b', 200)], rules }));
+    expect(m.groups[0].answer).toBe('Choose what these were');
+  });
+
+  it('follows the search and filters, and leaves out answers waiting to be sent', () => {
+    const items = [fb('a', 100), fb('b', 200), fb('c', 300, { occurredOn: '2025-01-01' })];
+    expect(buildInboxModel(base({ pending: items, filter: { query: '', period: 'this_month' } })).groups[0].count).toBe(2);
+    expect(buildInboxModel(base({ pending: items, queuedIds: ['a'], filter: { query: '', period: 'this_month' } })).groups).toEqual([]);
+    expect(buildInboxModel(base({ pending: items, filter: { query: 'zzz', period: 'all' } })).groups).toEqual([]);
+  });
+
+  it('money in reads "from"; mixed currencies show no total', () => {
+    const a = txnFrom('idfc-006', { id: 'a', rawHash: 'ha' });
+    const b = txnFrom('idfc-006', { id: 'b', rawHash: 'hb', amountMinor: 50 });
+    expect(buildInboxModel(base({ pending: [a, b] })).groups[0].title).toBe('2 payments from COMPANY_11, ₹30,000.50 in total');
+    const usd = fb('u', 100, { currency: 'USD' });
+    expect(buildInboxModel(base({ pending: [fb('x', 100), usd] })).groups[0].title).toBe('2 payments to FACEBOOK SI');
+  });
+
+  it('a row whose automatic answer failed says so in its chip', () => {
+    const a = fb('a', 100);
+    const m = buildInboxModel(base({ pending: [a], autoFailed: { a: 'ERPNext needs these fields: Cost Center' } }));
+    expect(m.chipOf('a')).toEqual({ text: 'Not done automatically. Open it to answer.', tone: 'warn' });
+    expect(m.autoFailed).toEqual([{ id: 'a', text: 'FACEBOOK SI, ₹1.00: ERPNext needs these fields: Cost Center' }]);
+  });
+});
+
+describe('bulk helpers (wave 3 K3)', () => {
+  const fb = (id: string, amountMinor: number, over: Partial<PendingTxn> = {}) => txnFrom('idfc-035', { id, rawHash: `h-${id}`, amountMinor, ...over });
+
+  it('amountRange: lowest to highest rupee amount', () => {
+    expect(amountRange([fb('a', 50_000), fb('b', 1_200_000), fb('c', 2_000)])).toBe('₹20.00 to ₹12,000.00');
+    expect(amountRange([fb('a', 50_000)])).toBe('₹500.00');
+    expect(amountRange([fb('a', 50_000, { currency: 'USD' })])).toBeNull();
+    expect(amountRange([])).toBeNull();
+  });
+
+  it('bulkSummary maps the result honestly', () => {
+    expect(bulkSummary({ done: ['a', 'b', 'c'], failed: [], queued: [], skipped: [] })).toBe('3 done');
+    expect(bulkSummary({ done: ['a'], failed: [{ id: 'x', message: 'm' }], queued: ['q', 'r'], skipped: [] }))
+      .toBe('1 done, 2 saved to send later, 1 needs your attention');
+    expect(bulkSummary({ done: [], failed: [{ id: 'x', message: 'm' }, { id: 'y', message: 'm' }], queued: [], skipped: ['s'] }))
+      .toBe('0 done, 2 need your attention, 1 was already answered');
+  });
+
+  it('plainFailure never shows a document id or a document type name', () => {
+    expect(plainFailure('An entry ACC-PAY-2026-00012 (Payment Entry) already exists for this reference. Open it in ERPNext and check it, or ask your accountant.'))
+      .toBe('An entry already exists for this reference. Open it in ERPNext and check it, or ask your accountant.');
+    expect(plainFailure('ACC-JV-2026-00001 was already submitted in ERPNext; cancel it there first.'))
+      .toBe('An entry was already submitted in ERPNext; cancel it there first.');
+    expect(plainFailure('ERPNext needs these fields: Cost Center')).toBe('ERPNext needs these fields: Cost Center');
+    expect(plainFailure('Removed PE-9, JE-3 from ERPNext.')).toBe('Removed from ERPNext.');
+    expect(plainFailure('Could not create the Journal Entry. An entry JE-4 already exists.')).toBe('Could not create the entry. An entry already exists.');
+  });
+
+  it('bulkActions: only the five bulk answers that fit every item', () => {
+    const card = [fb('a', 1), fb('b', 2)];
+    expect(bulkActions(card).map((a) => a.type)).toEqual(['expense', 'personal', 'ignore']);
+    const bank = [txnFrom('idfc-010', { id: 'x' })];
+    expect(bulkActions(bank).map((a) => a.type)).toEqual(['supplier_payment', 'expense', 'personal', 'ignore']);
+    expect(bulkActions([...card, ...bank]).map((a) => a.type)).toEqual(['expense', 'personal', 'ignore']);
+  });
+
+  it('answerText names the answer in plain words', () => {
+    expect(answerText({ type: 'expense', expenseAccount: 'Advertising - ZP' }, 'out', 'card')).toBe('Expense, Advertising');
+    expect(answerText({ type: 'supplier_payment', party: { doctype: 'Supplier', name: 'Meta Platforms' } }, 'out', 'bank')).toBe('Supplier payment, Meta Platforms');
+    expect(answerText({ type: 'ignore' }, 'out', 'card')).toBe('Ignore this message');
+  });
+
+  it('planChoice plans each item with its own account, like the single flow', () => {
+    const plan = planChoice({ mappings: [BANK, CARD], company: 'ZP', drawingsAccount: 'Drawings - ZP', today: '2026-11-08' });
+    const p = plan(fb('a', 100_000), { type: 'expense', expenseAccount: 'Advertising - ZP' });
+    expect(p.steps).toHaveLength(1);
+    expect(JSON.stringify(p.steps[0].body)).toContain('IDFC Credit Card - ZP');
+    expect(() => plan(fb('b', 100, { currency: 'USD' }), { type: 'expense', expenseAccount: 'Advertising - ZP' })).toThrow();
+    expect(plan(fb('c', 100), { type: 'ignore' }).steps).toEqual([]);
+  });
+
+  it('automaticRule turns the stored rule on, or builds one from the largest amount done', () => {
+    const choice = { type: 'expense' as const, expenseAccount: 'Advertising - ZP' };
+    const stored: Rule = { matchKey: 'm:out:facebooksi', action: 'expense', account: 'Advertising - ZP', hits: 3, lastUsed: 5, auto: false, maxAmountMinor: 900, currency: 'INR' };
+    expect(automaticRule([stored], 'm:out:facebooksi', choice, [fb('a', 100)])).toEqual({ ...stored, auto: true });
+    const built = automaticRule([], 'm:out:facebooksi', choice, [fb('a', 100), fb('b', 700)]);
+    expect(built).toMatchObject({ matchKey: 'm:out:facebooksi', action: 'expense', account: 'Advertising - ZP', auto: true, maxAmountMinor: 700, currency: 'INR' });
+    // A stored rule with another answer is replaced by this one.
+    const other: Rule = { ...stored, account: 'Travel - ZP' };
+    expect(automaticRule([other], 'm:out:facebooksi', choice, [fb('a', 100)])).toMatchObject({ account: 'Advertising - ZP', auto: true, maxAmountMinor: 100 });
+    expect(automaticRule([], 'm:out:facebooksi', { type: 'salary', party: { doctype: 'Employee', name: 'E' } }, [fb('a', 100)])).toBeNull();
+    expect(automaticRule([], 'm:out:facebooksi', choice, [])).toBeNull();
   });
 });

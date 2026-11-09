@@ -1,14 +1,16 @@
 // Data hooks for the Inbox and the flow screens. Thin: loading and wiring only; decisions live in the pure modules.
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { suggest } from '../core/suggest';
+import { nameKey, suggest } from '../core/suggest';
 import type { AccountMapping, OpenInvoice, PartyRef, PendingTxn, Rule, Suggestion } from '../core/types';
+import { DUP_KEY_PREFIX } from '../ingest/dupCheck';
 import { UNRECOGNISED_COUNT_KEY, resolveMapping, unrecognisedAccountKey } from '../ingest/pipeline';
 import { COMPANY_KEY, DEFAULT_EXPENSE_KEY, DRAWINGS_KEY } from '../state/useSetting';
 import type { Step } from './actions';
 import { useInboxDeps } from './deps';
 import type { FlowDraft } from './flow';
-import type { InboxFilter } from './inboxFilter';
+import { istToday } from './format';
+import { filterPending, type InboxFilter } from './inboxFilter';
 import { LAST_SYNCED_KEY, buildInboxModel, createChipCache, newestFirst, type InboxInputs, type InboxModel } from './model';
 import { useFlowStore } from './store';
 import { createTapGuard } from './tapGuard';
@@ -108,6 +110,57 @@ export function useTxnFlow(id: string | undefined) {
     start: (d: FlowDraft) => id && store().start(id, { ...d, mapping: d.mapping ?? draft.mapping }),
     patch: (p: Partial<FlowDraft>) => id && store().patch(id, { mapping: draft.mapping, ...p }),
   };
+}
+
+export type BulkData = {
+  /** The waiting items of the pattern (same search and filters as the Inbox card), newest first. */
+  items: PendingTxn[];
+  rules: Rule[];
+  mappings: AccountMapping[];
+  company: string;
+  drawingsAccount: string;
+  /** Items with a "may already be booked" warning. */
+  dupIds: Set<string>;
+};
+
+/** Reads a filter passed as a route parameter; anything unreadable means no filter. */
+export function parseFilterParam(v: string | undefined): InboxFilter | undefined {
+  if (!v) return undefined;
+  try {
+    const o = JSON.parse(v) as Partial<InboxFilter> | null;
+    if (!o || typeof o !== 'object' || typeof o.query !== 'string' || typeof o.period !== 'string') return undefined;
+    return o as InboxFilter;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The waiting items of one pattern for the bulk screen. Answers waiting to be sent are left out. */
+export function useBulkData(key: string | undefined, filter: InboxFilter | undefined) {
+  const { repo, now } = useInboxDeps();
+  const [data, setData] = useState<BulkData | 'missing' | null>(null);
+  const reload = useCallback(async () => {
+    if (!key) return setData('missing');
+    try {
+      const [pending, queued, rules, mappings, company, drawings, dups] = await Promise.all([
+        repo.listPending('new'), repo.listQueuedTxnIds(), repo.listRules(), repo.listMappings(),
+        repo.getSetting(COMPANY_KEY), repo.getSetting(DRAWINGS_KEY), repo.listSettings(DUP_KEY_PREFIX),
+      ]);
+      const waiting = new Set(queued);
+      const shown = filter ? filterPending(pending, filter, istToday(now())) : pending;
+      const items = newestFirst(shown.filter((t) => !waiting.has(t.id) && nameKey(t) === key));
+      setData({
+        items, rules, mappings, company: company ?? '', drawingsAccount: drawings ?? '',
+        dupIds: new Set(dups.map((d) => d.key.slice(DUP_KEY_PREFIX.length))),
+      });
+    } catch {
+      setData('missing');
+    }
+  }, [repo, now, key, filter]);
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+  return { data, reload };
 }
 
 export function useDebounced<T>(value: T, ms = 300): T {
