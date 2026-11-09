@@ -17,3 +17,4 @@ ios/
 
 # copied from /templates by the sms-ingest copyTemplates Gradle task
 /modules/sms-ingest/android/src/main/assets/templates/
+/reference/Cashiro/
