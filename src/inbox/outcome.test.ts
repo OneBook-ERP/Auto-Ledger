@@ -15,6 +15,9 @@ describe('planErrorMessage', () => {
   it('date out of range has the agreed wording', () => {
     expect(planErrorMessage(new PlanError('date_out_of_range'))).toBe('This transaction is dated outside the usual range. Check the date in ERPNext.');
   });
+  it('over-allocation wording fits invoices and orders alike', () => {
+    expect(planErrorMessage(new PlanError('over_allocated'))).toBe('The amounts add up to more than this transaction. Lower an amount or remove an item.');
+  });
   it.each(['bad_direction', 'over_allocated', 'mixed_invoices', 'no_invoices', 'same_account', 'missing_account', 'missing_choice', 'missing_drawings', 'missing_company', 'missing_amount', 'bad_amount', 'bad_date', 'something_new'])(
     '%s has a plain message with a fix hint', (c) => {
       const m = planErrorMessage(new PlanError(c));
