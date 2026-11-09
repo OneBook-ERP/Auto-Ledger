@@ -26,7 +26,16 @@ export type InboxInputs = {
 
 export type InboxRow = {
   id: string; title: string; subtitle: string; amountText: string; amountA11y: string; direction: 'in' | 'out'; chip: ChipView;
+  /** Leading icon: how the money moved (card, UPI, bank). Direction is shown by the amount, not by this. */
+  kindIcon: 'card' | 'upi' | 'bank';
 };
+
+/** Card spends show a card, a UPI address a phone, everything else a bank. */
+export function kindIconOf(t: Pick<PendingTxn, 'kind' | 'counterparty'>): InboxRow['kindIcon'] {
+  if (t.kind === 'card_spend' || t.kind === 'card_si_paid') return 'card';
+  if (t.counterparty?.includes('@')) return 'upi';
+  return 'bank';
+}
 export type InboxModel = {
   empty: boolean;
   countLabel: string;
@@ -35,6 +44,8 @@ export type InboxModel = {
   sections: { title: string; rows: InboxRow[] }[];
   unreadText: string | null;
   unknownAccounts: { last4: string; text: string }[];
+  /** ONE compact notice for all unset accounts, or null. */
+  accountsNotice: { text: string; last4s: string[] } | null;
 };
 
 /** Newest first (receivedAt, then id for a stable order). */
@@ -54,6 +65,8 @@ export function buildInboxModel(i: InboxInputs): InboxModel {
     const chip: ChipView = queued.has(t.id)
       ? { text: 'Answer saved, waiting to send', tone: 'plain' }
       : chipFor(t, suggest(t, i.rules, [], []));
+    // A merchant (card spend) is not a person: ask what it was, not who it is.
+    if (chip.text === 'Who is this?' && t.merchant && !t.counterparty) chip.text = 'What was this?';
     return {
       id: t.id,
       title: titleOf(t),
@@ -62,6 +75,7 @@ export function buildInboxModel(i: InboxInputs): InboxModel {
       amountA11y: amountA11y(t),
       direction: t.direction,
       chip,
+      kindIcon: kindIconOf(t),
     };
   };
   const sections = groups.map((g, k) => ({ title: TITLES[k] as string, rows: g.map(toRow) })).filter((s) => s.rows.length > 0);
@@ -76,6 +90,10 @@ export function buildInboxModel(i: InboxInputs): InboxModel {
     rows,
     sections,
     unreadText: i.unreadCount > 0 ? `${i.unreadCount} message${i.unreadCount === 1 ? '' : 's'} could not be read` : null,
+    accountsNotice: i.unknownAccounts.length === 0 ? null : {
+      last4s: i.unknownAccounts,
+      text: `${i.unknownAccounts.length} account${i.unknownAccounts.length === 1 ? ' is' : 's are'} not set up: ${i.unknownAccounts.join(', ')}`,
+    },
     unknownAccounts: i.unknownAccounts.map((l) => ({ last4: l, text: `Unrecognised account ending ${l}: add it in Settings` })),
   };
 }

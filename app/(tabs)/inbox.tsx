@@ -38,8 +38,8 @@ export default function Inbox() {
     }
   };
 
-  const dismissAccount = async (last4: string) => {
-    await repo.deleteSetting(unrecognisedAccountKey(last4));
+  const dismissAll = async (last4s: string[]) => {
+    await Promise.all(last4s.map((l) => repo.deleteSetting(unrecognisedAccountKey(l))));
     await reload();
   };
 
@@ -56,9 +56,13 @@ export default function Inbox() {
         {model?.unreadText ? (
           <Banner tone="warn" message={model.unreadText} actionLabel="Open Settings" onAction={() => router.navigate('/(tabs)/settings')} testID="unread" />
         ) : null}
-        {model?.unknownAccounts.map((u) => (
-          <Banner key={u.last4} tone="warn" message={u.text} actionLabel="Dismiss" onAction={() => void dismissAccount(u.last4)} testID={`unknown-${u.last4}`} />
-        ))}
+        {model?.accountsNotice ? (
+          <Banner
+            compact tone="warn" message={model.accountsNotice.text}
+            actionLabel="Open Settings" onAction={() => router.navigate('/(tabs)/settings')}
+            secondaryLabel="Dismiss all" onSecondary={() => void dismissAll(model.accountsNotice?.last4s ?? [])}
+            testID="unknown-accounts" />
+        ) : null}
         {model?.empty ? (
           <EmptyState title={EMPTY_TITLE} message="When a bank message arrives, it shows up here with one question: what was this for? Pull down to check for new messages." />
         ) : null}

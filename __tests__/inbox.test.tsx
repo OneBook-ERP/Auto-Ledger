@@ -110,18 +110,30 @@ describe('Inbox', () => {
     expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/txn/[id]', params: { id: credit.id } });
   });
 
-  it('notices: unreadable messages and an unknown account (dismiss clears the flag)', async () => {
+  it('notices: unreadable messages and ONE compact notice for unset accounts (Dismiss all clears the flags)', async () => {
     const { Wrap, repo } = await setup();
     await repo.setSetting('unrecognised_count', '2');
     await repo.setSetting('unrecognised_account:4321', String(NOW));
+    await repo.setSetting('unrecognised_account:8765', String(NOW));
     await render(<Wrap><Inbox /></Wrap>);
     expect(await screen.findByText('2 messages could not be read')).toBeTruthy();
-    expect(screen.getByText('Unrecognised account ending 4321: add it in Settings')).toBeTruthy();
+    expect(screen.getByText('2 accounts are not set up: 4321, 8765')).toBeTruthy();
     await fireEvent.press(within(screen.getByTestId('unread')).getByRole('button', { name: 'Open Settings' }));
     expect(mockRouter.navigate).toHaveBeenCalledWith('/(tabs)/settings');
-    await fireEvent.press(within(screen.getByTestId('unknown-4321')).getByRole('button', { name: 'Dismiss' }));
-    await waitFor(() => expect(screen.queryByTestId('unknown-4321')).toBeNull());
+    await fireEvent.press(within(screen.getByTestId('unknown-accounts')).getByRole('button', { name: 'Dismiss all' }));
+    await waitFor(() => expect(screen.queryByTestId('unknown-accounts')).toBeNull());
     expect(await repo.getSetting('unrecognised_account:4321')).toBeNull();
+    expect(await repo.getSetting('unrecognised_account:8765')).toBeNull();
+  });
+
+  it('a notice for an account that is now mapped is removed on load', async () => {
+    const { Wrap, repo } = await setup();
+    await repo.setSetting('unrecognised_account:6507', String(NOW)); // BANK maps 6507 (see testData)
+    await repo.setSetting('unrecognised_account:4321', String(NOW));
+    await render(<Wrap><Inbox /></Wrap>);
+    expect(await screen.findByText('1 account is not set up: 4321')).toBeTruthy();
+    expect(await repo.getSetting('unrecognised_account:6507')).toBeNull();
+    expect(await repo.getSetting('unrecognised_account:4321')).not.toBeNull();
   });
 
   it('pull to refresh runs the foreground cycle and reloads', async () => {
