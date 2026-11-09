@@ -13,7 +13,7 @@ Package: `app.onebook.autoledger` (app.json). Permissions declared in `modules/s
 
 ## 2. Core functionality statement (paste into "core functionality")
 
-> AutoLedger is a bookkeeping app for small businesses that use ERPNext. Its core function is to turn the user's own bank and credit-card transaction alerts, which banks send by SMS, into draft accounting entries in the user's own ERPNext site. The SMS alert is the only source of the transaction (amount, date, account, reference); without access to it the app cannot do its single purpose. For each alert the app asks the user what the money was for (for example "payment from a customer") and only after the user confirms creates a DRAFT document in ERPNext, which the accountant reviews. The app does not send, delete or modify SMS and does not read personal conversations.
+> AutoLedger is a bookkeeping app for small businesses that use ERPNext. Its core function is to turn the user's own bank and credit-card transaction alerts, which banks send by SMS, into draft accounting entries in the user's own ERPNext site. The SMS alert is the only source of the transaction (amount, date, account, reference); without access to it the app cannot do its single purpose. For each alert the app asks the user what the money was for (for example "payment from a customer") and, once the user confirms, creates a DRAFT document in ERPNext, which the accountant reviews. If the user chooses to, they can switch on an automatic rule for a payment pattern they have already answered (for example "card payments to the same advertiser are advertising expenses"); new alerts that match such a rule are then answered with the user's saved answer, again only as DRAFTS that are never submitted. The user turns each rule on or off, edits or deletes it on the "Automatic rules" screen in Settings, and can undo any draft the app made from the Activity screen. The app does not send, delete or modify SMS and does not read personal conversations.
 
 ## 3. Why the default SMS handler is not applicable (paste)
 
@@ -27,7 +27,7 @@ Code: `MessageClassifier.classify` in `Ingest.kt` applies, in this order: sender
 
 ## 5. Processing, storage and retention (paste, then see the table)
 
-> All reading and parsing happens on the device by code inside the app. The raw SMS text is never sent to any server, including the developer's. After a message is understood, the app keeps only parsed fields on the phone: amount, currency, date and time of the transaction, the last 4 digits of the account or card, a reference number if the SMS states one, the counterparty or merchant name if stated, the account balance shown in the SMS if any, the sender id (for example IDFCFB) and the time the SMS was received. When the user confirms what a transaction was for, only a subset is sent, over HTTPS, to the user's own ERPNext site: the amount, the transaction date, the reference (the bank's reference number, or an app-derived code of the form AL-<number> when the SMS has none), the counterparty or merchant name (in the remarks field), and the accounts and party the user chose. The account balance, the sender id, the received time, the transaction time and the last 4 digits are never sent.
+> All reading and parsing happens on the device by code inside the app. The raw SMS text is never sent to any server, including the developer's. After a message is understood, the app keeps only parsed fields on the phone: amount, currency, date and time of the transaction, the last 4 digits of the account or card, a reference number if the SMS states one, the counterparty or merchant name if stated, the account balance shown in the SMS if any, the sender id (for example IDFCFB) and the time the SMS was received. When the user confirms what a transaction was for, or when a new transaction matches an automatic rule the user switched on for that pattern (drafts only, never submitted; the user controls the rules in Settings > Automatic rules and can undo each draft from Activity), only a subset is sent, over HTTPS, to the user's own ERPNext site: the amount, the transaction date, the reference (the bank's reference number, or an app-derived code of the form AL-<number> when the SMS has none), the counterparty or merchant name (in the remarks field), and the accounts and party the user chose. The account balance, the sender id, the received time, the transaction time and the last 4 digits are never sent.
 
 | Where | What is held | For how long | Source |
 |---|---|---|---|
@@ -60,11 +60,12 @@ Title: **How AutoLedger uses your messages**
 Subtitle: "Before Android asks for permission, here is exactly what AutoLedger does with it."
 
 1. It reads only text messages from the bank senders you set up in the last step, and only from the period you choose below. You can change it later in Settings.
+   When the user picks "All time" the first point reads instead: "It reads all your messages from the banks you set up in the last step, however old, and never messages from anyone else. You can change it later in Settings."
 2. Messages are read and understood on this phone. The raw text never leaves the phone.
 3. One-time passwords (OTPs) are ignored and never stored.
 4. Only the amount, date and a few details of each transaction are kept, to ask you what it was for. Transaction details go only to your own ERPNext site.
 
-These strings are the exported constants `DISCLOSURE_TITLE` and `DISCLOSURE_POINTS`; if the screen copy changes, change this section in the same commit. `__tests__/setup.test.tsx` checks that the copy does not fix the period at 7 days.
+These strings are the exported `DISCLOSURE_TITLE` and `disclosurePoints(days)` (point 1 is `windowDisclosure(days)` in `src/state/setup.ts`, which has one wording for 1 week to 6 months and another for "All time"); if the screen copy changes, change this section in the same commit. `__tests__/playDeclaration.test.tsx` fails when this section no longer quotes the title and every point for every period option, and `__tests__/setup.test.tsx` checks that the copy does not fix the period at 7 days.
 
 ### Differences between the app copy and the Play text (report, do not paper over)
 
