@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Pressable, Text, useColorScheme, View } from 'react-native';
 import { Icon, type IconName } from './Icon';
 import { Pill, type PillTone } from './Pill';
@@ -22,7 +23,7 @@ const MONEY_IN = { light: '#0F6B3F', dark: '#4ADE80' };
 const MONEY_OUT = { light: '#A3203D', dark: '#FF8FA3' };
 
 /** One Inbox item: how it was paid, who, where and when, the signed amount (green in, rose out) and the suggestion. */
-export function TxnRow({ title, subtitle, amountText, amountA11y, direction, chip, kindIcon = 'bank', onPress, testID }: TxnRowProps) {
+export const TxnRow = memo(function TxnRow({ title, subtitle, amountText, amountA11y, direction, chip, kindIcon = 'bank', onPress, testID }: TxnRowProps) {
   const incoming = direction === 'in';
   const dark = useColorScheme() === 'dark';
   const mode = dark ? 'dark' : 'light';
@@ -53,4 +54,4 @@ export function TxnRow({ title, subtitle, amountText, amountA11y, direction, chi
       </View>
     </Pressable>
   );
-}
+});

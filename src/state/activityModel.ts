@@ -86,7 +86,7 @@ const STATE_OF: Record<ActivityStatus, PendingTxn['state']> = { waiting: 'create
 const pad = (n: number) => String(n).padStart(2, '0');
 
 /** `[from, to)` as YYYY-MM-DD strings (compared lexically), or null for no limit. */
-function periodRange(period: ActivityPeriod, today: string): [string, string] | null {
+export function periodRange(period: ActivityPeriod, today: string): [string, string] | null {
   if (period === 'all') return null;
   const y = Number(today.slice(0, 4));
   const m = Number(today.slice(5, 7));
@@ -99,7 +99,7 @@ function periodRange(period: ActivityPeriod, today: string): [string, string] | 
   return [`${fy}-04-01`, `${fy + 1}-04-01`];
 }
 
-const searchText = (t: PendingTxn) => [t.counterparty, t.merchant, t.sender, t.utr, ...t.createdDocs.map((d) => d.name)].filter(Boolean).join('\n').toLowerCase();
+export const searchText = (t: PendingTxn) => [t.counterparty, t.merchant, t.sender, t.utr, ...t.createdDocs.map((d) => d.name)].filter(Boolean).join('\n').toLowerCase();
 
 /** Search (plain text, case-insensitive, trimmed), period, direction and account. Keeps the input order. */
 export function filterActivity(items: PendingTxn[], f: ActivityFilter, today: string): PendingTxn[] {
