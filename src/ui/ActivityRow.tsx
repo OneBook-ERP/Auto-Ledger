@@ -44,7 +44,7 @@ export function ActivityRow({ title, amount, date, docs, status, hint, actions, 
       </View>
       {hint ? <Text className="mt-2 text-sm leading-5 text-muted dark:text-muted-dark">{hint}</Text> : null}
       {actions.length ? (
-        <View className="mt-3 gap-2">
+        <View className="mt-1 flex-row flex-wrap items-center justify-between">
           {actions.map((a) =>
             a.variant === 'danger' ? (
               // Undo is quiet: error-coloured text, not a large outlined button.
@@ -56,11 +56,13 @@ export function ActivityRow({ title, amount, date, docs, status, hint, actions, 
                 accessibilityRole="button"
                 accessibilityLabel={a.label}
                 accessibilityState={{ disabled: !!busy, busy: !!busy }}
-                className={`min-h-[48px] justify-center self-start ${busy ? 'opacity-50' : ''}`}>
+                className={`min-h-[48px] justify-center pr-4 ${busy ? 'opacity-50' : ''}`}>
                 <Text className="text-base font-semibold text-danger dark:text-danger-dark">{a.label}</Text>
               </Pressable>
             ) : (
-              <Button key={a.label} testID={a.testID} label={a.label} variant={a.variant ?? 'secondary'} onPress={a.onPress} disabled={busy} />
+              <View key={a.label} className="flex-1">
+                <Button testID={a.testID} label={a.label} variant={a.variant ?? 'secondary'} onPress={a.onPress} disabled={busy} />
+              </View>
             ),
           )}
         </View>
