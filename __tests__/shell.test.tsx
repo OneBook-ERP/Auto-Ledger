@@ -63,7 +63,7 @@ describe('tabs shell', () => {
     await act(async () => undefined);
     expect(screen.queryByTestId('badge-inbox')).toBeNull();
     await none.unmount();
-    jest.spyOn(app.repo, 'listPending').mockResolvedValue([{ id: 'a' }, { id: 'b' }, { id: 'c' }] as never);
+    jest.spyOn(app.repo, 'countPending').mockResolvedValue(3);
     await render(<app.Wrap><InShell><TabsLayout /></InShell></app.Wrap>);
     await waitFor(() => expect(screen.getByTestId('badge-inbox').props.children).toBe('3'));
     expect(screen.queryByTestId('badge-home')).toBeNull();
